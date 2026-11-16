@@ -42,3 +42,8 @@ Definir plataforma/linguagem, formatos de projeto, motores de IA e geração de 
 
 ## Pendências adicionais
 Definir convenção final de extensão dos projetos, motor de geração de quadros, tratamento de conflitos simultâneos e interface de revisão de segmentos.
+
+
+## Software 4 e Software 5
+- [Especificação e critérios do Software 4](06-identidade-sonora.md): duas IAs, quatro etapas, vozes/efeitos isolados, ensaio sonoro sincronizado e salvamento.
+- [Especificação e critérios do Software 5](07-geracao-e-montagem-de-cenas.md): quatro etapas, geração sequencial por cena/sub-bloco, integração, validação de ligação anterior/atual/próxima e projeto versionado por cena.
