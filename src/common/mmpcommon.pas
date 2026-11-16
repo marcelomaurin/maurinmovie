@@ -7,10 +7,18 @@ unit mmpcommon;
 interface
 
 uses
-  SysUtils{$IFDEF WINDOWS}, Windows{$ENDIF};
+  SysUtils, Classes{$IFDEF WINDOWS}, Windows{$ENDIF};
 
 type
   TMMApp = (maMMenu, maMScript, maMVisual, maMBoard, maMSound, maMScene, maMCut);
+
+  TMmpResolutionPreset = record
+    Code: string;
+    LabelText: string;
+    Width: Integer;
+    Height: Integer;
+    Aspect: string;
+  end;
 
   { Argumentos padronizados do protocolo MMP v1 }
   TMMLaunchArgs = record
@@ -69,6 +77,19 @@ const
 
   MMAppLabelSuffixes: array[TMMApp] of string =
     ('Portal', 'Roteiro', 'Visual', 'Storyboard', 'Sonoro', 'Video', 'Filme');
+
+  MMP_RESOLUTION_PRESETS: array[0..5] of TMmpResolutionPreset = (
+    (Code: 'vga';     LabelText: 'VGA (640x480 - 4:3)';      Width: 640;  Height: 480;  Aspect: '4:3'),
+    (Code: 'hd';      LabelText: 'HD (1280x720 - 16:9)';     Width: 1280; Height: 720;  Aspect: '16:9'),
+    (Code: 'fullhd';  LabelText: 'Full HD (1920x1080 - 16:9)'; Width: 1920; Height: 1080; Aspect: '16:9'),
+    (Code: '2k';      LabelText: '2K (2560x1440 - 16:9)';    Width: 2560; Height: 1440; Aspect: '16:9'),
+    (Code: '4k';      LabelText: '4K (3840x2160 - 16:9)';    Width: 3840; Height: 2160; Aspect: '16:9'),
+    (Code: '8k';      LabelText: '8K (7680x4320 - 16:9)';    Width: 7680; Height: 4320; Aspect: '16:9')
+  );
+
+procedure MmpPopulateResolutionCombo(Items: TStrings);
+function MmpFindResolutionPresetIndex(W, H: Integer): Integer;
+function MmpGetResolutionPreset(Idx: Integer; out W, H: Integer; out Aspect: string): Boolean;
 
 function ParseLaunchArgs: TMMLaunchArgs;
 function IsValidRevisionId(const ARev: string): Boolean;
@@ -284,6 +305,35 @@ begin
   WriteCliLine('  [--resume-transaction <tx_id>] [--log-level debug|info|warn|error] [--version] [--help]');
   if not SameText(AppName, 'MMenu') then
     WriteCliLine('Observacao: este modulo deve ser iniciado exclusivamente pelo MMenu.');
+end;
+
+procedure MmpPopulateResolutionCombo(Items: TStrings);
+var
+  I: Integer;
+begin
+  if Items = nil then Exit;
+  Items.Clear;
+  for I := Low(MMP_RESOLUTION_PRESETS) to High(MMP_RESOLUTION_PRESETS) do
+    Items.Add(MMP_RESOLUTION_PRESETS[I].LabelText);
+end;
+
+function MmpFindResolutionPresetIndex(W, H: Integer): Integer;
+var
+  I: Integer;
+begin
+  Result := -1;
+  for I := Low(MMP_RESOLUTION_PRESETS) to High(MMP_RESOLUTION_PRESETS) do
+    if (MMP_RESOLUTION_PRESETS[I].Width = W) and (MMP_RESOLUTION_PRESETS[I].Height = H) then
+      Exit(I);
+end;
+
+function MmpGetResolutionPreset(Idx: Integer; out W, H: Integer; out Aspect: string): Boolean;
+begin
+  Result := (Idx >= Low(MMP_RESOLUTION_PRESETS)) and (Idx <= High(MMP_RESOLUTION_PRESETS));
+  if not Result then Exit;
+  W := MMP_RESOLUTION_PRESETS[Idx].Width;
+  H := MMP_RESOLUTION_PRESETS[Idx].Height;
+  Aspect := MMP_RESOLUTION_PRESETS[Idx].Aspect;
 end;
 
 end.

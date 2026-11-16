@@ -168,10 +168,14 @@ begin
 
   FExportFormatCombo := TComboBox.Create(Self); FExportFormatCombo.Parent := Sidebar;
   FExportFormatCombo.Style := csDropDownList;
-  FExportFormatCombo.Items.Add('MP4 (H.264 / AAC) 1080p');
-  FExportFormatCombo.Items.Add('MP4 (H.264 / AAC) 720p');
+  FExportFormatCombo.Items.Add('MP4 (H.264 / AAC) VGA 480p');
+  FExportFormatCombo.Items.Add('MP4 (H.264 / AAC) HD 720p');
+  FExportFormatCombo.Items.Add('MP4 (H.264 / AAC) Full HD 1080p');
+  FExportFormatCombo.Items.Add('MP4 (H.264 / AAC) 2K 1440p');
+  FExportFormatCombo.Items.Add('MP4 (H.264 / AAC) 4K 2160p');
+  FExportFormatCombo.Items.Add('MP4 (H.264 / AAC) 8K 4320p');
   FExportFormatCombo.Items.Add('MKV (Lossless / Master)');
-  FExportFormatCombo.ItemIndex := 0;
+  FExportFormatCombo.ItemIndex := 2;
   FExportFormatCombo.SetBounds(12, 130, 231, 26);
 
   BtnCorr := TButton.Create(Self); BtnCorr.Parent := Sidebar; BtnCorr.Caption := 'Etapa 4: Solicitar Correcao (MScene)';

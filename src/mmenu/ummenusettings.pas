@@ -28,6 +28,7 @@ type
     // Producao
     FProdNameBaseEdit: TEdit;
     FProdLangEdit: TEdit;
+    FProdResCombo: TComboBox;
     FProdFpsEdit: TEdit;
     FProdWidthEdit: TEdit;
     FProdHeightEdit: TEdit;
@@ -50,6 +51,7 @@ type
     FProvShowSecretBtn: TButton;
     FProvTempEdit: TEdit;
     FProvMaxTokensEdit: TEdit;
+    FProvResCombo: TComboBox;
     FProvWidthEdit: TEdit;
     FProvHeightEdit: TEdit;
     FProvMaxSegEdit: TEdit;
@@ -103,6 +105,7 @@ type
 
     // Midia e Render (settings/media-profiles.json)
     FMediaImgFmtEdit: TEdit;
+    FMediaResCombo: TComboBox;
     FMediaImgWEdit: TEdit;
     FMediaImgHEdit: TEdit;
     FMediaAudioRateEdit: TEdit;
@@ -133,6 +136,9 @@ type
     procedure UpdateToolBadges;
 
     procedure OnTreeSelectionChanged(Sender: TObject; Node: TTreeNode);
+    procedure OnProdResChanged(Sender: TObject);
+    procedure OnProvResChanged(Sender: TObject);
+    procedure OnMediaResChanged(Sender: TObject);
     procedure OnPromptAppChanged(Sender: TObject);
     procedure OnPromptNameChanged(Sender: TObject);
     procedure OnSavePromptClick(Sender: TObject);
@@ -275,14 +281,22 @@ begin
   L := TLabel.Create(Self); L.Parent := TabProd; L.Caption := 'Idioma do roteiro/falas:'; L.SetBounds(354, 16, 180, 18);
   FProdLangEdit := TEdit.Create(Self); FProdLangEdit.Parent := TabProd; FProdLangEdit.SetBounds(354, 36, 120, 26);
 
-  L := TLabel.Create(Self); L.Parent := TabProd; L.Caption := 'FPS:'; L.SetBounds(16, 76, 60, 18);
-  FProdFpsEdit := TEdit.Create(Self); FProdFpsEdit.Parent := TabProd; FProdFpsEdit.SetBounds(16, 96, 80, 26);
-  L := TLabel.Create(Self); L.Parent := TabProd; L.Caption := 'Largura:'; L.SetBounds(112, 76, 80, 18);
-  FProdWidthEdit := TEdit.Create(Self); FProdWidthEdit.Parent := TabProd; FProdWidthEdit.SetBounds(112, 96, 90, 26);
-  L := TLabel.Create(Self); L.Parent := TabProd; L.Caption := 'Altura:'; L.SetBounds(216, 76, 80, 18);
-  FProdHeightEdit := TEdit.Create(Self); FProdHeightEdit.Parent := TabProd; FProdHeightEdit.SetBounds(216, 96, 90, 26);
-  L := TLabel.Create(Self); L.Parent := TabProd; L.Caption := 'Proporcao:'; L.SetBounds(320, 76, 80, 18);
-  FProdAspectEdit := TEdit.Create(Self); FProdAspectEdit.Parent := TabProd; FProdAspectEdit.SetBounds(320, 96, 90, 26);
+  L := TLabel.Create(Self); L.Parent := TabProd; L.Caption := 'Resolucao padronizada (VGA .. 8K):'; L.SetBounds(16, 76, 220, 18);
+  FProdResCombo := TComboBox.Create(Self); FProdResCombo.Parent := TabProd; FProdResCombo.Style := csDropDownList;
+  MmpPopulateResolutionCombo(FProdResCombo.Items);
+  FProdResCombo.SetBounds(16, 96, 215, 26); FProdResCombo.OnChange := @OnProdResChanged;
+
+  L := TLabel.Create(Self); L.Parent := TabProd; L.Caption := 'Largura:'; L.SetBounds(244, 76, 75, 18);
+  FProdWidthEdit := TEdit.Create(Self); FProdWidthEdit.Parent := TabProd; FProdWidthEdit.ReadOnly := True; FProdWidthEdit.Color := $00F4F6F9;
+  FProdWidthEdit.SetBounds(244, 96, 76, 26);
+  L := TLabel.Create(Self); L.Parent := TabProd; L.Caption := 'Altura:'; L.SetBounds(330, 76, 75, 18);
+  FProdHeightEdit := TEdit.Create(Self); FProdHeightEdit.Parent := TabProd; FProdHeightEdit.ReadOnly := True; FProdHeightEdit.Color := $00F4F6F9;
+  FProdHeightEdit.SetBounds(330, 96, 76, 26);
+  L := TLabel.Create(Self); L.Parent := TabProd; L.Caption := 'Proporcao:'; L.SetBounds(416, 76, 75, 18);
+  FProdAspectEdit := TEdit.Create(Self); FProdAspectEdit.Parent := TabProd; FProdAspectEdit.ReadOnly := True; FProdAspectEdit.Color := $00F4F6F9;
+  FProdAspectEdit.SetBounds(416, 96, 68, 26);
+  L := TLabel.Create(Self); L.Parent := TabProd; L.Caption := 'FPS:'; L.SetBounds(496, 76, 60, 18);
+  FProdFpsEdit := TEdit.Create(Self); FProdFpsEdit.Parent := TabProd; FProdFpsEdit.SetBounds(496, 96, 72, 26);
 
   L := TLabel.Create(Self); L.Parent := TabProd; L.Caption := 'Estilo visual padrao:'; L.SetBounds(16, 136, 200, 18);
   FProdStyleEdit := TEdit.Create(Self); FProdStyleEdit.Parent := TabProd; FProdStyleEdit.SetBounds(16, 156, 300, 26);
@@ -376,22 +390,27 @@ begin
   L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Max Tokens:'; L.SetBounds(250, 300, 90, 18);
   FProvMaxTokensEdit := TEdit.Create(Self); FProvMaxTokensEdit.Parent := TabIA; FProvMaxTokensEdit.SetBounds(342, 296, 95, 26);
 
-  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Largura / Altura:'; L.SetBounds(16, 336, 120, 18);
-  FProvWidthEdit := TEdit.Create(Self); FProvWidthEdit.Parent := TabIA; FProvWidthEdit.SetBounds(150, 332, 80, 26);
-  FProvHeightEdit := TEdit.Create(Self); FProvHeightEdit.Parent := TabIA; FProvHeightEdit.SetBounds(238, 332, 80, 26);
-  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Max Seg(s):'; L.SetBounds(336, 336, 85, 18);
-  FProvMaxSegEdit := TEdit.Create(Self); FProvMaxSegEdit.Parent := TabIA; FProvMaxSegEdit.SetBounds(424, 332, 70, 26);
+  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Resolucao padrao:'; L.SetBounds(16, 336, 125, 18);
+  FProvResCombo := TComboBox.Create(Self); FProvResCombo.Parent := TabIA; FProvResCombo.Style := csDropDownList;
+  MmpPopulateResolutionCombo(FProvResCombo.Items);
+  FProvResCombo.SetBounds(150, 332, 220, 26); FProvResCombo.OnChange := @OnProvResChanged;
+
+  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Largura / Altura:'; L.SetBounds(16, 372, 120, 18);
+  FProvWidthEdit := TEdit.Create(Self); FProvWidthEdit.Parent := TabIA; FProvWidthEdit.SetBounds(150, 368, 80, 26);
+  FProvHeightEdit := TEdit.Create(Self); FProvHeightEdit.Parent := TabIA; FProvHeightEdit.SetBounds(238, 368, 80, 26);
+  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Max Seg(s):'; L.SetBounds(336, 372, 85, 18);
+  FProvMaxSegEdit := TEdit.Create(Self); FProvMaxSegEdit.Parent := TabIA; FProvMaxSegEdit.SetBounds(424, 368, 70, 26);
 
   BtnTest := TButton.Create(Self); BtnTest.Parent := TabIA; BtnTest.Caption := 'Testar Provedor';
-  BtnTest.SetBounds(16, 378, 160, 32); BtnTest.OnClick := @OnTestProviderClick;
+  BtnTest.SetBounds(16, 408, 160, 32); BtnTest.OnClick := @OnTestProviderClick;
 
   FBtnScanAudioServers := TButton.Create(Self); FBtnScanAudioServers.Parent := TabIA;
   FBtnScanAudioServers.Caption := 'Detectar Servidores Locais...';
-  FBtnScanAudioServers.SetBounds(184, 378, 210, 32);
+  FBtnScanAudioServers.SetBounds(184, 408, 210, 32);
   FBtnScanAudioServers.OnClick := @OnScanAudioServersClick;
 
   FProvTestLabel := TLabel.Create(Self); FProvTestLabel.Parent := TabIA;
-  FProvTestLabel.WordWrap := True; FProvTestLabel.SetBounds(16, 420, 650, 56);
+  FProvTestLabel.WordWrap := True; FProvTestLabel.SetBounds(16, 448, 650, 56);
   FProvTestLabel.Caption := 'As chaves ficam em secrets.ini e nunca sao gravadas na pasta da producao.';
 
   TabIA.Enabled := FHasProduction;
@@ -461,10 +480,13 @@ begin
   L := TLabel.Create(Self); L.Parent := TabMidia; L.Caption := 'Perfis de Midia (settings/media-profiles.json)';
   L.Font.Size := 11; L.Font.Style := [fsBold]; L.SetBounds(16, 14, 480, 22);
 
-  L := TLabel.Create(Self); L.Parent := TabMidia; L.Caption := 'Imagem de referencia - Formato / Largura / Altura:'; L.SetBounds(16, 54, 340, 18);
-  FMediaImgFmtEdit := TEdit.Create(Self); FMediaImgFmtEdit.Parent := TabMidia; FMediaImgFmtEdit.SetBounds(16, 74, 90, 26);
-  FMediaImgWEdit := TEdit.Create(Self); FMediaImgWEdit.Parent := TabMidia; FMediaImgWEdit.SetBounds(114, 74, 90, 26);
-  FMediaImgHEdit := TEdit.Create(Self); FMediaImgHEdit.Parent := TabMidia; FMediaImgHEdit.SetBounds(212, 74, 90, 26);
+  L := TLabel.Create(Self); L.Parent := TabMidia; L.Caption := 'Imagem/Render - Formato / Resolucao padronizada / Largura / Altura:'; L.SetBounds(16, 54, 480, 18);
+  FMediaImgFmtEdit := TEdit.Create(Self); FMediaImgFmtEdit.Parent := TabMidia; FMediaImgFmtEdit.SetBounds(16, 74, 70, 26);
+  FMediaResCombo := TComboBox.Create(Self); FMediaResCombo.Parent := TabMidia; FMediaResCombo.Style := csDropDownList;
+  MmpPopulateResolutionCombo(FMediaResCombo.Items);
+  FMediaResCombo.SetBounds(94, 74, 210, 26); FMediaResCombo.OnChange := @OnMediaResChanged;
+  FMediaImgWEdit := TEdit.Create(Self); FMediaImgWEdit.Parent := TabMidia; FMediaImgWEdit.SetBounds(312, 74, 76, 26);
+  FMediaImgHEdit := TEdit.Create(Self); FMediaImgHEdit.Parent := TabMidia; FMediaImgHEdit.SetBounds(396, 74, 76, 26);
 
   L := TLabel.Create(Self); L.Parent := TabMidia; L.Caption := 'Audio de trabalho - Taxa (Hz) / Bits:'; L.SetBounds(16, 118, 300, 18);
   FMediaAudioRateEdit := TEdit.Create(Self); FMediaAudioRateEdit.Parent := TabMidia; FMediaAudioRateEdit.SetBounds(16, 138, 100, 26);
@@ -615,9 +637,10 @@ begin
   FProdNameBaseEdit.Text := FSettings.ProdNameBase;
   FProdLangEdit.Text := FSettings.ProdLanguage;
   FProdFpsEdit.Text := IntToStr(FSettings.ProdFps);
-  FProdWidthEdit.Text := IntToStr(FSettings.ProdWidth);
-  FProdHeightEdit.Text := IntToStr(FSettings.ProdHeight);
-  FProdAspectEdit.Text := FSettings.ProdAspect;
+  I := MmpFindResolutionPresetIndex(FSettings.ProdWidth, FSettings.ProdHeight);
+  if I < 0 then I := 2; // Padrao Full HD (1920x1080)
+  FProdResCombo.ItemIndex := I;
+  OnProdResChanged(nil);
   FProdStyleEdit.Text := FSettings.ProdVisualStyle;
   FProdFormatCombo.ItemIndex := FProdFormatCombo.Items.IndexOf(FSettings.ProdFormat);
   if FProdFormatCombo.ItemIndex < 0 then FProdFormatCombo.ItemIndex := 0;
@@ -895,6 +918,7 @@ begin
   FProvMaxTokensEdit.Text := IntToStr(Prov.MaxTokens);
   FProvWidthEdit.Text := IntToStr(Prov.Width);
   FProvHeightEdit.Text := IntToStr(Prov.Height);
+  FProvResCombo.ItemIndex := MmpFindResolutionPresetIndex(Prov.Width, Prov.Height);
   FProvMaxSegEdit.Text := IntToStr(Prov.MaxSegmentSec);
 end;
 
@@ -997,6 +1021,43 @@ begin
   end
   else if (TagVal >= 0) and (TagVal < FPageControl.PageCount) then
     FPageControl.ActivePageIndex := TagVal;
+end;
+
+procedure TMmenuSettingsForm.OnProdResChanged(Sender: TObject);
+var
+  W, H: Integer;
+  Asp: string;
+begin
+  if MmpGetResolutionPreset(FProdResCombo.ItemIndex, W, H, Asp) then
+  begin
+    FProdWidthEdit.Text := IntToStr(W);
+    FProdHeightEdit.Text := IntToStr(H);
+    FProdAspectEdit.Text := Asp;
+  end;
+end;
+
+procedure TMmenuSettingsForm.OnProvResChanged(Sender: TObject);
+var
+  W, H: Integer;
+  Asp: string;
+begin
+  if MmpGetResolutionPreset(FProvResCombo.ItemIndex, W, H, Asp) then
+  begin
+    FProvWidthEdit.Text := IntToStr(W);
+    FProvHeightEdit.Text := IntToStr(H);
+  end;
+end;
+
+procedure TMmenuSettingsForm.OnMediaResChanged(Sender: TObject);
+var
+  W, H: Integer;
+  Asp: string;
+begin
+  if MmpGetResolutionPreset(FMediaResCombo.ItemIndex, W, H, Asp) then
+  begin
+    FMediaImgWEdit.Text := IntToStr(W);
+    FMediaImgHEdit.Text := IntToStr(H);
+  end;
 end;
 
 procedure TMmenuSettingsForm.OnVerifyEnvClick(Sender: TObject);
@@ -1255,6 +1316,9 @@ begin
           FMediaImgFmtEdit.Text := Sub.Get('format', 'png');
           FMediaImgWEdit.Text := IntToStr(Sub.Get('width', 1024));
           FMediaImgHEdit.Text := IntToStr(Sub.Get('height', 1024));
+          FMediaResCombo.ItemIndex := MmpFindResolutionPresetIndex(
+            StrToIntDef(FMediaImgWEdit.Text, 1920),
+            StrToIntDef(FMediaImgHEdit.Text, 1080));
         end;
         if Obj.Find('audio.work') is TJSONObject then
         begin
