@@ -28,3 +28,18 @@ Cada aplicativo mantém projeto próprio; o segundo guarda referência à identi
 
 ## Exemplo conceitual
 Cena 1 → PERSONAGEM_X, CASA_PROTAGONISTA, OBJETO_1; Cena 4 → PERSONAGEM_X, OBJETO_1; Cena 10 → PERSONAGEM_X, OBJETO_1. PERSONAGEM_X → [1,4,10].
+
+## Projeto 3 — Storyboard
+- storyboard_project_id, storyboard_revision_id, parent_revision_id, name_base, status
+- sources: script_project_id/revision_id e visual_project_id/revision_id (exatos)
+- scene_boards[]: scene_id, board_id, order, estimated_duration_seconds, opening_asset_id, closing_asset_id, dialogue_refs[], direction_notes[], visual_entity_refs[]
+- segments[]: segment_id, parent_board_id, order, duration_seconds, opening_asset_id, closing_asset_id, dialogue_refs[], direction_notes[]
+- revisions[]: revision_id, source_event_id, change_set, approval, generated_assets, status
+- sync_transactions[]: transaction_id, initiating_storyboard_revision, script_revision_before/after, visual_revision_before/after, storyboard_revision_after, stage_status, errors, idempotency_key
+
+## Regras entre projetos
+- Projetos são independentes, nomeados `<NomeBase>_Roteiro_RNNN`, `<NomeBase>_Visual_RNNN`, `<NomeBase>_Storyboard_RNNN`. Contadores independentes, sem exigir números iguais.
+- A última imagem de um segmento deve referenciar **o mesmo asset_id** que a primeira do próximo segmento (não apenas imagem semelhante).
+- A soma das durações dos segmentos deve coincidir com a duração da cena; ao alterar duração, recalcular ou apontar divergência.
+- A aprovação de mudança no Software 3 cria evento único; aplica revisão no 1, depois no 2, e regenera os quadros afetados no 3. Registrar estados intermediários e permitir retomada idempotente sem loop.
+- A revisão anterior permanece imutável; o estado `sincronizado` exige integridade e conclusão de todas as etapas, e não implica aprovação artística automática de imagens novas.
