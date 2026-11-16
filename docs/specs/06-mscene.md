@@ -39,6 +39,7 @@ Fora do escopo: montar o filme inteiro (é do MCut); gerar várias cenas em lote
 | RF-SC-15 | Salvar projeto por cena `<NomeBase>_Cena_<SceneID>_Video_RNNN` com segmentos, vídeo costurado, prévias, decisões, estado das ligações, referências às 4 fontes | docs/07 et.4 |
 | RF-SC-16 | Marcas de estado independentes: `cena_aprovada`, `ligacao_anterior_aprovada`, `ligacao_posterior_pendente`, `finalizada` | docs/07 et.4 |
 | RF-SC-17 | Alteração aprovada com impacto editorial (roteiro, visual, storyboard, som) registra impacto e inicia cascata; alteração só de renderização não propaga | docs/07 regras |
+| RF-SC-18 | Provedores e parâmetros padrão vêm da configuração centralizada do MMenu (`settings/ai-providers.json`, seção `MScene` de `settings/apps.json`, `settings/production.json`), lidos via `mmpsettings` e recarregados antes de cada operação; o app não tem tela de configuração e nunca grava em `settings/`. O painel de parâmetros mostra esses valores em somente leitura com "Alterar no MMenu…" (`mmenu --settings --tab mscene`); só o pedido da vez (prompt adicional, semente de uma regeneração) é ajustável no app | pedido do usuário 16/11; 00-comum §12 |
 
 ## 4. Telas
 
@@ -51,7 +52,7 @@ Fora do escopo: montar o filme inteiro (é do MCut); gerar várias cenas em lote
 | 1 | Sequência de cenas (ordem do roteiro) com selo; a próxima cena elegível tem botão "Iniciar"; cenas futuras desabilitadas com dica "Gere uma cena por vez" |
 | 2 | Verificação de entradas: fonte, projeto/revisão, integridade; qualquer ✘ bloqueia "Gerar" com o motivo |
 | 3 | Cartões de segmento: miniatura/vídeo, nome e duração, selo, origem dos quadros e do áudio-guia, progresso |
-| 4 | Entrada da IA (referências enviadas, áudio-guia e marcações) e parâmetros (provedor, resolução, fps, sincronia labial) |
+| 4 | Entrada da IA (referências enviadas, áudio-guia e marcações) e parâmetros vindos do MMenu em somente leitura (provedor de vídeo, resolução, fps, sincronia labial, duração máxima de segmento), com "Alterar no MMenu…" |
 
 Botões: ▶ Gerar próximo segmento, Regenerar só o segmento selecionado, ⏸ Pausar.
 

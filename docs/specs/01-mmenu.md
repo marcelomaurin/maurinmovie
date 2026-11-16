@@ -5,9 +5,9 @@
 
 ## 1. Objetivo e limites
 
-O MMenu é a porta de entrada: cria e abre produções, mostra os seis aplicativos e o estado de cada projeto, lança o aplicativo certo **no projeto e na revisão exatos**, e acompanha pendências, eventos e transações de cascata.
+O MMenu é a porta de entrada e o **único lugar de configuração da suíte**: cria e abre produções, guarda todos os parâmetros de configuração (IA de texto, imagem/foto, som e vídeo, padrões de cada programa, ferramentas e executáveis), mostra os seis aplicativos e o estado de cada projeto, lança o aplicativo certo **no projeto e na revisão exatos**, e acompanha pendências, eventos e transações de cascata.
 
-O MMenu **não** edita conteúdo editorial, **não** grava `project.json` nem revisões de outros aplicativos, e **não** consolida os dados dos apps num arquivo único. A única escrita fora do próprio projeto que ele faz é criar a estrutura de uma produção nova e atualizar `catalog.json` (índice reconstruível).
+O MMenu **não** edita conteúdo editorial, **não** grava `project.json` nem revisões de outros aplicativos, e **não** consolida os dados dos apps num arquivo único. As escritas fora do próprio projeto que ele faz são: criar a estrutura de uma produção nova, atualizar `catalog.json` (índice reconstruível) e gravar a configuração em `settings/` (que só ele grava).
 
 ## 2. Usuário e cenários
 
@@ -19,6 +19,8 @@ O MMenu **não** edita conteúdo editorial, **não** grava `project.json` nem re
 | C4 | Ver que uma cascata falhou no MScript, abrir o detalhe e retomar |
 | C5 | Encontrar todos os arquivos de uma cena, achar um vídeo ausente e revinculá-lo |
 | C6 | Configurar onde estão os executáveis dos apps |
+| C7 | Configurar a IA de texto, imagem/foto, som (voz e efeitos) e vídeo, testar a conexão, e ver os outros programas passarem a usá-la |
+| C8 | Dentro do MVisual, clicar em "Alterar no MMenu…" e cair direto na aba IA Imagem |
 
 ## 3. Requisitos funcionais
 
@@ -38,7 +40,16 @@ O MMenu **não** edita conteúdo editorial, **não** grava `project.json` nem re
 | RF-MM-12 | Verificar integridade: percorrer todos os manifestos, conferir existência, tamanho e SHA-256; relatório exportável (.md e .json) | docs/11 |
 | RF-MM-13 | Revincular: quando um arquivo ou projeto não é encontrado, pedir o novo local, conferir SHA-256 e registrar o mapeamento em `catalog.json` (`relinks[]`); nunca alterar manifesto publicado | docs/00 §6, aceite 4 |
 | RF-MM-14 | Reconstruir `catalog.json` a partir dos manifestos | docs/11 |
-| RF-MM-15 | Configurar executáveis (tela dedicada com os seis caminhos, botão "Detectar"), mantendo a descoberta automática atual (`<dir do MMenu>/<app>` e `../bin/<app>`) | código atual |
+| RF-MM-15 | Tela **Configurações** (§6.4) centralizando **todos** os parâmetros de configuração da suíte; os outros programas não têm tela de configuração | pedido do usuário 16/11 |
+| RF-MM-15a | Abas IA Texto, IA Imagem/Foto, IA Som (Voz e Efeitos), IA Vídeo e as opcionais IA Visão e IA Transcrição: cadastrar um ou mais provedores por tipo (adaptador, endpoint, modelo, chave, parâmetros, limites), escolher o padrão de cada tipo, botão Testar | pedido do usuário 16/11 |
+| RF-MM-15b | Aba Programas: para cada app (MScript…MCut), escolher qual provedor de cada tipo ele usa e os padrões de geração (§12.4 de 00-comum) | pedido do usuário 16/11 |
+| RF-MM-15c | Aba Produção: idioma, fps, resolução, proporção, áudio, estilo visual, duração-alvo, nome-base | pedido do usuário 16/11 |
+| RF-MM-15d | Aba Executáveis e ferramentas: caminhos dos seis apps (botão Detectar, mantendo a descoberta atual `<dir do MMenu>/<app>` e `../bin/<app>`), ffmpeg, ffprobe, mpv, pasta padrão de produções | código atual + 00-comum §12 |
+| RF-MM-15e | Chaves de API guardadas no cofre local (`secrets.ini`), nunca em `settings/`; campo de chave mascarado, com "Mostrar" | 00-comum §9.1 |
+| RF-MM-15f | Validar antes de salvar (URL válida, modelo preenchido, todo tipo usado por algum app tem provedor habilitado); gravar com escrita atômica e `updated_at`; registrar a alteração no log | 00-comum §12.6 |
+| RF-MM-15g | Abrir direto numa aba quando chamado por outro app (`--settings --tab <aba>`) | 00-comum §12.2 |
+| RF-MM-15i | Abas Geral, Prompts, Mídia e render, Predefinições, Políticas, Rede, Interface e log cobrindo **todos** os itens do catálogo [08-recursos-e-configuracao](08-recursos-e-configuracao.md); botão Verificar ambiente | pedido do usuário 16/11 |
+| RF-MM-15h | Sem produção aberta, a tela edita só o nível máquina (executáveis, ferramentas, chaves); as abas da produção ficam desabilitadas com "Abra uma produção" | [PROPOSTA] |
 | RF-MM-16 | Distinguir **versão do executável** (Sobre, `--version` de cada app) de **revisão do projeto** | docs/00 §8 |
 | RF-MM-17 | Atualizar a tela automaticamente quando arquivos da produção mudarem (varredura a cada 5 s de `updated_at` de `project.json`, `shared/events`, `shared/transactions`) | [PROPOSTA] |
 | RF-MM-18 | Detectar se um app já está aberto na mesma produção (lock `.lock` ativo) e avisar antes de abrir outra instância | [PROPOSTA] |
@@ -51,7 +62,7 @@ O MMenu **não** edita conteúdo editorial, **não** grava `project.json` nem re
 
 ## 5. Linha de comando
 
-`mmenu [--production <pasta>] [--log-level …] [--version] [--help]`. Com `--production`, abre a produção diretamente. O MMenu não tem modo headless de evento; mas aceita `--check-integrity --production <pasta>` [PROPOSTA] para rodar a verificação e sair (código 0 se íntegra, 4 se houver problema), útil em scripts.
+`mmenu [--production <pasta>] [--settings [--tab <aba>]] [--log-level …] [--version] [--help]`. Com `--production`, abre a produção diretamente. Com `--settings`, abre direto a tela Configurações (se o MMenu já estiver aberto, a instância existente traz a tela para frente [PROPOSTA]); `<aba>` ∈ `geral`, `producao`, `ia-texto`, `ia-imagem`, `ia-voz`, `ia-efeitos`, `ia-video`, `ia-visao`, `ia-transcricao`, `programas`, `prompts`, `midia`, `predefinicoes`, `politicas`, `ferramentas`, `rede`, `interface`, `mscript`, `mvisual`, `mboard`, `msound`, `mscene`, `mcut` (as seis últimas abrem a aba Programas já no app indicado). O MMenu não tem modo headless de evento; mas aceita `--check-integrity --production <pasta>` [PROPOSTA] para rodar a verificação e sair (código 0 se íntegra, 4 se houver problema), útil em scripts.
 
 ## 6. Telas
 
@@ -62,7 +73,7 @@ O MMenu **não** edita conteúdo editorial, **não** grava `project.json` nem re
 | Marca | Elemento | Comportamento |
 |---|---|---|
 | A | Cabeçalho comum | Projeto = `pr_menu_…` (projeto do próprio MMenu). Botão Salvar publica um instantâneo do estado (§7.2) |
-| 1 | Produção ativa + ações | "Abrir produção…" (`TOpenDialog` filtrando `production.json`), "Nova produção…" (§6.3), "Configurações…" (executáveis e preferências); lista Recentes (duplo clique abre) e botões de integridade |
+| 1 | Produção ativa + ações | "Abrir produção…" (`TOpenDialog` filtrando `production.json`), "Nova produção…" (§6.3), "Configurações…" (§6.4, toda a configuração da suíte); lista Recentes (duplo clique abre) e botões de integridade |
 | 2 | Grade de apps (2 colunas × 3 linhas, cartões `TPanel`) | cada cartão: nº · nome, descrição, revisão ativa (ou "4/10 cenas" no MScene, "—" se não há revisão), selo de estado; botão "Abrir ▸" abre a revisão ativa; clique no cartão seleciona e preenche o painel 4. Cartão desabilitado (cinza) se o executável não for encontrado, com dica "Configure o caminho" |
 | 3 | Pendências e sincronizações (`TListView` em modo relatório) | colunas Evento/Transação, Origem (app + revisão), Etapa atual, Estado; duplo clique abre detalhe (painel de artefatos, aba de eventos); menu de contexto: Retomar, Cancelar, Abrir app da etapa |
 | 4 | Detalhes do projeto selecionado | tabela de campos, lista de revisões (selo por `state`), botões "Abrir esta revisão no <App>", "Ver dependências", "Revincular arquivo ausente…" |
@@ -89,6 +100,25 @@ Abre como janela não modal a partir de "Painel de artefatos…".
 
 Campos: Título (obrigatório, 1–120 caracteres), Pasta-raiz (padrão `~/MaurinMovie/productions` ou último usado), pasta gerada (somente leitura: `slug` = título minúsculo sem acentos, espaços → `-`, máx. 40 caracteres, `__` + `production_id`), apps a inicializar (todos marcados), idioma do roteiro, perfil de provedores (Padrão = simulado). "Criar" falha se a pasta já existir. Ao criar, pergunta "Abrir o MScript agora?".
 
+### 6.4 Configurações centralizadas
+
+![MMenu configurações](telas/01-mmenu-configuracoes.svg)
+
+Janela modal redimensionável (900×640), aberta por "Configurações…", pelo menu Ferramentas de qualquer app ("Configurações (MMenu)…") ou por `--settings`.
+
+| Marca | Elemento | Comportamento |
+|---|---|---|
+| 1 | Navegação (`TTreeView`) | **Geral** (usuário, verificar ambiente) · **Produção** · **IA**: Texto, Imagem/Foto, Som — Voz, Som — Efeitos, Vídeo, Visão, Transcrição · **Programas** (MScript…MCut) · **Prompts** · **Mídia e render** · **Predefinições** · **Políticas** (aprovação, custos e limites, público e privacidade, armazenamento e backup) · **Ferramentas e executáveis** · **Rede** · **Interface e log**. Item com problema mostra ⚠. Cada aba corresponde a uma seção de [08-recursos-e-configuracao](08-recursos-e-configuracao.md) |
+| 2 | Provedores do tipo selecionado (`TListView`) | id, rótulo, adaptador, modelo, ★ padrão, habilitado; botões +, Duplicar, Remover (bloqueado se algum app usa o provedor), Definir como padrão |
+| 3 | Formulário do provedor | adaptador (combo), URL base, modelo, chave (mascarada, gravada no cofre local; o JSON guarda só `secret_ref`), timeout, tentativas, limite por minuto, parâmetros do tipo (texto: temperatura, máx. tokens; imagem: resolução, passos, guidance, estilo, negativo; voz: taxa, formato, permitir clonagem; efeitos: taxa, duração máx.; vídeo: resolução, fps, duração máx. de segmento, sincronia labial) |
+| 4 | Testar | chamada mínima ao provedor; mostra ✔ com latência ou ✘ com o erro |
+| 5 | Uso | lista dos programas que usam este provedor (de `settings/apps.json`) |
+| 6 | Rodapé | Restaurar padrões, Cancelar, **Salvar** (valida e grava; os apps abertos recarregam antes da próxima operação) |
+
+Aba **Programas** (mesma janela): para o app escolhido, um combo de provedor por tipo que ele usa (MScript: texto; MVisual: texto e imagem; MBoard: texto e imagem; MSound: texto, voz e efeitos; MScene: vídeo; MCut: texto) e a grade de padrões de geração da seção do app em `settings/apps.json` (chave, valor, descrição), com validação por tipo.
+
+Aba **Geral**: nome do usuário (autor/revisor das aprovações; obrigatório para aprovar), papel, botão **Verificar ambiente** (prontidão por programa, §12 de 08-recursos). Aba **Produção**: campos de `settings/production.json`. Aba **Prompts**: lista de prompts por programa, texto embutido × substituição da produção, validação de marcadores, Restaurar original. Aba **Mídia e render**: perfis de `media-profiles.json` e presets de exportação (um padrão). Aba **Predefinições**: listas editáveis de `presets.json`. Aba **Políticas**: `policies.json` em quatro grupos, com estimativa de custo acumulado da produção. Aba **Ferramentas e executáveis**: seis caminhos dos apps + ffmpeg, ffprobe, mpv, OpenSSL, pastas (produções, cache, banco de efeitos, músicas), cada um com Procurar…, Detectar, versão e indicador ✔/✘. Aba **Rede**: proxy, certificados, modo offline. Aba **Interface e log**: idioma, escala de fonte, tema, nível e retenção de log.
+
 ## 7. Dados
 
 ### 7.1 Configuração local (`GetAppConfigDir(False)/MaurinMovie/mmenu.ini`)
@@ -107,7 +137,9 @@ MVisual=
 Left=…
 ```
 
-Formato atual do código preservado (`[Production] Root`, `[Applications] <App>`); seção `[Recent]` é nova.
+Formato atual do código preservado (`[Production] Root`, `[Applications] <App>`); seções `[Recent]` e `[Tools]` (`ffmpeg=`, `ffprobe=`, `mpv=`, `ProductionsDir=`) são novas. As chaves de API ficam em `secrets.ini` na mesma pasta (§12.1 de 00-comum).
+
+A configuração da produção (`settings/production.json`, `settings/ai-providers.json`, `settings/apps.json`) está especificada em [00-comum §12](00-comum.md#12-configuração-centralizada-no-mmenu).
 
 ### 7.2 Projeto do MMenu (`projects/00-mmenu/`)
 
@@ -189,7 +221,10 @@ Os apps, ao não encontrar um `uri`, consultam `catalog.json.relinks` antes de d
 3. Uma transação com estágio `failed` aparece com a etapa e o erro, e o MMenu nunca mostra `complete` para ela.
 4. Mover um vídeo de lugar → verificação acusa "ausente"; revincular com o arquivo certo resolve; com arquivo errado é recusado.
 5. Depois de usar o MMenu, nenhum `project.json`/manifesto de outro app teve `mtime` alterado.
-6. Nova produção cria a árvore completa e `production.json` válido; criar de novo na mesma pasta falha.
+6. Nova produção cria a árvore completa e `production.json` válido (com `settings/` preenchido com os provedores simulados); criar de novo na mesma pasta falha.
+7. Trocar o modelo da IA de imagem no MMenu e salvar: a próxima geração do MVisual registra o novo `model` e `settings_sha256` em `GenerationMeta`, sem reiniciar o MVisual.
+8. Nenhum arquivo em `settings/` contém chave de API; `mmenu --settings --tab ia-video` abre direto na aba IA Vídeo.
+9. Nenhum outro programa grava em `settings/` (teste: `mtime` inalterado após usar cada app).
 
 ## 11. Estrutura de código sugerida
 
@@ -198,7 +233,8 @@ Os apps, ao não encontrar um `uri`, consultam `catalog.json.relinks` antes de d
 - `ummenulauncher.pas` — resolução de executável e `TProcess` (extrair de `OpenApp`/`FindExecutable` atuais).
 - `ummenuartifacts.pas` + `.lfm` — janela do painel de artefatos.
 - `ummenunewprod.pas` + `.lfm` — diálogo de nova produção.
-- `ummenusettings.pas` + `.lfm` — tela de configuração (substitui o diálogo sequencial atual).
+- `ummenusettings.pas` + `.lfm` — tela Configurações (§6.4), substitui o diálogo sequencial atual; usa `mmpsettings` para ler e uma unidade `ummenusettingswriter.pas` para validar e gravar.
+- `ummenusecrets.pas` — cofre local de chaves.
 
 ## 12. Situação do código atual e diferenças
 

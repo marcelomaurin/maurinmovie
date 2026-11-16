@@ -39,6 +39,7 @@ Fora do escopo: vídeo animado, áudio.
 | RF-MB-14 | Falha em qualquer estágio mantém transação `failed`, com detalhe; Retomar é idempotente; nunca declarar sincronização completa antes da integridade final | docs/05 et.3 |
 | RF-MB-15 | Anti-laço: o MBoard não reage à nova revisão do MScript/MVisual gerada pela própria transação como se fosse mudança externa | docs/05 et.3 |
 | RF-MB-16 | Ao abrir, se houver revisão mais nova do MScript/MVisual que a usada, oferecer "Atualizar fontes" (regenera só quadros das cenas afetadas, como no estágio 3 da cascata) | [PROPOSTA] |
+| RF-MB-17 | Provedores e parâmetros padrão vêm da configuração centralizada do MMenu (`settings/ai-providers.json`, seção `MBoard` de `settings/apps.json`, `settings/production.json`), lidos via `mmpsettings` e recarregados antes de cada operação; o app não tem tela de configuração e nunca grava em `settings/`. O painel de parâmetros mostra esses valores em somente leitura com "Alterar no MMenu…" (`mmenu --settings --tab mboard`); só o pedido da vez (prompt adicional, semente de uma regeneração) é ajustável no app | pedido do usuário 16/11; 00-comum §12 |
 
 ## 4. Telas
 
@@ -50,7 +51,7 @@ Fora do escopo: vídeo animado, áudio.
 |---|---|
 | 1 | Árvore de cenas e segmentos com selo; duração total × alvo; "▶ Gerar todas / retomar" |
 | 2 | Cartões por cena (`TScrollBox` com frames): título, selo, duração, miniaturas inicial → final, resumo (falas por personagem, ambiente, ativos, nº de segmentos). Duplo clique abre a revisão do item (§4.2) |
-| 3 | Parâmetros: provedor de imagem, proporção (16:9 padrão, 2.39:1, 4:3), estilo (storyboard colorido, esboço P&B, realista), usar só referências aprovadas, gerar só falhas |
+| 3 | Parâmetros vindos do MMenu (somente leitura): provedor de imagem, proporção, estilo, usar só referências aprovadas; "Alterar no MMenu…". Escolha desta execução: gerar só falhas |
 
 ### 4.2 Revisão e segmentos (etapa 3)
 

@@ -41,6 +41,7 @@ O MCut é o **único** app que monta e renderiza o filme inteiro. Não altera o 
 | RF-MC-17 | Salvar projeto `<NomeBase>_Filme_RNNN` com timeline, transições, cortes, sessões, relatórios, decisões, histórico e referências 1–5 | docs/08 et.5 |
 | RF-MC-18 | Renderizar o filme inteiro com parâmetros escolhidos (contêiner, codec, resolução, fps, áudio, qualidade); registrar versão do render, parâmetros, checksum, duração, relatório; falha nunca anunciada como sucesso | docs/08 et.5 |
 | RF-MC-19 | Preservar projetos e renders anteriores; nova alteração → nova revisão | docs/08 et.5 |
+| RF-MC-20 | Provedores e parâmetros padrão vêm da configuração centralizada do MMenu (`settings/ai-providers.json`, seção `MCut` de `settings/apps.json`, `settings/production.json`), lidos via `mmpsettings` e recarregados antes de cada operação; o app não tem tela de configuração e nunca grava em `settings/`. O painel de parâmetros mostra esses valores em somente leitura com "Alterar no MMenu…" (`mmenu --settings --tab mcut`); só o pedido da vez (prompt adicional, semente de uma regeneração) é ajustável no app | pedido do usuário 16/11; 00-comum §12 |
 
 ## 4. Telas
 
@@ -98,7 +99,7 @@ A coleta de avaliações acontece no **modo exibição** do próprio MCut [PROPO
 | Marca | Elemento |
 |---|---|
 | 1 | Verificação (lista ✔/✘ de RF-MC-16); um ✘ bloqueia o render e mostra "Ir para o problema" |
-| 2 | Parâmetros: contêiner (MP4, MKV, MOV), codec de vídeo (H.264, H.265, ProRes), resolução, fps, áudio, qualidade (CRF), arquivo de saída |
+| 2 | Parâmetros de exportação: os padrões (perfil de render: contêiner, codec, resolução, fps, áudio, CRF) vêm do MMenu e aparecem preenchidos; o usuário pode mudá-los **para este render** (registrado em `exports[].params`) sem alterar a configuração; "Salvar como padrão" abre o MMenu. Arquivo de saída |
 | 3 | Histórico de renders: `export_id`, revisão, formato, duração, sha256, estado |
 
 ## 5. Linha de comando

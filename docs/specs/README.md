@@ -2,6 +2,8 @@
 
 Esta pasta transforma os requisitos funcionais de `docs/` em especificações prontas para implementação, uma por programa, no nível de detalhe necessário para uma IA (ou pessoa) construir cada aplicativo em Lazarus/Free Pascal sem ter de adivinhar.
 
+**Configuração centralizada:** todos os parâmetros de configuração (IA de texto, imagem/foto, som e vídeo, ferramentas, perfis, políticas) ficam no MMenu; os outros programas só os leem.
+
 Os documentos originais (`docs/00` a `docs/12`) continuam sendo a fonte dos requisitos. Quando uma especificação aqui decide algo que eles deixavam em aberto, a decisão vem marcada como **[PROPOSTA]** e está listada em [99-lacunas.md](99-lacunas.md).
 
 ## Documentos
@@ -16,8 +18,9 @@ Os documentos originais (`docs/00` a `docs/12`) continuam sendo a fonte dos requ
 | [05-msound.md](05-msound.md) | MSound (4) | perfis vocais (IA A), síntese (IA B), efeitos, prévia sonora sincronizada |
 | [06-mscene.md](06-mscene.md) | MScene (5) | geração de vídeo por segmento, costura, ligação entre cenas, projeto por cena |
 | [07-mcut.md](07-mcut.md) | MCut (6) | timeline, cortes, transições, público, análise, correções, render |
+| [08-recursos-e-configuracao.md](08-recursos-e-configuracao.md) | todos (configurado no MMenu) | catálogo de recursos externos e de **todas** as configurações: IAs, ferramentas, credenciais, pastas, perfis de mídia, idiomas, prompts, políticas, rede, interface |
 | [99-lacunas.md](99-lacunas.md) | — | lacunas, decisões propostas e inconsistências |
-| [telas/](telas/) | — | 23 wireframes SVG e o gerador `gerar_telas.py` |
+| [telas/](telas/) | — | 24 wireframes SVG e o gerador `gerar_telas.py` |
 
 ## Estrutura de cada especificação
 
@@ -36,7 +39,7 @@ As letras A–G e os números em círculos laranja nas imagens correspondem às 
 | Programa | Telas |
 |---|---|
 | Comum | `00-esqueleto-comum` |
-| MMenu | `01-mmenu-principal`, `01-mmenu-artefatos`, `01-mmenu-nova-producao` |
+| MMenu | `01-mmenu-principal`, `01-mmenu-artefatos`, `01-mmenu-nova-producao`, `01-mmenu-configuracoes` |
 | MScript | `02-mscript-sinopse`, `02-mscript-roteiro`, `02-mscript-comparar`, `02-mscript-personagens` |
 | MVisual | `03-mvisual-indexacao`, `03-mvisual-geracao`, `03-mvisual-validacao` |
 | MBoard | `04-mboard-grade`, `04-mboard-segmentos`, `04-mboard-sincronizacao` |
@@ -51,7 +54,7 @@ Cada marco termina com testes passando (`tests/<app>/`) usando o provedor de IA 
 | Marco | Entrega | Depende de |
 |---|---|---|
 | M0 | `src/common`: IDs, JSON atômico, SHA-256, produção/projeto/manifesto, publicação de revisão, lock, log, eventos, `mmpai` com provedor simulado, frames de UI comuns | — |
-| M1 | MMenu: nova produção, abrir produção, cartões com revisões, lançar com `--project-id`/`--revision` | M0 |
+| M1 | MMenu: nova produção, abrir produção, cartões com revisões, lançar com `--project-id`/`--revision`, **tela Configurações completa** (`mmpsettings`) | M0 |
 | M2 | MScript completo, incluindo `--headless --event` (`script.patch`) | M0 |
 | M3 | MVisual: indexação → geração → validação → atualização incremental | M2 |
 | M4 | MBoard: geração, segmentos, ajustes e cascata 1→2→3; MMenu passa a mostrar transações | M3 |

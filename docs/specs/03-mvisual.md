@@ -43,6 +43,7 @@ Fora do escopo: vídeo, animação, modelagem 3D, áudio. Nunca altera o roteiro
 | RF-MV-19 | Cascata: reindexar só cenas afetadas, gerar novas entidades/vistas (ex.: bazuca), regenerar variantes de interação dependentes, reutilizar ativos aprovados não afetados; itens novos `generated_by_cascade` → `pending_review` | docs/02 cascata |
 | RF-MV-20 | Entidades removidas do roteiro ficam `archived`, nunca apagadas | docs/03 integridade |
 | RF-MV-21 | Respostas às consultas exemplo: "Ator X", "Casa do protagonista", "Cena 10" (tela de busca com resultado agrupado) | docs/02 consultas |
+| RF-MV-22 | Provedores e parâmetros padrão vêm da configuração centralizada do MMenu (`settings/ai-providers.json`, seção `MVisual` de `settings/apps.json`, `settings/production.json`), lidos via `mmpsettings` e recarregados antes de cada operação; o app não tem tela de configuração e nunca grava em `settings/`. O painel de parâmetros mostra esses valores em somente leitura com "Alterar no MMenu…" (`mmenu --settings --tab mvisual`); só o pedido da vez (prompt adicional, semente de uma regeneração) é ajustável no app | pedido do usuário 16/11; 00-comum §12 |
 
 ## 4. Telas
 
@@ -63,7 +64,7 @@ Fora do escopo: vídeo, animação, modelagem 3D, áudio. Nunca altera o roteiro
 
 | Marca | Elemento |
 |---|---|
-| 1 | Configuração do lote: tipos a incluir, pular aprovados (sempre marcado por padrão), pular já gerados, provedor, resolução (padrão 1024×1024; locais 1920×1080), semente base, estilo (texto livre + presets) ; Iniciar, Pausar, Retomar falhas |
+| 1 | Lote: tipos a incluir e pular já gerados (escolhas desta execução); provedor de imagem, resolução, semente base, estilo e "pular aprovados" exibidos em somente leitura a partir da configuração do MMenu, com "Alterar no MMenu…"; Iniciar, Pausar, Retomar falhas |
 | 2 | Fila (`TListView`): entidade, vista, estado, tentativas, tempo; detalhe da falha selecionada; prévia ao vivo das 4 vistas da entidade em geração |
 | 3 | Prompt gerado da vista selecionada (editável antes de gerar quando a fila está pausada), negativo, referências usadas |
 

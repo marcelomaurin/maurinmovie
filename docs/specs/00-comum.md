@@ -23,6 +23,8 @@ Fontes: [10-escopo-consolidado](../10-escopo-consolidado.md), [11-protocolo-proj
 | Sistemas operacionais | Linux e Windows (o esqueleto atual já trata `.exe` no MMenu) | [PROPOSTA] |
 | Idioma da interface | Português do Brasil; textos em `resourcestring` numa unidade por app (`u<app>strings.pas`) para tradução futura | [PROPOSTA] |
 
+A configuração (provedores de IA, padrões de geração, ferramentas) é **centralizada no MMenu** e apenas lida pelos demais programas (§12).
+
 Todos os executáveis devem iniciar e funcionar **sem nenhum provedor de IA configurado**, usando o provedor simulado (§9.3). Isso permite testar o pipeline inteiro sem custo.
 
 ---
@@ -48,6 +50,7 @@ src/common/
   mmpevents.pas          envelope de evento, caixa de entrada, transações de cascata
   mmplog.pas             log JSON Lines
   mmpai.pas              interfaces de provedores de IA + provedor simulado
+  mmpsettings.pas        leitura da configuração centralizada gravada pelo MMenu (§12)
   mmpmedia.pas           wrappers de ffmpeg/ffprobe/mpv
   mmpui.pas              frames visuais comuns: cabeçalho, barra de etapas, rodapé, janela de log
 ```
@@ -73,7 +76,7 @@ Janela principal: 1100×720 inicial, mínimo 780×550, centralizada (`poScreenCe
 | G | Painel direito (300 px, `TSplitter`) | `TPageControl` | abas Propriedades, IA (parâmetros e prompt), Revisões (histórico), Vínculos (fontes e dependentes) |
 
 Regras de interface:
-1. Larguras dos painéis, tamanho e posição da janela e última aba ativa são salvos em `GetAppConfigDir(False)/MaurinMovie/<app>.ini`.
+1. Larguras dos painéis, tamanho e posição da janela e última aba ativa são salvos em `GetAppConfigDir(False)/MaurinMovie/<app>.ini`. Isso é só **estado de janela**, não configuração: toda configuração fica no MMenu (§12).
 2. Toda ação destrutiva (excluir, rejeitar em lote, cancelar transação, descartar rascunho) pede confirmação com `MessageDlg`.
 3. Operações longas (IA, ffmpeg) rodam em `TThread`; a UI mostra progresso, permite **Pausar/Cancelar** e nunca congela. Atualizações de tela via `TThread.Queue`/`Synchronize`.
 4. Itens sempre mostram ID e estado; nomes visíveis podem mudar, IDs não.
@@ -88,7 +91,7 @@ Menu principal comum (`TMainMenu`):
 | Editar | Desfazer (Ctrl+Z), Refazer (Ctrl+Y), Buscar (Ctrl+F) |
 | Etapas | uma entrada por etapa (Ctrl+1…Ctrl+9) |
 | IA | Gerar (F5), Regenerar seleção (Shift+F5), Pausar fila, Parâmetros… |
-| Ferramentas | Verificar integridade, Configurações…, Provedores de IA… |
+| Ferramentas | Verificar integridade, **Configurações (MMenu)…** (abre a tela de configuração do MMenu na aba deste app; ver §12). Nenhum app além do MMenu tem tela própria de configuração |
 | Ajuda | Manual (F1), Sobre (mostra **versão do executável**, separada da revisão do projeto) |
 
 Atalhos de revisão: Ctrl+Enter aprova o item selecionado, Ctrl+Backspace rejeita, ↑/↓ navegam na lista do painel esquerdo.
@@ -165,7 +168,8 @@ productions/<slug>__<production_id>/
   production.json
   catalog.json
   settings/production.json
-  settings/ai-providers.json
+  settings/ai-providers.json     (gravado só pelo MMenu)
+  + settings/apps.json           padrões por programa (gravado só pelo MMenu)
   projects/NN-app/
     project.json
     + work/                      rascunho mutável (autosave), nunca referenciado por outros apps
@@ -433,23 +437,11 @@ Se o app de origem fechar durante a cascata, o MMenu oferece "Retomar", que exec
 
 ### 9.1 Configuração
 
-`settings/ai-providers.json` (sem segredos):
+**A configuração dos provedores é feita somente no MMenu** (tela Configurações, abas IA Texto, IA Imagem/Foto, IA Som, IA Vídeo; ver [01-mmenu §6.4](01-mmenu.md#64-configurações-centralizadas)). Os demais apps leem `settings/ai-providers.json` e nunca o gravam. Formato completo em §12.3.
 
-```json
-{
-  "schema": "mmp.ai-providers/1",
-  "providers": [
-    {"id": "text.default", "kind": "text", "adapter": "openai-compatible", "base_url": "https://…",
-     "model": "…", "secret_ref": "MAURINMOVIE_TEXT_KEY", "timeout_s": 120, "max_retries": 3},
-    {"id": "image.default", "kind": "image", "adapter": "mock"},
-    {"id": "voice.default", "kind": "voice", "adapter": "mock"},
-    {"id": "video.default", "kind": "video", "adapter": "mock"}
-  ],
-  "defaults": {"text": "text.default", "image": "image.default", "voice": "voice.default", "video": "video.default"}
-}
-```
+Cinco tipos de provedor (`kind`): `text` (IA de texto), `image` (IA de imagem/foto), `voice` (IA de som — voz: síntese/clonagem), `sfx` (IA de som — efeitos), `video` (IA de vídeo). Dois tipos opcionais [PROPOSTA]: `vision` (verificação automática de continuidade, nunca aprova) e `asr` (transcrição para conferir falas). Detalhes em [08-recursos-e-configuracao §2](08-recursos-e-configuracao.md#2-provedores-de-ia).
 
-`secret_ref` é resolvido por variável de ambiente ou por `GetAppConfigDir(False)/MaurinMovie/secrets.ini` (permissão 600). Nunca gravar a chave em JSON da produção, log ou Git.
+`secret_ref` é resolvido por variável de ambiente ou pelo cofre local gerenciado pelo MMenu (`GetAppConfigDir(False)/MaurinMovie/secrets.ini`, permissão 600; no Windows, protegido com DPAPI [PROPOSTA]). Nunca gravar a chave em JSON da produção, log ou Git.
 
 ### 9.2 Interfaces (`mmpai.pas`)
 
@@ -495,8 +487,22 @@ type
   IMMImageProvider = interface function Generate(const R: TMMImageRequest; Cancel: PBoolean): TMMAIResult; end;
   IMMVoiceProvider = interface function Synthesize(const R: TMMVoiceRequest; Cancel: PBoolean): TMMAIResult; end;
   IMMVideoProvider = interface function Generate(const R: TMMVideoRequest; Cancel: PBoolean): TMMAIResult; end;
+  TMMSfxRequest = record
+    Description: string;      // ex.: "disparo de bazuca com eco no cais"
+    DurationMs: Integer;
+    Seed: Int64;
+    OutputFile: string;       // WAV 48 kHz
+  end;
+  IMMSfxProvider   = interface function Generate(const R: TMMSfxRequest; Cancel: PBoolean): TMMAIResult; end;
 
-function GetTextProvider(const AId: string = ''): IMMTextProvider;   // '' = padrão
+{ Todas as fábricas leem a configuração centralizada (§12) via TMMSettings.
+  AId = '' usa o provedor padrão do kind para o app corrente
+  (settings/apps.json → <App>.providers.<kind>, senão ai-providers.defaults.<kind>). }
+function GetTextProvider(const AId: string = ''): IMMTextProvider;
+function GetImageProvider(const AId: string = ''): IMMImageProvider;
+function GetVoiceProvider(const AId: string = ''): IMMVoiceProvider;
+function GetSfxProvider(const AId: string = ''): IMMSfxProvider;
+function GetVideoProvider(const AId: string = ''): IMMVideoProvider;
 ```
 
 Repetição: erros `aekTransient`/`aekRateLimit` são repetidos com espera exponencial (1, 2, 4… s, máx. `max_retries`); os demais falham o item sem repetir.
@@ -533,3 +539,107 @@ Cada app guarda seus modelos de prompt em `src/<app>/prompts/*.txt` (compilados 
 - Cobertura mínima por app: criar projeto, publicar revisão, reabrir, idempotência de evento, anti-laço, integridade por hash, item gerado nunca aprovado automaticamente.
 
 Testes do protocolo (docs/11 "Testes de aceite") ficam em `tests/common/`.
+
+---
+
+## 12. Configuração centralizada no MMenu
+
+**Regra (decisão do usuário, 16/11/2026): todos os parâmetros de configuração ficam no MMenu.** Isso inclui provedores e parâmetros de IA de texto, imagem/foto, som (voz e efeitos) e vídeo, os padrões de geração de cada programa, ferramentas externas e caminhos. O MMenu é o único programa que grava configuração; MScript, MVisual, MBoard, MSound, MScene e MCut **leem** a configuração e a usam.
+
+### 12.1 O que fica onde
+
+| Nível | Arquivo | Conteúdo | Quem grava | Quem lê |
+|---|---|---|---|---|
+| Produção | `settings/production.json` | padrões técnicos do filme: idioma, fps, resolução, proporção, formato de áudio, estilo visual, duração-alvo | MMenu | todos |
+| Produção | `settings/ai-providers.json` | provedores de IA (texto, imagem, voz, efeitos, vídeo), modelos, endpoints, limites, `secret_ref` | MMenu | todos |
+| Produção | `settings/apps.json` | padrões de cada programa (provedor por tipo, parâmetros de geração, critérios) | MMenu | cada app lê sua seção |
+| Produção | `settings/media-profiles.json` | perfis de imagem, áudio, vídeo de trabalho e presets de render | MMenu | MVisual, MBoard, MSound, MScene, MCut |
+| Produção | `settings/presets.json` | estilos visuais, vistas, emoções, transições, checklists | MMenu | todos |
+| Produção | `settings/prompts/<app>/*.txt` | substituições dos modelos de prompt | MMenu | cada app |
+| Produção | `settings/policies.json` | aprovação, custos e limites, público e privacidade, armazenamento e backup | MMenu | todos |
+| Máquina | `GetAppConfigDir(False)/MaurinMovie/mmenu.ini` | usuário (autor/revisor), executáveis dos apps, ffmpeg/ffprobe/mpv/OpenSSL, pastas, rede/proxy, interface, log, recentes | MMenu | todos |
+| Máquina | `GetAppConfigDir(False)/MaurinMovie/secrets.ini` | chaves de API (cofre local) | MMenu | todos, via `mmpsettings` |
+
+A configuração da produção viaja com a pasta da produção (sem segredos); a da máquina não. **O catálogo completo, item por item, com padrões e programas que usam cada um, está em [08-recursos-e-configuracao.md](08-recursos-e-configuracao.md).**
+
+### 12.2 Como os programas usam a configuração
+
+1. Unidade comum `mmpsettings.pas` (sem LCL) com `TMMSettings.Load(ProductionRoot, App)`; expõe `Production`, `Providers`, `AppDefaults(App)`, `Tool('ffmpeg')`, `ResolveSecret(ref)`.
+2. Os apps leem a configuração ao abrir a produção e **recarregam antes de cada operação de IA ou mídia** se o `updated_at` dos arquivos de `settings/` mudou. Em GUI, mostram faixa "Configuração alterada no MMenu — recarregada".
+3. Os painéis "Parâmetros de IA" dos apps mostram o provedor e os padrões **vindos do MMenu, em somente leitura**, com o link "Alterar no MMenu…", que executa `mmenu --production <pasta> --settings --tab <aba>` ([01-mmenu §5](01-mmenu.md#5-linha-de-comando)).
+4. O que pode ser ajustado dentro de cada app é apenas **o pedido da vez** (prompt adicional de um item, semente de uma regeneração, comentário de correção). Esse ajuste fica registrado em `GenerationMeta` do item e não altera a configuração.
+5. Provedor ausente, mal configurado ou sem chave: a operação falha com a mensagem "Provedor <id> não configurado. Abra Configurações no MMenu." e botão que abre o MMenu na aba certa. Nunca usar um provedor diferente em silêncio.
+6. Toda geração grava em `GenerationMeta` o `provider`, `model` e o `settings_sha256` [PROPOSTA] (hash de `ai-providers.json` + seção do app em `apps.json`) usados, para rastrear qual configuração produziu cada artefato.
+7. Em modo `--headless`, os apps usam a mesma configuração (não há argumentos de linha de comando para sobrepor provedores).
+
+### 12.3 `settings/ai-providers.json`
+
+```json
+{
+  "schema": "mmp.ai-providers/1",
+  "updated_at": "2026-11-16T12:50:00Z",
+  "providers": [
+    {"id": "text.default", "kind": "text", "label": "Texto principal", "adapter": "openai-compatible",
+     "base_url": "https://…", "model": "…", "secret_ref": "MAURINMOVIE_TEXT_KEY",
+     "params": {"temperature": 0.7, "max_tokens": 8000}, "timeout_s": 120, "max_retries": 3,
+     "rate_limit_per_min": 30, "enabled": true},
+    {"id": "image.default", "kind": "image", "label": "Imagem/foto", "adapter": "mock",
+     "params": {"width": 1024, "height": 1024, "steps": 30, "guidance": 7.0, "style": "realista cinematográfico",
+                "negative_prompt": "texto, marca d'água, deformação"}},
+    {"id": "voice.default", "kind": "voice", "label": "Voz (síntese/clonagem)", "adapter": "mock",
+     "params": {"sample_rate": 48000, "format": "wav", "allow_cloning": false}},
+    {"id": "sfx.default", "kind": "sfx", "label": "Efeitos sonoros", "adapter": "mock",
+     "params": {"sample_rate": 48000, "max_duration_s": 20}},
+    {"id": "video.default", "kind": "video", "label": "Vídeo", "adapter": "mock",
+     "params": {"width": 1920, "height": 1080, "fps": 24, "max_segment_s": 10, "lip_sync": true}}
+  ],
+  "defaults": {"text": "text.default", "image": "image.default", "voice": "voice.default",
+               "sfx": "sfx.default", "video": "video.default"}
+}
+```
+
+Adaptadores previstos: `mock` (obrigatório, §9.3), `openai-compatible` (HTTP), `chatgpt-lib` (biblioteca CHATGPT, quando verificada), `local-cli` (executa um programa local com argumentos-modelo), `http-generic` (URL + modelo de corpo JSON). A lista final depende da lacuna L-09.
+
+### 12.4 `settings/apps.json`
+
+```json
+{
+  "schema": "mmp.apps-settings/1",
+  "MScript":  {"providers": {"text": "text.default"},
+               "defaults": {"scene_count": 10, "include_dialogue": true, "suggest_objects": true,
+                            "creativity": 0.7, "language": "pt-BR", "consistency_checks": true}},
+  "MVisual":  {"providers": {"text": "text.default", "image": "image.default"},
+               "defaults": {"character_resolution": [1024, 1024], "location_resolution": [1920, 1080],
+                            "base_seed": 4211, "style": "realista cinematográfico", "background": "#808080",
+                            "skip_approved": true, "front_view_as_reference": true}},
+  "MBoard":   {"providers": {"text": "text.default", "image": "image.default"},
+               "defaults": {"aspect": "16:9", "style": "storyboard colorido", "approved_refs_only": true,
+                            "min_segment_s": 1}},
+  "MSound":   {"providers": {"text": "text.default", "voice": "voice.default", "sfx": "sfx.default"},
+               "defaults": {"sample_rate": 48000, "bit_depth": 24, "test_phrase_source": "roteiro"}},
+  "MScene":   {"providers": {"video": "video.default"},
+               "defaults": {"resolution": [1920, 1080], "fps": 24, "lip_sync": true, "junction_preview_s": 5,
+                            "duration_tolerance_frames": 1}},
+  "MCut":     {"providers": {"text": "text.default"},
+               "defaults": {"container": "mp4", "video_codec": "h264", "crf": 18, "audio": "aac 48k stereo",
+                            "default_transition": "cut", "rating_scale": 5, "fragment_context_s": 5}}
+}
+```
+
+### 12.5 `settings/production.json`
+
+```json
+{
+  "schema": "mmp.production-settings/1",
+  "language": "pt-BR", "fps": 24, "frame_size": [1920, 1080], "aspect": "16:9",
+  "audio": {"sample_rate": 48000, "channels": 2}, "target_duration_ms": 900000,
+  "visual_style": "realista cinematográfico", "name_base": "FilmeExemplo"
+}
+```
+
+### 12.6 Regras
+
+- Escrita atômica com backup (§5.1); `updated_at` atualizado a cada gravação.
+- Mudar configuração não altera revisões já publicadas; vale para as próximas gerações.
+- O MMenu registra cada alteração de configuração no log e no instantâneo de revisão do projeto `00-mmenu` (sem segredos).
+- Botão "Testar" por provedor no MMenu: executa uma chamada mínima (texto curto, imagem 64×64, 1 s de áudio/vídeo) e mostra latência e erro.

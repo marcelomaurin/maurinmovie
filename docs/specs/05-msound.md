@@ -10,7 +10,9 @@ Fora do escopo: trilha musical, mixagem e áudio final do filme (docs/06 objetiv
 
 Duas IAs conceituais distintas (docs/06, aceite 3):
 - **IA A** (texto): define perfis vocais e indexa efeitos necessários a partir do roteiro.
-- **IA B** (voz/áudio): sintetiza ou clona a voz para frases de teste; gera efeitos sonoros [PROPOSTA: a geração de efeitos usa um provedor `sfx`, ver lacuna L-10].
+- **IA B** (voz/áudio): sintetiza ou clona a voz para frases de teste; os efeitos sonoros usam o provedor `sfx`.
+
+As duas IAs (e o provedor de efeitos) são configuradas **no MMenu**, aba IA Som (Voz e Efeitos) e aba Programas → MSound; o MSound só as lê.
 
 ## 2. Etapas
 
@@ -40,6 +42,7 @@ Duas IAs conceituais distintas (docs/06, aceite 3):
 | RF-SO-13 | Alteração editorial aprovada no MSound que afete roteiro (ex.: mudar uma fala para caber no tempo) dispara cascata pelos apps afetados; mudança puramente vocal fica no MSound | docs/06 et.3 |
 | RF-SO-14 | Salvar projeto versionado com banco de vozes e efeitos, perfis, aprovações, timeline sonora, prévias, referências 1–3 e histórico; verificar vínculos/arquivos ausentes; distinguir salvo de sincronização pendente | docs/06 et.4 |
 | RF-SO-15 | Voz continua ligada ao personagem pelo ID mesmo após renomeação no MScript | docs/06 aceite 1 |
+| RF-SO-16 | Provedores e parâmetros padrão vêm da configuração centralizada do MMenu (`settings/ai-providers.json`, seção `MSound` de `settings/apps.json`, `settings/production.json`), lidos via `mmpsettings` e recarregados antes de cada operação; o app não tem tela de configuração e nunca grava em `settings/`. O painel de parâmetros mostra esses valores em somente leitura com "Alterar no MMenu…" (`mmenu --settings --tab msound`); só o pedido da vez (prompt adicional, semente de uma regeneração) é ajustável no app | pedido do usuário 16/11; 00-comum §12 |
 
 ## 4. Telas
 
@@ -52,7 +55,7 @@ Duas IAs conceituais distintas (docs/06, aceite 3):
 | 1 | Abas **Vozes** (personagens) e **Efeitos** (árvore: Ambiente / Objetos / Ações / Mecanismos → itens por entidade e cena) com selo |
 | 2 | Perfil vocal: controles deslizantes (`TTrackBar`) Timbre (agudo↔grave), Tonalidade (−12…+12 semitons), Ritmo, Expressividade, Velocidade (0,5×…2×); combos Sotaque e Emoção do teste; descrição textual do perfil (gerada pela IA A, editável) |
 | 3 | Frase de teste (livre ou escolher fala do roteiro), "▶ Sintetizar", forma de onda, controles de reprodução, histórico de testes (cada teste é um artefato descartável no cache, não publicado salvo se o usuário "Fixar amostra") |
-| 4 | Síntese: IA A e IA B usadas, semente, hash da config, origem (sintética/clonada), licença; seção Clonagem com checkbox "usa amostra de pessoa real", anexar autorização |
+| 4 | Síntese: IA A e IA B usadas (somente leitura, configuradas no MMenu, com "Alterar no MMenu…"), semente, hash da config, origem (sintética/clonada), licença; seção Clonagem com checkbox "usa amostra de pessoa real", anexar autorização |
 
 Aba Efeitos (mesmo layout): centro mostra descrição do efeito, onda, duração, variações (ex.: disparo v1/v2); direito mostra entidade/cena de origem e licença. Botões Aprovar, Rejeitar, Regenerar, Substituir por arquivo….
 

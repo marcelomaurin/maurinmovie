@@ -40,6 +40,7 @@ Fora do escopo: imagens, som, vídeo. Aplicar mudanças vindas do MBoard **sem a
 | RF-MS-15 | Aplicar evento `script.patch` (vindo do MBoard ou de outro app) em modo headless, criando nova revisão só com as cenas afetadas, preservando IDs (§8.4) | docs/01 integração |
 | RF-MS-16 | Guardar autoria e histórico: cada alteração registra autor (`user:`/`ai:`/`cascade:`), data, prompt (se IA) e resumo | docs/01 regras |
 | RF-MS-17 | Somar durações estimadas e comparar com a duração-alvo (aviso se diferença > 15%) | [PROPOSTA] |
+| RF-MS-18 | Provedores e parâmetros padrão vêm da configuração centralizada do MMenu (`settings/ai-providers.json`, seção `MScript` de `settings/apps.json`, `settings/production.json`), lidos via `mmpsettings` e recarregados antes de cada operação; o app não tem tela de configuração e nunca grava em `settings/`. O painel de parâmetros mostra esses valores em somente leitura com "Alterar no MMenu…" (`mmenu --settings --tab mscript`); só o pedido da vez (prompt adicional, semente de uma regeneração) é ajustável no app | pedido do usuário 16/11; 00-comum §12 |
 
 ## 4. Telas
 
@@ -52,7 +53,7 @@ Fora do escopo: imagens, som, vídeo. Aplicar mudanças vindas do MBoard **sem a
 | 1 | Metadados do filme: título (`TEdit`), formato (`TComboBox`: Curta, Média, Longa), duração-alvo (`TEdit` com máscara `HH:MM` ou minutos), gênero, idioma, classificação |
 | 2 | Sinopse (`TMemo`, quebra automática, contador de palavras no rodapé) |
 | 3 | Premissas/restrições (`TMemo`, uma por linha) |
-| 4 | Parâmetros de IA de texto: provedor, nº de cenas, criatividade (0–1), diálogos, sugerir objetos/figurinos, prompt adicional |
+| 4 | Parâmetros de IA de texto **vindos do MMenu** (somente leitura): provedor, nº de cenas, criatividade, diálogos, sugerir objetos/figurinos, com "Alterar no MMenu…". Editável aqui só o **prompt adicional** desta geração |
 | 5 | "Salvar rascunho" e "Gerar roteiro ▸". Se já houver roteiro no rascunho, "Gerar" pergunta: Substituir tudo / Gerar como proposta para comparar / Cancelar |
 
 Sem painel esquerdo nesta etapa.

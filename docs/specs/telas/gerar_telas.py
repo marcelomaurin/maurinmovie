@@ -443,6 +443,58 @@ def _():
     return s
 
 
+@screen("01-mmenu-configuracoes")
+def _():
+    s = Svg(900, 640)
+    s.rect(0, 0, 900, 640, fill="#FFFFFF", stroke=C["line"])
+    s.rect(0, 0, 900, 34, fill=C["head"], stroke="none")
+    s.text(14, 22, "Configurações — MMenu  ·  Produção: Filme Exemplo", 13, "bold", "#FFFFFF")
+    s.rect(0, 34, 230, 556, fill=C["side"], stroke=C["line"])
+    s.listbox(8, 44, 214, 536, [("Geral", None), ("Produção", None), ("IA", None), ("Texto", "ok", 1),
+              ("Imagem/Foto", "ok", 1), ("Som — Voz", "ok", 1), ("Som — Efeitos", "pendente", 1), ("Vídeo", "ok", 1),
+              ("Visão (opcional)", None, 1), ("Transcrição (opcional)", None, 1), ("Programas", None),
+              ("Prompts", None), ("Mídia e render", None), ("Predefinições", None), ("Políticas", None),
+              ("Ferramentas e executáveis", "falha"), ("Rede", None), ("Interface e log", None)], sel=4, row=29)
+    s.marker(222, 54, "1")
+    s.text(246, 60, "IA Imagem/Foto", 16, "bold")
+    s.text(246, 80, "Usado por: MVisual, MBoard", 11, fill=C["muted"])
+    s.marker(420, 76, "5")
+    s.table(246, 92, ["id", "rótulo", "adaptador", "modelo", "★"],
+            [["image.default", "Imagem principal", "openai-compatible", "img-model-x", "★"],
+             ["image.local", "Imagem local", "local-cli", "sd-local", ""],
+             ["image.mock", "Simulado", "mock", "—", ""]], [120, 140, 130, 150, 40], sel=0)
+    s.button(246, 186, 70, "+")
+    s.button(322, 186, 90, "Duplicar")
+    s.button(418, 186, 90, "Remover", danger=True)
+    s.button(514, 186, 140, "Definir como padrão")
+    s.marker(884, 100, "2")
+    s.combo(246, 240, 300, "ADAPTADOR", "openai-compatible")
+    s.field(560, 240, 320, "MODELO", "img-model-x")
+    s.field(246, 288, 634, "URL BASE", "https://api.exemplo.com/v1")
+    s.field(246, 336, 500, "CHAVE DE API (cofre local; JSON guarda só secret_ref)", "••••••••••••••••••••")
+    s.button(754, 336, 126, "Mostrar")
+    s.field(246, 384, 140, "TIMEOUT (s)", "120")
+    s.field(396, 384, 140, "TENTATIVAS", "3")
+    s.field(546, 384, 160, "LIMITE / MIN", "30")
+    s.field(716, 384, 164, "CUSTO / IMAGEM", "0,04")
+    s.field(246, 432, 140, "LARGURA", "1024")
+    s.field(396, 432, 140, "ALTURA", "1024")
+    s.field(546, 432, 160, "PASSOS", "30")
+    s.field(716, 432, 164, "GUIDANCE", "7,0")
+    s.field(246, 480, 460, "NEGATIVO PADRÃO", "texto, marca d'água, deformação")
+    s.check(720, 498, "Aceita referências")
+    s.marker(884, 250, "3")
+    s.button(246, 524, 150, "Testar conexão", True)
+    s.text(406, 541, "✔ 1,8 s · imagem 64×64 recebida", 11, "bold", C["ok"])
+    s.marker(884, 536, "4")
+    s.rect(0, 590, 900, 50, fill="#F4F6F8", stroke=C["line"])
+    s.button(16, 602, 160, "Restaurar padrões")
+    s.button(660, 602, 104, "Cancelar")
+    s.button(772, 602, 112, "Salvar", True)
+    s.marker(884, 580, "6")
+    return s
+
+
 # =====================================================================
 # MSCRIPT
 # =====================================================================
@@ -472,13 +524,14 @@ def _():
     s.marker(x0 + 790, y0 + 370, "3")
     rx = W - RIGHT_W
     s.text(rx + 12, y0 + 22, "PARÂMETROS DA IA (TEXTO)", 11, "bold", C["muted"])
-    s.combo(rx + 12, y0 + 46, 276, "PROVEDOR / MODELO", "texto: padrão")
+    s.combo(rx + 12, y0 + 46, 276, "PROVEDOR (do MMenu)", "text.default · somente leitura")
     s.field(rx + 12, y0 + 92, 130, "Nº DE CENAS (aprox.)", "10")
     s.field(rx + 158, y0 + 92, 130, "CRIATIVIDADE", "0,7")
     s.check(rx + 14, y0 + 140, "Incluir diálogos")
     s.check(rx + 14, y0 + 162, "Sugerir objetos e figurinos")
-    s.text(rx + 12, y0 + 196, "PROMPT ADICIONAL", 10, "bold", C["muted"])
-    s.textarea(rx + 12, y0 + 202, 276, 100, ["Tom melancólico; final aberto."])
+    s.button(rx + 12, y0 + 190, 276, "Alterar no MMenu…", h=22)
+    s.text(rx + 12, y0 + 232, "PROMPT ADICIONAL (desta geração)", 10, "bold", C["muted"])
+    s.textarea(rx + 12, y0 + 238, 276, 100, ["Tom melancólico; final aberto."])
     s.marker(W - 16, y0 + 18, "4")
     s.button(x0 + 20, y1 - 40, 150, "Salvar rascunho")
     s.button(x0 + 620, y1 - 40, 150, "Gerar roteiro ▸", True)
@@ -658,13 +711,14 @@ def _():
     s.check(14, y0 + 114, "Figurinos (7)")
     s.check(14, y0 + 136, "Pular itens já aprovados")
     s.check(14, y0 + 158, "Pular itens já gerados", False)
-    s.combo(10, y0 + 196, 240, "PROVEDOR DE IMAGEM", "imagem: padrão")
+    s.combo(10, y0 + 196, 240, "PROVEDOR (do MMenu)", "image.default")
     s.field(10, y0 + 242, 115, "RESOLUÇÃO", "1024×1024")
     s.field(135, y0 + 242, 115, "SEMENTE BASE", "4211")
     s.combo(10, y0 + 288, 240, "ESTILO", "realista cinematográfico")
     s.button(10, y0 + 330, 116, "▶ Iniciar", True)
     s.button(134, y0 + 330, 116, "⏸ Pausar")
     s.button(10, y0 + 362, 240, "Retomar falhas")
+    s.button(10, y0 + 394, 240, "Alterar no MMenu…")
     s.marker(250, y0 + 20, "1")
     s.text(x0 + 20, y0 + 28, "Fila de geração", 16, "bold")
     s.table(x0 + 20, y0 + 40, ["Entidade", "Vista", "Estado", "Tent.", "Tempo"],
@@ -761,11 +815,12 @@ def _():
                    "Ativos: ch_…03, ch_…01, ob_pistola", "Segmentos: 2"], size=10.5)
     rx = W - RIGHT_W
     s.text(rx + 12, y0 + 22, "PARÂMETROS DE GERAÇÃO", 11, "bold", C["muted"])
-    s.combo(rx + 12, y0 + 46, 276, "PROVEDOR DE IMAGEM", "imagem: padrão")
+    s.combo(rx + 12, y0 + 46, 276, "PROVEDOR (do MMenu)", "image.default · somente leitura")
     s.combo(rx + 12, y0 + 92, 276, "PROPORÇÃO", "16:9 (1920×1080)")
     s.combo(rx + 12, y0 + 138, 276, "ESTILO", "storyboard colorido")
     s.check(rx + 14, y0 + 186, "Usar somente referências aprovadas")
     s.check(rx + 14, y0 + 208, "Gerar falhas apenas (retomar)", False)
+    s.button(rx + 12, y0 + 226, 276, "Alterar no MMenu…", h=22)
     s.marker(W - 16, y0 + 18, "3")
     return s
 
@@ -897,7 +952,7 @@ def _():
         bx += w + 6
     rx = W - RIGHT_W
     s.tabs(rx + 6, y0 + 6, ["Síntese", "Permissões", "Histórico"], 0)
-    s.table(rx + 8, y0 + 40, ["Campo", "Valor"], [["IA A (perfil)", "texto: padrão"], ["IA B (síntese)", "voz: padrão"],
+    s.table(rx + 8, y0 + 40, ["Campo", "Valor"], [["IA A (do MMenu)", "text.default"], ["IA B (do MMenu)", "voice.default"],
             ["semente", "88"], ["config", "sha256 1a9…"], ["origem", "sintética"], ["licença", "interna"]], [110, 174])
     s.text(rx + 12, y0 + 200, "CLONAGEM DE VOZ REAL", 10, "bold", C["muted"])
     s.check(rx + 14, y0 + 222, "Usa amostra de pessoa real", False)
@@ -976,8 +1031,9 @@ def _():
               "Bazuca · vistas (4)", "Cais · noite (3)"])
     s.text(rx + 12, y0 + 202, "ÁUDIO-GUIA E MARCAÇÕES", 10, "bold", C["muted"])
     s.listbox(rx + 8, y0 + 210, 284, 76, ["Voz Rui te_…05 00:00:12–00:00:15", "FX disparo te_…07", "Ambiente chuva"])
-    s.combo(rx + 12, y0 + 314, 276, "PROVEDOR DE VÍDEO", "vídeo: padrão")
+    s.combo(rx + 12, y0 + 314, 276, "PROVEDOR (do MMenu)", "video.default")
     s.check(rx + 14, y0 + 362, "Sincronia labial pelas falas")
+    s.button(rx + 12, y0 + 376, 276, "Alterar no MMenu…", h=22)
     s.marker(W - 16, y0 + 40, "4")
     return s
 
