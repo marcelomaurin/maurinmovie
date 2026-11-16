@@ -49,3 +49,8 @@ Cena 1 → PERSONAGEM_X, CASA_PROTAGONISTA, OBJETO_1; Cena 4 → PERSONAGEM_X, O
 - Sonoro: sound_project_id, revision_id, source_projects[1..3], voice_profiles[] (character_id, voice_id, timbre, synthesis_config, permissions), sound_assets[] (asset_id, entity_id, event_id, revision), timeline_events[] (scene_id, segment_id, start/end, asset_id), approvals[], previews[].
 - Vídeo por cena: video_project_id, revision_id, scene_id, source_projects[1..4], segments[] (segment_id, video_asset_id, status, duration, dependencies), assembled_scene_asset_id, adjacent_scene_links[] (neighbor_scene_id, direction, status, review), approvals[], revision_history[].
 - Todos guardam URI/caminho, project_id, revisão exata e hash das fontes; IDs estáveis suportam abertura cruzada e revisões em cascata. Ligações com cenas ainda inexistentes são pendentes, não aprovadas.
+
+
+## Projeto 6 — Filme final
+- film_project_id, revision_id, source_project_refs[1..5], timeline_items[] (scene_id, video_revision_id, in/out, transitions), screenings[], feedback[] (scene_id, revision_id, rating, comment), analyses[], correction_cycles[], exports[].
+- Avaliações e alterações devem referenciar a revisão exata e o fragmento exibido. O projeto mantém ligações para abrir projetos anteriores e retomar correções em cascata.
