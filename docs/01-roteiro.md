@@ -19,3 +19,9 @@ Produzir um projeto de filme a partir de uma sinopse com auxílio de IA, para cu
 
 ## Saídas
 Projeto de roteiro independente e versionado, exportável/importável, com sinopse, roteiro por cenas, personagens, figurinos descritos, metadados e revisão aprovada.
+
+## Integração com Software 3 — revisão em cascata
+- O Software 3 pode originar alteração editorial aprovada de falas, ações, descrição de cena, objeto, cenário e tempo. Essa aprovação é autorização para criar automaticamente **nova revisão imutável** do projeto de roteiro, sem abrir o Software 1.
+- O Software 1 aplica a mudança somente às cenas e entidades afetadas, conserva IDs persistentes quando a identidade permanece e registra evento de origem, revisão anterior, nova revisão e diferenças.
+- A revisão produzida torna-se a entrada do Software 2; não realimenta o mesmo evento ao Software 3. Alterações ambíguas ou incompatíveis ficam pendentes e são sinalizadas, sem marcar sincronização concluída.
+- Convenção de nome de arquivo: `<NomeBase>_Roteiro_R001`, `R002` etc.; o número é **independente por projeto** e não precisa coincidir com as revisões dos outros aplicativos.
