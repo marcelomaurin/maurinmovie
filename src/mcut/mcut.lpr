@@ -5,10 +5,8 @@ program mcut;
 uses
   Interfaces, Forms, umcutmain;
 
-{$R *.res}
-
 begin
-  RequireDerivedFormResource := True;
+  RequireDerivedFormResource := False;
   Application.Scaled := True;
   Application.Initialize;
   Application.CreateForm(TMcutMainForm, mcutMainForm);

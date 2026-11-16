@@ -15,7 +15,18 @@
     <BuildModes Count="1">
       <Item1 Name="Default" Default="True"/>
     </BuildModes>
-    <Units Count="2">
+    <RequiredPackages Count="3">
+      <Item1>
+        <PackageName Value="LCL"/>
+      </Item1>
+      <Item2>
+        <PackageName Value="openai_core"/>
+      </Item2>
+      <Item3>
+        <PackageName Value="openai_image"/>
+      </Item3>
+    </RequiredPackages>
+    <Units Count="5">
       <Unit0>
         <Filename Value="mvisual.lpr"/>
         <IsPartOfProject Value="True"/>
@@ -26,6 +37,18 @@
         <ComponentName Value="mvisualMainForm"/>
         <ResourceBaseClass Value="Form"/>
       </Unit1>
+      <Unit2>
+        <Filename Value="../common/ummpprotocol.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit2>
+      <Unit3>
+        <Filename Value="../common/ummpappbase.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit3>
+      <Unit4>
+        <Filename Value="../common/ummpaibridge.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit4>
     </Units>
   </ProjectOptions>
   <CompilerOptions>
@@ -42,6 +65,11 @@
       <Debugging>
         <GenerateDebugInfo Value="True"/>
       </Debugging>
+      <Options>
+        <Win32>
+          <GraphicApplication Value="True"/>
+        </Win32>
+      </Options>
     </Linking>
   </CompilerOptions>
 </CONFIG>

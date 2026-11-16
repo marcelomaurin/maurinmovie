@@ -5,10 +5,8 @@ program msound;
 uses
   Interfaces, Forms, umsoundmain;
 
-{$R *.res}
-
 begin
-  RequireDerivedFormResource := True;
+  RequireDerivedFormResource := False;
   Application.Scaled := True;
   Application.Initialize;
   Application.CreateForm(TMsoundMainForm, msoundMainForm);
