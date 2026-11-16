@@ -40,3 +40,10 @@ Construir catálogo visual consistente de personagens, cenários e objetos a par
 
 ## Fora do escopo confirmado
 Geração de vídeo final, animação 3D, modelagem 3D, montagem e áudio ainda não foram definidos como requisitos destes dois aplicativos.
+
+## Revisão automática originada no Software 3
+- Ao receber uma nova revisão do Software 1 gerada por uma edição aprovada no storyboard, executar a atualização **automaticamente**, sem abrir o Software 2 nem pedir uma segunda aprovação para disparar a cascata.
+- Reindexar ocorrências e relações impactadas; gerar novos ativos quando a descrição mudar (ex.: pistola substituída por bazuca), com vistas padronizadas e referências necessárias à cena. Atualizar poses/interações visuais dependentes do objeto, preservando identidade do personagem e cenário.
+- Reutilizar ativos aprovados não afetados; não sobrescrever arquivos ou revisões anteriores. Gerar nova revisão visual `<NomeBase>_Visual_RNNN` com manifesto dos ativos, origem, dependências, estado e erros.
+- Os novos ativos podem ter estado `gerado_por_cascata` e `pendente_de_revisao_visual`; a geração automática não equivale a aprovação humana de cada imagem. A sincronização técnica só é concluída após a geração e verificação de integridade, enquanto o estado editorial permanece rastreável.
+- Fornecer ao Software 3 a nova revisão e as referências visuais geradas para atualizar somente os quadros impactados.
