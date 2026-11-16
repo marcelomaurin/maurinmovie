@@ -1,0 +1,62 @@
+object mcutMainForm: TMcutMainForm
+  Left = 200
+  Height = 720
+  Top = 120
+  Width = 1100
+  Caption = 'MCut - MaurinMovie'
+  Constraints.MinHeight = 550
+  Constraints.MinWidth = 780
+  Position = poScreenCenter
+  object HeaderPanel: TPanel
+    Left = 0
+    Height = 76
+    Top = 0
+    Width = 1100
+    Align = alTop
+    BevelOuter = bvNone
+    Color = 3813416
+    ParentBackground = False
+    ParentColor = False
+    TabOrder = 0
+    object TitleLabel: TLabel
+      Left = 20
+      Height = 30
+      Top = 17
+      Width = 400
+      Caption = 'MaurinMovie  |  MCut'
+      Font.Color = clWhite
+      Font.Height = -27
+      Font.Style = [fsBold]
+      ParentColor = False
+      ParentFont = False
+    end
+  end
+  object StatusPanel: TPanel
+    Left = 0
+    Height = 40
+    Top = 680
+    Width = 1100
+    Align = alBottom
+    Alignment = taLeftJustify
+    BevelOuter = bvLowered
+    Caption = '  Pronto'
+    TabOrder = 2
+  end
+  object WorkspacePanel: TPanel
+    Left = 0
+    Height = 604
+    Top = 76
+    Width = 1100
+    Align = alClient
+    BevelOuter = bvNone
+    TabOrder = 1
+    object DescriptionLabel: TLabel
+      Left = 24
+      Height = 20
+      Top = 20
+      Width = 600
+      Caption = 'Software 6 - Montagem do filme, avaliacao de publico e exportacao'
+      ParentColor = False
+    end
+  end
+end
