@@ -37,3 +37,6 @@ Todos os sete aplicativos adotam **MultiCNC / MultiSuite como referência de lay
 O desenvolvimento dos sete aplicativos será em **Lazarus / Free Pascal (Object Pascal, LCL)**, seguindo o **layout do MultiCNC/MultiSuite** e reutilizando o repositório [CHATGPT](https://github.com/marcelomaurin/CHATGPT) como biblioteca de ferramentaria compartilhada, mediante verificação de APIs e compatibilidade.
 
 **[Escopo consolidado do projeto](10-escopo-consolidado.md)** — responsabilidades, regras transversais, arquitetura inicial proposta, entregas, critérios de aceite e pendências técnicas.
+
+## Protocolo de organização de projetos e mídias
+Cada produção terá pasta-raiz própria; cada aplicativo terá subpasta, projeto, revisões e manifestos, com artefatos de roteiro, imagem, áudio e vídeo indexados por IDs e hashes. MMenu coordena a abertura, o catálogo e as pendências, sem sobrescrever projetos de outros aplicativos. [Protocolo MMP v1 — pastas, manifestos, comunicação e gerenciamento](11-protocolo-projetos-artefatos.md).
