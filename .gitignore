@@ -1,0 +1,9 @@
+bin/
+build/
+*.res
+*.lps
+*.compiled
+*.o
+*.ppu
+backup/
+lib/

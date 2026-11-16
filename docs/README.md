@@ -40,3 +40,6 @@ O desenvolvimento dos sete aplicativos será em **Lazarus / Free Pascal (Object 
 
 ## Protocolo de organização de projetos e mídias
 Cada produção terá pasta-raiz própria; cada aplicativo terá subpasta, projeto, revisões e manifestos, com artefatos de roteiro, imagem, áudio e vídeo indexados por IDs e hashes. MMenu coordena a abertura, o catálogo e as pendências, sem sobrescrever projetos de outros aplicativos. [Protocolo MMP v1 — pastas, manifestos, comunicação e gerenciamento](11-protocolo-projetos-artefatos.md).
+
+## Especificações de implementação
+Especificação detalhada de cada programa (requisitos numerados, telas, fluxos, dados JSON, linha de comando, integração MMP e critérios de aceite), lacunas e decisões propostas: **[docs/specs](specs/README.md)**.

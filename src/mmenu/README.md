@@ -11,7 +11,7 @@ Código: `src/mmenu/mmenu.lpi`, `src/mmenu/mmenu.lpr`, `src/mmenu/ummenumain.pas
 - Mensagens para executável ausente ou falha de inicialização.
 
 ## Limitações e próximos passos
-- Código publicado, **não compilado nem testado** neste ambiente.
+- Compila com `lazbuild` (Lazarus 3.0, Linux) e abre a janela; o fluxo de uso ainda não foi testado.
 - O MMenu ainda não cria projetos de produção, não lê o catálogo MMP, não valida o conteúdo de `production.json`, não lista revisões e não acompanha jobs de sincronização.
 - Os demais aplicativos precisam implementar o parâmetro `--production`; até lá, recebem o argumento, mas não necessariamente carregam o projeto.
 - Não há integração operacional com a biblioteca CHATGPT nesta primeira versão.
