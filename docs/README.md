@@ -22,3 +22,11 @@ Arquivos: `<NomeBase>_Roteiro_RNNN`, `<NomeBase>_Visual_RNNN`, `<NomeBase>_Story
 - [Software 3 — Storyboard](05-storyboard.md)
 
 Status: escopo funcional inicial; decisões técnicas e formatos finais ainda sujeitos a validação.
+
+
+## Novos aplicativos
+4. **Identidade sonora**: duas IAs (criação de voz/efeitos e síntese/clonagem para testes); validação isolada, vínculo aos IDs e prévia sonora sincronizada; salvamento de projeto próprio.
+5. **Vídeo e montagem de cenas**: geração **uma cena por vez**, segmentada conforme storyboard; revisão e costura de sub-blocos; validação das ligações anterior/atual/próxima; salvamento versionado por cena.
+
+- [Software 4 — Identidade sonora](06-identidade-sonora.md)
+- [Software 5 — Geração e montagem de cenas](07-geracao-e-montagem-de-cenas.md)
