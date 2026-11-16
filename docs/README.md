@@ -30,3 +30,8 @@ Status: escopo funcional inicial; decisões técnicas e formatos finais ainda su
 
 - [Software 4 — Identidade sonora](06-identidade-sonora.md)
 - [Software 5 — Geração e montagem de cenas](07-geracao-e-montagem-de-cenas.md)
+
+
+6. **Montagem final e público**: organiza as cenas do Software 5 na ordem do roteiro; permite assistir e cortar; aplica transições; recolhe avaliações cena a cena; analisa e revisa com retorno aos aplicativos anteriores; salva projeto e renderiza o filme completo.
+
+- [Software 6 — Montagem final, avaliação do público e exportação](08-montagem-final.md)
