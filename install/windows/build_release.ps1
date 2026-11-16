@@ -1,11 +1,11 @@
 param(
   [string]$Version = $env:VERSION,
-  [ValidatePattern('^\d{3}$')][string]$SetupSeq = '001',
+  [ValidatePattern('^\d{3}$')][string]$SetupSeq = '002',
   [switch]$AllowDirty,
   [switch]$SkipBinUpdate
 )
 $ErrorActionPreference = 'Stop'
-if (-not $Version) { $Version = '0.1.0' }
+if (-not $Version) { $Version = '0.2.0' }
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 Set-Location -LiteralPath $root
 $dist = Join-Path $root 'dist'

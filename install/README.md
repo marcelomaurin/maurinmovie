@@ -10,7 +10,7 @@ Baseado na estrutura do instalador do **MultiCNC / MultiSuite** (`multicnc/insta
 
 ## Como gerar o instalador
 ```powershell
-install\windows\build_release.bat -Version 0.1.0 -SetupSeq 001 -AllowDirty
+install\windows\build_release.bat -Version 0.2.0 -SetupSeq 002 -AllowDirty
 ```
 
 O script:

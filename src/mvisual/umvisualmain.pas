@@ -149,7 +149,7 @@ begin
 
   BtnAiCfg := TButton.Create(Self);
   BtnAiCfg.Parent := Head;
-  BtnAiCfg.Caption := 'Configurar IA...';
+  BtnAiCfg.Caption := 'Alterar no MMenu...';
   BtnAiCfg.Anchors := [akTop, akRight];
   BtnAiCfg.SetBounds(1082, 17, 122, 34);
   BtnAiCfg.OnClick := @OnAiConfigClick;
@@ -354,6 +354,7 @@ begin
     Exit;
   end;
 
+  FAi.LoadForProduction(FProd.RootDir);
   FHeaderProdLabel.Caption := FProd.Title + '  (' + FProd.ProductionId + ')';
   FScriptRevCombo.Items.Clear;
   if FindProjectByApp(FProd, 1, FScriptProj) then

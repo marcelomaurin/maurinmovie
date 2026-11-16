@@ -6,7 +6,7 @@ interface
 
 uses
   Classes, SysUtils, Graphics, fpjson, jsonparser,
-  ummpsha256, ummpprotocol;
+  mmpcommon, ummpsha256, ummpprotocol;
 
 type
   TMmpArtifactInput = record
@@ -19,6 +19,7 @@ type
     Status: string;
   end;
 
+function HandleStandardCliEarlyExit(App: TMMApp): Boolean;
 procedure ParseAppLaunchParams(out ProductionRoot, ProjectId, RevisionId: string);
 
 function ResolveAppProject(const ProdRoot: string; AppIdx: Integer;
@@ -58,38 +59,34 @@ function SavePlaceholderBitmap(const FilePath, Title, Subtitle, Footer: string;
 
 implementation
 
+function HandleStandardCliEarlyExit(App: TMMApp): Boolean;
+var
+  Args: TMMLaunchArgs;
+begin
+  Result := False;
+  Args := ParseLaunchArgs;
+  if Args.ShowVersion then
+  begin
+    WriteCliLine(MMAppNames[App] + ' ' + MAURINMOVIE_VERSION);
+    Result := True;
+    Exit;
+  end;
+  if Args.ShowHelp then
+  begin
+    PrintCliHelp(MMAppNames[App]);
+    Result := True;
+    Exit;
+  end;
+end;
+
 procedure ParseAppLaunchParams(out ProductionRoot, ProjectId, RevisionId: string);
 var
-  I: Integer;
-  Arg: string;
+  Args: TMMLaunchArgs;
 begin
-  ProductionRoot := '';
-  ProjectId := '';
-  RevisionId := '';
-  I := 1;
-  while I <= ParamCount do
-  begin
-    Arg := ParamStr(I);
-    if SameText(Arg, '--production') and (I < ParamCount) then
-    begin
-      ProductionRoot := ParamStr(I + 1);
-      Inc(I, 2);
-      Continue;
-    end
-    else if SameText(Arg, '--project-id') and (I < ParamCount) then
-    begin
-      ProjectId := ParamStr(I + 1);
-      Inc(I, 2);
-      Continue;
-    end
-    else if SameText(Arg, '--revision') and (I < ParamCount) then
-    begin
-      RevisionId := ParamStr(I + 1);
-      Inc(I, 2);
-      Continue;
-    end;
-    Inc(I);
-  end;
+  Args := ParseLaunchArgs;
+  ProductionRoot := Args.Production;
+  ProjectId := Args.ProjectId;
+  RevisionId := Args.Revision;
 end;
 
 function FindProjectByApp(const Prod: TMmpProduction; AppIdx: Integer;
@@ -266,11 +263,12 @@ function PublishProjectRevision(
   const PreparedRevId: string = ''): Boolean;
 var
   ProjectDir, RevDir, Content, NowIso, FullArtPath, ProjId: string;
-  ProjObj, ManifestObj, SrcObj, ArtObj: TJSONObject;
+  ProjObj, ManifestObj, SrcObj, ArtObj, LabelsObj: TJSONObject;
   HistArr, SrcArr, ArtArr: TJSONArray;
   Hist: array of string;
-  I: Integer;
+  I, AppIdx: Integer;
   Data: TJSONData;
+  NameBaseStr, SceneIdStr: string;
 begin
   Result := False;
   NewRevId := '';
@@ -404,6 +402,20 @@ begin
     else
       ProjObj.Add('updated_at', NowIso);
 
+    NameBaseStr := ProjObj.Get('name_base', 'Producao');
+    SceneIdStr := ProjObj.Get('scene_id', '');
+    AppIdx := AppNameToIndex(AppName);
+    if AppIdx < 0 then AppIdx := 0;
+    if ProjObj.Find('revision_labels') is TJSONObject then
+      LabelsObj := TJSONObject(ProjObj.Find('revision_labels'))
+    else
+    begin
+      LabelsObj := TJSONObject.Create;
+      ProjObj.Add('revision_labels', LabelsObj);
+    end;
+    if LabelsObj.IndexOfName(NewRevId) < 0 then
+      LabelsObj.Add(NewRevId, FormatRevisionLabel(NameBaseStr, AppIndexToEnum(AppIdx), NewRevId, SceneIdStr));
+
     Result := AtomicWriteTextFile(ProjectJsonPath, ProjObj.FormatJSON, True);
     if not Result then
       ErrMsg := 'Falha ao atualizar project.json.';
@@ -417,32 +429,92 @@ function EmitSyncEvent(
   SourceRevision, RequestedChange, Stage, Status, ErrText: string;
   out EventId: string): Boolean;
 var
-  SyncDir, FilePath: string;
-  Obj: TJSONObject;
+  InboxDir, TxDir, EvtPath, TxPath, TxId, NowIso: string;
+  Obj, ReqObj, TxObj, OrigObj, StageObj: TJSONObject;
+  StagesArr, ErrArr: TJSONArray;
+  AppIdx: Integer;
 begin
   Result := False;
+  NowIso := CurrentIsoUtc;
   EventId := GenerateMmpId('evt');
-  SyncDir := IncludeTrailingPathDelimiter(ProdRoot) + 'shared' + PathDelim + 'sync';
-  ForceDirectories(SyncDir);
-  FilePath := SyncDir + PathDelim + EventId + '.json';
+  TxId := GenerateMmpId('tx');
+
+  InboxDir := IncludeTrailingPathDelimiter(ProdRoot) + 'shared' + PathDelim +
+    'events' + PathDelim + 'inbox' + PathDelim + TargetApp;
+  ForceDirectories(InboxDir);
+  EvtPath := InboxDir + PathDelim + EventId + '.json';
 
   Obj := TJSONObject.Create;
   try
-    Obj.Add('schema', 'mmp.sync_event/1');
+    Obj.Add('schema', MMP_SCHEMA_EVENT);
     Obj.Add('event_id', EventId);
+    Obj.Add('transaction_id', TxId);
+    Obj.Add('root_event_id', EventId);
     Obj.Add('origin_app', OriginApp);
     Obj.Add('target_app', TargetApp);
     Obj.Add('project_id', TargetProjectId);
     Obj.Add('source_revision', SourceRevision);
-    Obj.Add('requested_change', RequestedChange);
+    ReqObj := TJSONObject.Create;
+    ReqObj.Add('type', 'editorial_patch');
+    ReqObj.Add('summary', RequestedChange);
+    Obj.Add('requested_change', ReqObj);
     Obj.Add('stage', Stage);
+    Obj.Add('idempotency_key', EventId + ':' + TargetApp);
     Obj.Add('status', Status);
     Obj.Add('error', ErrText);
-    Obj.Add('created_at', CurrentIsoUtc);
-    Result := AtomicWriteTextFile(FilePath, Obj.FormatJSON, False);
+    Obj.Add('created_at', NowIso);
+    Result := AtomicWriteTextFile(EvtPath, Obj.FormatJSON, False);
   finally
     Obj.Free;
   end;
+
+  if not Result then Exit;
+
+  TxDir := IncludeTrailingPathDelimiter(ProdRoot) + 'shared' + PathDelim + 'transactions';
+  ForceDirectories(TxDir);
+  TxPath := TxDir + PathDelim + TxId + '.json';
+  TxObj := TJSONObject.Create;
+  try
+    TxObj.Add('schema', MMP_SCHEMA_TX);
+    TxObj.Add('transaction_id', TxId);
+    TxObj.Add('root_event_id', EventId);
+    OrigObj := TJSONObject.Create;
+    OrigObj.Add('application', OriginApp);
+    OrigObj.Add('project_id', TargetProjectId);
+    OrigObj.Add('revision_id', SourceRevision);
+    TxObj.Add('origin', OrigObj);
+
+    StagesArr := TJSONArray.Create;
+    StageObj := TJSONObject.Create;
+    StageObj.Add('order', 1);
+    StageObj.Add('application', TargetApp);
+    StageObj.Add('event_id', EventId);
+    if SameText(Status, 'failed') then
+      StageObj.Add('status', 'failed')
+    else
+      StageObj.Add('status', 'pending');
+    StagesArr.Add(StageObj);
+    TxObj.Add('stages', StagesArr);
+
+    if SameText(Status, 'failed') then
+      TxObj.Add('status', 'failed')
+    else
+      TxObj.Add('status', 'in_progress');
+
+    ErrArr := TJSONArray.Create;
+    if ErrText <> '' then ErrArr.Add(ErrText);
+    TxObj.Add('errors', ErrArr);
+    TxObj.Add('created_at', NowIso);
+    TxObj.Add('updated_at', NowIso);
+    AtomicWriteTextFile(TxPath, TxObj.FormatJSON, False);
+  finally
+    TxObj.Free;
+  end;
+
+  AppIdx := AppNameToIndex(OriginApp);
+  if AppIdx >= 0 then
+    AppendJsonLogLine(ProdRoot, OriginApp, 'info',
+      'Evento ' + EventId + ' / Transacao ' + TxId + ' emitida para ' + TargetApp);
 end;
 
 function StripMarkdownJsonFence(const Raw: string): string;

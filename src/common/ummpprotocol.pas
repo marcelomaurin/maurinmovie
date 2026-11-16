@@ -5,14 +5,15 @@ unit ummpprotocol;
 interface
 
 uses
-  Classes, SysUtils, DateUtils, fpjson, jsonparser, ummpsha256;
+  Classes, SysUtils, DateUtils, fpjson, jsonparser,
+  mmpcommon, mmpsettings, ummpsha256;
 
 const
-  MMP_EXECUTABLE_VERSION = '1.0.0';
-  MMP_PRODUCTION_SCHEMA = 'mmp.production/1';
-  MMP_PROJECT_SCHEMA = 'mmp.project/1';
-  MMP_MANIFEST_SCHEMA = 'mmp.manifest/1';
-  MMP_CATALOG_SCHEMA = 'mmp.catalog/1';
+  MMP_EXECUTABLE_VERSION = MAURINMOVIE_VERSION;
+  MMP_PRODUCTION_SCHEMA = MMP_SCHEMA_PRODUCTION;
+  MMP_PROJECT_SCHEMA = MMP_SCHEMA_PROJECT;
+  MMP_MANIFEST_SCHEMA = MMP_SCHEMA_MANIFEST;
+  MMP_CATALOG_SCHEMA = MMP_SCHEMA_CATALOG;
 
   MMP_APP_COUNT = 7; // 0..6
 
@@ -94,6 +95,7 @@ type
 
   TMmpSyncJob = record
     EventId: string;
+    TransactionId: string;
     ProductionId: string;
     OriginApp: string;
     TargetApp: string;
@@ -101,7 +103,7 @@ type
     SourceRevision: string;
     RequestedChange: string;
     Stage: string;
-    Status: string; // queued, running, awaiting_review, approved, published, failed, cancelled
+    Status: string; // queued, running, awaiting_review, approved, published, complete, in_progress, failed, cancelled
     ErrorText: string;
     CreatedAt: string;
     SourceFile: string;
@@ -158,6 +160,17 @@ function RebuildCatalog(const Prod: TMmpProduction; out ErrorMsg: string): Boole
 
 function SaveRelinkOverride(const RootDir, Key, TargetProjectJsonPath: string;
   out ErrorMsg: string): Boolean;
+
+function SaveArtifactRelinkToCatalog(const RootDir, ArtifactId, OldUri,
+  NewFilePath, ExpectedSha256: string; out ErrorMsg: string): Boolean;
+
+function CancelSyncTransaction(const JobFilePath: string; out ErrorMsg: string): Boolean;
+
+function IsProjectLocked(const ProjectDir: string; out LockInfo: string): Boolean;
+function AcquireProjectLock(const ProjectDir, AppName, Mode: string; out ErrorMsg: string): Boolean;
+procedure ReleaseProjectLock(const ProjectDir: string);
+
+procedure AppendJsonLogLine(const ProdRoot, AppName, Level, Msg: string);
 
 function FindProductionByIdInDir(const SearchDir, ExpectedProductionId: string;
   out FoundRootDir: string): Boolean;
@@ -402,8 +415,8 @@ var
   ProjectIds: array[0..6] of string;
   I: Integer;
   ProdJson, ActiveObj, AppEntry, ProjJson, ManifestJson, CatalogJson: TJSONObject;
-  SettingsProd, AiProviders, RevHist, EmptyArr: TJSONArray;
-  ProvidersObj, SettingsObj: TJSONObject;
+  SettingsProd, RevHist, EmptyArr: TJSONArray;
+  SettingsObj: TJSONObject;
 begin
   Result := False;
   CreatedRoot := '';
@@ -441,7 +454,7 @@ begin
     Exit;
   end;
 
-  // Subdirectories per MMP v1
+  // Subdirectories per MMP v1 + specs 00-comum §5
   ForceDirectories(FolderPath + PathDelim + 'settings');
   ForceDirectories(FolderPath + PathDelim + 'projects');
   ForceDirectories(FolderPath + PathDelim + 'shared' + PathDelim + 'imports');
@@ -449,46 +462,20 @@ begin
   ForceDirectories(FolderPath + PathDelim + 'shared' + PathDelim + 'temp');
   ForceDirectories(FolderPath + PathDelim + 'shared' + PathDelim + 'logs');
   ForceDirectories(FolderPath + PathDelim + 'shared' + PathDelim + 'sync');
+  ForceDirectories(FolderPath + PathDelim + 'shared' + PathDelim + 'events' + PathDelim + 'archive');
+  for I := 0 to 6 do
+    ForceDirectories(FolderPath + PathDelim + 'shared' + PathDelim + 'events' +
+      PathDelim + 'inbox' + PathDelim + MmpAppNames[I]);
+  ForceDirectories(FolderPath + PathDelim + 'shared' + PathDelim + 'transactions');
+  ForceDirectories(FolderPath + PathDelim + 'shared' + PathDelim + 'blobs' + PathDelim + 'sha256');
   ForceDirectories(FolderPath + PathDelim + 'backups');
 
   for I := 0 to 6 do
     ProjectIds[I] := GenerateMmpId('pr_' + LowerCase(MmpAppNames[I]));
 
-  // settings/production.json
-  SettingsObj := TJSONObject.Create;
-  try
-    SettingsObj.Add('schema', 'mmp.settings.production/1');
-    SettingsObj.Add('production_id', ProdId);
-    SettingsObj.Add('title', Trim(Title));
-    SettingsObj.Add('created_at', NowIso);
-    if not AtomicWriteTextFile(
-      FolderPath + PathDelim + 'settings' + PathDelim + 'production.json',
-      SettingsObj.FormatJSON, False) then
-    begin
-      ErrorMsg := 'Falha ao gravar settings/production.json.';
-      Exit;
-    end;
-  finally
-    SettingsObj.Free;
-  end;
-
-  // settings/ai-providers.json (without secrets)
-  ProvidersObj := TJSONObject.Create;
-  try
-    ProvidersObj.Add('schema', 'mmp.settings.ai_providers/1');
-    AiProviders := TJSONArray.Create;
-    ProvidersObj.Add('providers', AiProviders);
-    ProvidersObj.Add('note', 'Nao armazene segredos ou chaves de API neste arquivo.');
-    if not AtomicWriteTextFile(
-      FolderPath + PathDelim + 'settings' + PathDelim + 'ai-providers.json',
-      ProvidersObj.FormatJSON, False) then
-    begin
-      ErrorMsg := 'Falha ao gravar settings/ai-providers.json.';
-      Exit;
-    end;
-  finally
-    ProvidersObj.Free;
-  end;
+  // Centralized production settings (defaults with mock providers)
+  if not TMMSettings.WriteDefaultProductionSettings(FolderPath, Trim(Title), Trim(Title), 'pt-BR', ErrorMsg) then
+    Exit;
 
   // projects/00..06
   for I := 0 to 6 do
@@ -496,6 +483,7 @@ begin
     AppDir := FolderPath + PathDelim + 'projects' + PathDelim + MmpAppFolders[I];
     RevDir := AppDir + PathDelim + 'revisions' + PathDelim + 'r0001';
     ForceDirectories(RevDir);
+    ForceDirectories(AppDir + PathDelim + 'work');
 
     if I = 1 then ForceDirectories(RevDir + PathDelim + 'scripts');
     if I = 2 then
@@ -532,6 +520,7 @@ begin
       ProjJson.Add('production_id', ProdId);
       ProjJson.Add('project_id', ProjectIds[I]);
       ProjJson.Add('application', MmpAppNames[I]);
+      ProjJson.Add('name_base', Trim(Title));
       ProjJson.Add('active_revision', 'r0001');
       ProjJson.Add('status', 'initialized');
       ProjJson.Add('created_at', NowIso);
@@ -539,6 +528,9 @@ begin
       RevHist := TJSONArray.Create;
       RevHist.Add('r0001');
       ProjJson.Add('revision_history', RevHist);
+      SettingsObj := TJSONObject.Create;
+      SettingsObj.Add('r0001', FormatRevisionLabel(Trim(Title), AppIndexToEnum(I), 'r0001'));
+      ProjJson.Add('revision_labels', SettingsObj);
       ProjJson.Add('settings', TJSONObject.Create);
       if not AtomicWriteTextFile(AppDir + PathDelim + 'project.json',
         ProjJson.FormatJSON, False) then
@@ -992,25 +984,69 @@ end;
 procedure AddSyncJobFromObj(var Prod: TMmpProduction; Obj: TJSONObject;
   const SourceFile: string);
 var
-  N: Integer;
+  N, J: Integer;
   Job: TMmpSyncJob;
-  AffArr: TJSONArray;
+  AffArr, StagesArr: TJSONArray;
+  ReqData: TJSONData;
+  StageObj, OrigObj: TJSONObject;
 begin
   FillChar(Job, SizeOf(Job), 0);
   Job.EventId := Obj.Get('event_id', '');
+  Job.TransactionId := Obj.Get('transaction_id', '');
+  if Job.EventId = '' then Job.EventId := Job.TransactionId;
   Job.ProductionId := Obj.Get('production_id', '');
   Job.OriginApp := Obj.Get('origin_app', '');
   Job.TargetApp := Obj.Get('target_app', '');
   Job.ProjectId := Obj.Get('project_id', '');
   Job.SourceRevision := Obj.Get('source_revision', '');
-  Job.RequestedChange := Obj.Get('requested_change', '');
+
+  ReqData := Obj.Find('requested_change');
+  if ReqData is TJSONObject then
+    Job.RequestedChange := TJSONObject(ReqData).Get('type', 'patch')
+  else if ReqData <> nil then
+    Job.RequestedChange := ReqData.AsString;
+
   Job.Stage := Obj.Get('stage', '');
-  if Job.Stage = '' then
-    Job.Stage := Job.TargetApp;
   Job.Status := Obj.Get('status', 'queued');
   Job.ErrorText := Obj.Get('error', '');
   Job.CreatedAt := Obj.Get('created_at', '');
   Job.SourceFile := SourceFile;
+
+  // Handle mmp.transaction/1 structure
+  if Obj.Find('origin') is TJSONObject then
+  begin
+    OrigObj := TJSONObject(Obj.Find('origin'));
+    if Job.OriginApp = '' then Job.OriginApp := OrigObj.Get('application', '');
+    if Job.ProjectId = '' then Job.ProjectId := OrigObj.Get('project_id', '');
+    if Job.SourceRevision = '' then Job.SourceRevision := OrigObj.Get('revision_id', '');
+  end;
+  if Obj.Find('stages') is TJSONArray then
+  begin
+    StagesArr := TJSONArray(Obj.Find('stages'));
+    for J := 0 to StagesArr.Count - 1 do
+    begin
+      if StagesArr.Items[J] is TJSONObject then
+      begin
+        StageObj := TJSONObject(StagesArr.Items[J]);
+        if SameText(StageObj.Get('status', ''), 'failed') or
+           SameText(StageObj.Get('status', ''), 'in_progress') or
+           SameText(StageObj.Get('status', ''), 'pending') then
+        begin
+          Job.Stage := StageObj.Get('application', '');
+          if Job.TargetApp = '' then Job.TargetApp := Job.Stage;
+          Break;
+        end;
+      end;
+    end;
+  end;
+  if (Job.ErrorText = '') and (Obj.Find('errors') is TJSONArray) then
+  begin
+    AffArr := TJSONArray(Obj.Find('errors'));
+    if AffArr.Count > 0 then Job.ErrorText := AffArr.Items[0].AsString;
+  end;
+
+  if Job.Stage = '' then
+    Job.Stage := Job.TargetApp;
 
   if (Job.TargetApp = '') and (Obj.Find('affected_projects') is TJSONArray) then
   begin
@@ -1047,36 +1083,48 @@ begin
         if Arr.Items[I] is TJSONObject then
           AddSyncJobFromObj(Prod, TJSONObject(Arr.Items[I]), FilePath);
     end
-    else if Obj.Get('event_id', '') <> '' then
+    else if (Obj.Get('event_id', '') <> '') or (Obj.Get('transaction_id', '') <> '') then
       AddSyncJobFromObj(Prod, Obj, FilePath);
   finally
     Obj.Free;
   end;
 end;
 
+procedure ScanJsonFilesInDir(var Prod: TMmpProduction; const DirPath: string);
+var
+  SR: TSearchRec;
+begin
+  if not DirectoryExists(DirPath) then Exit;
+  if FindFirst(IncludeTrailingPathDelimiter(DirPath) + '*.json', faAnyFile, SR) = 0 then
+  begin
+    try
+      repeat
+        if (SR.Attr and faDirectory) = 0 then
+          LoadSyncJobsFromFile(Prod, IncludeTrailingPathDelimiter(DirPath) + SR.Name);
+      until FindNext(SR) <> 0;
+    finally
+      FindClose(SR);
+    end;
+  end;
+end;
+
 procedure ScanSyncJobs(var Prod: TMmpProduction);
 var
-  SyncDir: string;
-  SR: TSearchRec;
+  I: Integer;
 begin
   LoadSyncJobsFromFile(Prod, Prod.RootDir + PathDelim + 'projects' + PathDelim +
     MmpAppFolders[0] + PathDelim + 'sync_jobs.json');
 
-  SyncDir := Prod.RootDir + PathDelim + 'shared' + PathDelim + 'sync';
-  if DirectoryExists(SyncDir) then
-  begin
-    if FindFirst(SyncDir + PathDelim + '*.json', faAnyFile, SR) = 0 then
-    begin
-      try
-        repeat
-          if (SR.Attr and faDirectory) = 0 then
-            LoadSyncJobsFromFile(Prod, SyncDir + PathDelim + SR.Name);
-        until FindNext(SR) <> 0;
-      finally
-        FindClose(SR);
-      end;
-    end;
-  end;
+  // Legacy shared/sync/
+  ScanJsonFilesInDir(Prod, Prod.RootDir + PathDelim + 'shared' + PathDelim + 'sync');
+
+  // Specs 00-comum §5 & §7: shared/transactions and shared/events/inbox/<App> + archive
+  ScanJsonFilesInDir(Prod, Prod.RootDir + PathDelim + 'shared' + PathDelim + 'transactions');
+  for I := 0 to 6 do
+    ScanJsonFilesInDir(Prod, Prod.RootDir + PathDelim + 'shared' + PathDelim + 'events' +
+      PathDelim + 'inbox' + PathDelim + MmpAppNames[I]);
+  ScanJsonFilesInDir(Prod, Prod.RootDir + PathDelim + 'shared' + PathDelim + 'events' +
+    PathDelim + 'archive');
 end;
 
 procedure AuditSourcesAndArtifacts(var Prod: TMmpProduction; CheckHashes: Boolean);
@@ -1443,6 +1491,7 @@ begin
       Prod.HasFailures := True
     else if not SameText(Prod.SyncJobs[I].Status, 'published') and
             not SameText(Prod.SyncJobs[I].Status, 'approved') and
+            not SameText(Prod.SyncJobs[I].Status, 'complete') and
             not SameText(Prod.SyncJobs[I].Status, 'cancelled') then
       Prod.HasPendingWork := True;
   end;
@@ -1606,6 +1655,194 @@ begin
   begin
     Args.Add('--revision');
     Args.Add(RevisionId);
+  end;
+end;
+
+function SaveArtifactRelinkToCatalog(const RootDir, ArtifactId, OldUri,
+  NewFilePath, ExpectedSha256: string; out ErrorMsg: string): Boolean;
+var
+  CatPath, ActualSha, RelUri: string;
+  CatObj, EntryObj: TJSONObject;
+  RelinksArr: TJSONArray;
+begin
+  Result := False;
+  ErrorMsg := '';
+  if not FileExists(NewFilePath) then
+  begin
+    ErrorMsg := 'Arquivo selecionado nao existe.';
+    Exit;
+  end;
+
+  ActualSha := SHA256File(NewFilePath);
+  if (ExpectedSha256 <> '') and not SameText(ActualSha, ExpectedSha256) then
+  begin
+    ErrorMsg := 'Arquivo diferente do registrado (hash SHA-256 divergente). Revinculacao recusada.';
+    Exit;
+  end;
+
+  CatPath := IncludeTrailingPathDelimiter(RootDir) + 'catalog.json';
+  if not ParseJsonFile(CatPath, CatObj) then
+  begin
+    CatObj := TJSONObject.Create;
+    CatObj.Add('schema', MMP_CATALOG_SCHEMA);
+    CatObj.Add('projects', TJSONArray.Create);
+    CatObj.Add('artifacts', TJSONArray.Create);
+  end;
+  try
+    if CatObj.Find('relinks') is TJSONArray then
+      RelinksArr := TJSONArray(CatObj.Find('relinks'))
+    else
+    begin
+      RelinksArr := TJSONArray.Create;
+      CatObj.Add('relinks', RelinksArr);
+    end;
+
+    RelUri := NormalizeRelPath(ExtractRelativepath(IncludeTrailingPathDelimiter(RootDir), NewFilePath));
+    if not IsSafeRelativePath(RelUri) then RelUri := NewFilePath;
+
+    EntryObj := TJSONObject.Create;
+    EntryObj.Add('artifact_id', ArtifactId);
+    EntryObj.Add('old_uri', OldUri);
+    EntryObj.Add('new_uri', RelUri);
+    EntryObj.Add('sha256_verified', ExpectedSha256 <> '');
+    EntryObj.Add('at', CurrentIsoUtc);
+    RelinksArr.Add(EntryObj);
+
+    Result := AtomicWriteTextFile(CatPath, CatObj.FormatJSON, True);
+    if not Result then
+      ErrorMsg := 'Falha ao gravar catalog.json.';
+  finally
+    CatObj.Free;
+  end;
+end;
+
+function CancelSyncTransaction(const JobFilePath: string; out ErrorMsg: string): Boolean;
+var
+  Obj: TJSONObject;
+begin
+  Result := False;
+  ErrorMsg := '';
+  if not ParseJsonFile(JobFilePath, Obj) then
+  begin
+    ErrorMsg := 'Nao foi possivel abrir arquivo da transacao/evento.';
+    Exit;
+  end;
+  try
+    if Obj.IndexOfName('status') >= 0 then
+      Obj.Strings['status'] := 'cancelled'
+    else
+      Obj.Add('status', 'cancelled');
+    if Obj.IndexOfName('updated_at') >= 0 then
+      Obj.Strings['updated_at'] := CurrentIsoUtc
+    else
+      Obj.Add('updated_at', CurrentIsoUtc);
+    Result := AtomicWriteTextFile(JobFilePath, Obj.FormatJSON, True);
+    if not Result then
+      ErrorMsg := 'Falha ao atualizar status da transacao.';
+  finally
+    Obj.Free;
+  end;
+end;
+
+function IsProjectLocked(const ProjectDir: string; out LockInfo: string): Boolean;
+var
+  LockPath: string;
+  Obj: TJSONObject;
+begin
+  Result := False;
+  LockInfo := '';
+  LockPath := IncludeTrailingPathDelimiter(ProjectDir) + '.lock';
+  if not FileExists(LockPath) then Exit;
+  Result := True;
+  if ParseJsonFile(LockPath, Obj) then
+  begin
+    try
+      LockInfo := Format('%s (PID %s, %s)',
+        [Obj.Get('application', ''), Obj.Get('pid', '?'), Obj.Get('started_at', '')]);
+    finally
+      Obj.Free;
+    end;
+  end
+  else
+    LockInfo := LockPath;
+end;
+
+function AcquireProjectLock(const ProjectDir, AppName, Mode: string;
+  out ErrorMsg: string): Boolean;
+var
+  LockPath: string;
+  Obj: TJSONObject;
+begin
+  Result := False;
+  ErrorMsg := '';
+  LockPath := IncludeTrailingPathDelimiter(ProjectDir) + '.lock';
+  if FileExists(LockPath) then
+  begin
+    ErrorMsg := 'Projeto ja possui lock ativo: ' + LockPath;
+    Exit;
+  end;
+  Obj := TJSONObject.Create;
+  try
+    Obj.Add('pid', IntToStr(GetProcessID));
+    Obj.Add('host', GetEnvironmentVariable('COMPUTERNAME'));
+    Obj.Add('application', AppName);
+    Obj.Add('mode', Mode);
+    Obj.Add('started_at', CurrentIsoUtc);
+    Result := AtomicWriteTextFile(LockPath, Obj.FormatJSON, False);
+    if not Result then
+      ErrorMsg := 'Nao foi possivel criar .lock do projeto.';
+  finally
+    Obj.Free;
+  end;
+end;
+
+procedure ReleaseProjectLock(const ProjectDir: string);
+var
+  LockPath: string;
+begin
+  LockPath := IncludeTrailingPathDelimiter(ProjectDir) + '.lock';
+  if FileExists(LockPath) then
+    DeleteFile(LockPath);
+end;
+
+procedure AppendJsonLogLine(const ProdRoot, AppName, Level, Msg: string);
+var
+  LogDir, LogFile, Line: string;
+  Obj: TJSONObject;
+  FS: TFileStream;
+begin
+  if (ProdRoot = '') or not DirectoryExists(ProdRoot) then Exit;
+  LogDir := IncludeTrailingPathDelimiter(ProdRoot) + 'shared' + PathDelim +
+    'logs' + PathDelim + LowerCase(AppName);
+  ForceDirectories(LogDir);
+  LogFile := LogDir + PathDelim + FormatDateTime('yyyy-mm-dd', Now) + '.jsonl';
+
+  Obj := TJSONObject.Create;
+  try
+    Obj.Add('ts', CurrentIsoUtc);
+    Obj.Add('level', Level);
+    Obj.Add('app', AppName);
+    Obj.Add('pid', IntToStr(GetProcessID));
+    Obj.Add('msg', Msg);
+    Line := Obj.AsJSON + LineEnding;
+  finally
+    Obj.Free;
+  end;
+
+  try
+    if FileExists(LogFile) then
+      FS := TFileStream.Create(LogFile, fmOpenReadWrite or fmShareDenyNone)
+    else
+      FS := TFileStream.Create(LogFile, fmCreate);
+    try
+      FS.Seek(0, soFromEnd);
+      if Length(Line) > 0 then
+        FS.WriteBuffer(Line[1], Length(Line));
+    finally
+      FS.Free;
+    end;
+  except
+    // Logging must never crash caller
   end;
 end;
 

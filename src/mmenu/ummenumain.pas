@@ -5,9 +5,9 @@ unit ummenumain;
 interface
 
 uses
-  Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls,
+  Classes, SysUtils, StrUtils, Forms, Controls, Graphics, Dialogs, StdCtrls,
   ExtCtrls, ComCtrls, Grids, Process, IniFiles,
-  ummpprotocol, ummenusettings;
+  mmpcommon, mmpsettings, ummpprotocol, ummenusettings;
 
 type
   TRecentProduction = record
@@ -23,6 +23,8 @@ type
     FAppPaths: array[1..6] of string;
     FRecents: array of TRecentProduction;
     FProd: TMmpProduction;
+    FSettings: TMMSettings;
+    FMonitorTimer: TTimer;
     FSelectedProjectIndex: Integer;
 
     // Header
@@ -62,6 +64,7 @@ type
     FSyncSummaryLabel: TLabel;
     FSyncJobsGrid: TStringGrid;
     FBtnGoToFailedApp: TButton;
+    FBtnCancelTx: TButton;
     FMissingGrid: TStringGrid;
     FBtnRelinkMissing: TButton;
     FBtnAuditHashes: TButton;
@@ -129,8 +132,11 @@ type
     procedure OnRelinkSelectedProjectClick(Sender: TObject);
 
     procedure OnGoToResponsibleAppClick(Sender: TObject);
+    procedure OnCancelSyncClick(Sender: TObject);
     procedure OnAuditWithHashesClick(Sender: TObject);
     procedure OnRelinkMissingClick(Sender: TObject);
+    procedure OnMonitorTimer(Sender: TObject);
+    procedure OpenSettingsTab(const TabName: string);
 
     procedure OnArtifactsFilterChange(Sender: TObject);
     procedure OnRebuildCatalogClick(Sender: TObject);
@@ -149,8 +155,7 @@ implementation
 
 constructor TMmenuMainForm.Create(TheOwner: TComponent);
 var
-  I: Integer;
-  InitialProd: string;
+  Args: TMMLaunchArgs;
 begin
   inherited CreateNew(TheOwner, 1);
   Randomize;
@@ -162,9 +167,9 @@ begin
   Constraints.MinHeight := 640;
 
   FSelectedProjectIndex := -1;
-  FConfigPath := GetAppConfigDir(False) + 'MaurinMovie' + PathDelim + 'mmenu.ini';
-  FDefaultProductionsDir := ExpandFileName(
-    ExtractFileDir(ParamStr(0)) + PathDelim + '..' + PathDelim + 'productions');
+  FSettings := TMMSettings.Create;
+  FConfigPath := FSettings.MachineIniPath;
+  FDefaultProductionsDir := FSettings.ProductionsDir;
 
   BuildHeader(Self);
   BuildFooter(Self);
@@ -174,29 +179,28 @@ begin
   LoadConfig;
   RefreshRecentsList;
 
-  // Support --production <path> CLI parameter for MMenu itself
-  InitialProd := '';
-  for I := 1 to ParamCount - 1 do
-  begin
-    if SameText(ParamStr(I), '--production') then
-    begin
-      InitialProd := ParamStr(I + 1);
-      Break;
-    end;
-  end;
-
+  Args := ParseLaunchArgs;
   LogMsg('MMenu v' + MMP_EXECUTABLE_VERSION + ' iniciado (protocolo MMP v1).');
-  if InitialProd <> '' then
-    OpenProductionPath(InitialProd, False)
+  if Args.Production <> '' then
+    OpenProductionPath(Args.Production, False)
   else if FProd.RootDir <> '' then
     OpenProductionPath(FProd.RootDir, False)
   else
     RefreshAllViews;
+
+  FMonitorTimer := TTimer.Create(Self);
+  FMonitorTimer.Interval := 5000;
+  FMonitorTimer.OnTimer := @OnMonitorTimer;
+  FMonitorTimer.Enabled := True;
+
+  if Args.OpenSettings then
+    OpenSettingsTab(Args.SettingsTab);
 end;
 
 destructor TMmenuMainForm.Destroy;
 begin
   SaveConfig;
+  FSettings.Free;
   inherited Destroy;
 end;
 
@@ -601,15 +605,22 @@ begin
   FSyncSummaryLabel := TLabel.Create(Self);
   FSyncSummaryLabel.Parent := TopBar;
   FSyncSummaryLabel.Font.Style := [fsBold];
-  FSyncSummaryLabel.SetBounds(14, 14, 620, 20);
+  FSyncSummaryLabel.SetBounds(14, 14, 460, 20);
   FSyncSummaryLabel.Caption := 'Jobs de sincronizacao em cascata:';
 
   FBtnGoToFailedApp := TButton.Create(Self);
   FBtnGoToFailedApp.Parent := TopBar;
   FBtnGoToFailedApp.Caption := 'Ir para aplicativo responsavel';
   FBtnGoToFailedApp.Anchors := [akTop, akRight];
-  FBtnGoToFailedApp.SetBounds(670, 8, 224, 30);
+  FBtnGoToFailedApp.SetBounds(504, 8, 224, 30);
   FBtnGoToFailedApp.OnClick := @OnGoToResponsibleAppClick;
+
+  FBtnCancelTx := TButton.Create(Self);
+  FBtnCancelTx.Parent := TopBar;
+  FBtnCancelTx.Caption := 'Cancelar transacao';
+  FBtnCancelTx.Anchors := [akTop, akRight];
+  FBtnCancelTx.SetBounds(736, 8, 158, 30);
+  FBtnCancelTx.OnClick := @OnCancelSyncClick;
 
   FSyncJobsGrid := TStringGrid.Create(Self);
   FSyncJobsGrid.Parent := FTabSync;
@@ -973,7 +984,7 @@ end;
 function TMmenuMainForm.LaunchApplication(AppIdx: Integer;
   const ProjectId, RevisionId: string): Boolean;
 var
-  Executable, ArgLine: string;
+  Executable, ArgLine, ProjDir, LockInfo: string;
   P: TProcess;
   I: Integer;
 begin
@@ -982,6 +993,19 @@ begin
   begin
     MessageDlg('Aplicativo destino invalido ou proprio MMenu.', mtInformation, [mbOK], 0);
     Exit;
+  end;
+
+  if FProd.Loaded and (FProd.RootDir <> '') then
+  begin
+    ProjDir := IncludeTrailingPathDelimiter(FProd.RootDir) + 'projects' +
+      PathDelim + MmpAppFolders[AppIdx];
+    if IsProjectLocked(ProjDir, LockInfo) then
+    begin
+      if MessageDlg('O aplicativo ' + MmpAppNames[AppIdx] + ' ja possui lock ativo (' +
+        LockInfo + ').' + LineEnding + 'Deseja abrir mesmo assim?',
+        mtConfirmation, [mbYes, mbNo], 0) <> mrYes then
+        Exit;
+    end;
   end;
 
   Executable := FAppPaths[AppIdx];
@@ -1036,10 +1060,12 @@ begin
   if LoadProduction(PathOrJson, CheckHashes, LoadedProd) then
   begin
     FProd := LoadedProd;
+    FSettings.Load(FProd.RootDir, maMMenu);
     AddOrUpdateRecent(FProd);
     SaveConfig;
     LogMsg('Producao carregada: "' + FProd.Title + '" (' + FProd.ProductionId +
       ') em ' + FProd.RootDir + ' | ' + FProd.OverallStatusText);
+    AppendJsonLogLine(FProd.RootDir, 'MMenu', 'info', 'Producao aberta: ' + FProd.Title);
     SetStatus('Producao carregada: ' + FProd.Title, 100);
   end
   else
@@ -1455,26 +1481,35 @@ begin
     RefreshAllViews;
 end;
 
-procedure TMmenuMainForm.OnOpenSettingsClick(Sender: TObject);
+procedure TMmenuMainForm.OpenSettingsTab(const TabName: string);
 var
   Dlg: TMmenuSettingsForm;
   I: Integer;
 begin
-  Dlg := TMmenuSettingsForm.CreateWithPaths(Self, FDefaultProductionsDir, FAppPaths);
+  FSettings.Load(FProd.RootDir, maMMenu);
+  Dlg := TMmenuSettingsForm.CreateForSettings(Self, FSettings, FProd.Loaded, TabName);
   try
     if Dlg.ShowModal = mrOK then
     begin
-      FDefaultProductionsDir := Dlg.GetDefaultRoot;
+      FDefaultProductionsDir := FSettings.ProductionsDir;
       for I := 1 to 6 do
-        FAppPaths[I] := Dlg.GetAppPath(I);
+        FAppPaths[I] := FSettings.GetAppExe(AppIndexToEnum(I));
       SaveConfig;
       RefreshPortalCards;
-      LogMsg('Configuracoes atualizadas e salvas em ' + FConfigPath);
+      LogMsg('Configuracoes centralizadas salvas em ' + FConfigPath +
+        IfThen(FProd.Loaded, ' e settings/', ''));
+      if FProd.Loaded then
+        AppendJsonLogLine(FProd.RootDir, 'MMenu', 'info', 'Configuracoes atualizadas no MMenu.');
       SetStatus('Configuracoes salvas.', 100);
     end;
   finally
     Dlg.Free;
   end;
+end;
+
+procedure TMmenuMainForm.OnOpenSettingsClick(Sender: TObject);
+begin
+  OpenSettingsTab('geral');
 end;
 
 procedure TMmenuMainForm.OnRecentDblClick(Sender: TObject);
@@ -1703,6 +1738,53 @@ begin
   LaunchApplication(AppIdx, ProjId, RevId);
 end;
 
+procedure TMmenuMainForm.OnCancelSyncClick(Sender: TObject);
+var
+  RowIdx: Integer;
+  Job: TMmpSyncJob;
+  ErrMsg: string;
+begin
+  if (not FProd.Loaded) or (Length(FProd.SyncJobs) = 0) then Exit;
+  RowIdx := FSyncJobsGrid.Row - 1;
+  if (RowIdx < 0) or (RowIdx > High(FProd.SyncJobs)) then RowIdx := 0;
+  Job := FProd.SyncJobs[RowIdx];
+  if MessageDlg('Cancelar a transacao/evento "' + Job.EventId + '"?' + LineEnding +
+    'Revisoes ja publicadas permanecerao intactas.',
+    mtConfirmation, [mbYes, mbNo], 0) <> mrYes then Exit;
+
+  if CancelSyncTransaction(Job.SourceFile, ErrMsg) then
+  begin
+    LogMsg('Transacao/evento cancelado: ' + Job.EventId);
+    OpenProductionPath(FProd.RootDir, False);
+  end
+  else
+    MessageDlg(ErrMsg, mtError, [mbOK], 0);
+end;
+
+procedure TMmenuMainForm.OnMonitorTimer(Sender: TObject);
+var
+  LoadedProd: TMmpProduction;
+  SavedProjRow, SavedSyncRow: Integer;
+begin
+  if (not FProd.Loaded) or (FProd.RootDir = '') then Exit;
+  SavedProjRow := FProjectsGrid.Row;
+  SavedSyncRow := FSyncJobsGrid.Row;
+  if LoadProduction(FProd.RootDir, False, LoadedProd) then
+  begin
+    if (Length(LoadedProd.SyncJobs) <> Length(FProd.SyncJobs)) or
+       (LoadedProd.OverallStatusText <> FProd.OverallStatusText) or
+       (Length(LoadedProd.Artifacts) <> Length(FProd.Artifacts)) then
+    begin
+      FProd := LoadedProd;
+      RefreshAllViews;
+      if (SavedProjRow >= 1) and (SavedProjRow < FProjectsGrid.RowCount) then
+        FProjectsGrid.Row := SavedProjRow;
+      if (SavedSyncRow >= 1) and (SavedSyncRow < FSyncJobsGrid.RowCount) then
+        FSyncJobsGrid.Row := SavedSyncRow;
+    end;
+  end;
+end;
+
 procedure TMmenuMainForm.OnAuditWithHashesClick(Sender: TObject);
 begin
   if not FProd.Loaded then
@@ -1757,11 +1839,29 @@ begin
   end
   else
   begin
+    D := TOpenDialog.Create(Self);
+    try
+      D.Title := 'Selecionar novo local de ' + Link.TargetId + ' (validado por SHA-256)';
+      D.Options := [ofFileMustExist, ofPathMustExist];
+      D.InitialDir := FProd.RootDir;
+      if D.Execute then
+      begin
+        if SaveArtifactRelinkToCatalog(FProd.RootDir, Link.TargetId,
+          Link.ExpectedPath, D.FileName, Link.ExpectedSha256, ErrMsg) then
+        begin
+          LogMsg('Artefato ' + Link.TargetId + ' revinculado no catalog.json com SHA-256 verificado.');
+          MessageDlg('Revinculado em catalog.json com SHA-256 verificado.', mtInformation, [mbOK], 0);
+          OpenProductionPath(FProd.RootDir, False);
+          Exit;
+        end
+        else
+          MessageDlg(ErrMsg, mtError, [mbOK], 0);
+      end;
+    finally
+      D.Free;
+    end;
     AppIdx := AppNameToIndex(Link.AppName);
-    if MessageDlg('O item pertence ao projeto de ' + Link.AppName +
-      ' (MMenu nao modifica manifestos de outros aplicativos).' + LineEnding +
-      'Deseja abrir ' + Link.AppName + ' na revisao ' + Link.RevisionId +
-      ' para atualizar ou revincular o artefato?',
+    if MessageDlg('Deseja abrir ' + Link.AppName + ' na revisao ' + Link.RevisionId + '?',
       mtConfirmation, [mbYes, mbNo], 0) = mrYes then
     begin
       if AppIdx >= 1 then

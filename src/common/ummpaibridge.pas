@@ -1,309 +1,150 @@
 unit ummpaibridge;
 
+{ Ponte de IA centralizada (specs 00-comum §9 e §12):
+  - Le configuracoes gravadas pelo MMenu (TMMSettings) e segredos de secrets.ini/env.
+  - Suporta adaptador 'mock' (simulado deterministico) e 'chatgpt-lib' / 'openai-compatible'
+    via pacote openai_core (TAIUnifiedLLM).
+  - Apps 1..6 nunca gravam configuracoes; 'Alterar no MMenu...' abre o MMenu na aba certa. }
+
 {$mode objfpc}{$H+}
 
 interface
 
 uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
-  aiunifiedllm, aillmproviders, airuntimepaths;
+  Process, aiunifiedllm, aillmproviders, airuntimepaths,
+  mmpcommon, mmpsettings;
 
 type
   TMmpAiBridge = class
   private
     FLLM: TAIUnifiedLLM;
-    FConfigFile: string;
+    FSettings: TMMSettings;
+    FAppEnum: TMMApp;
     FAppDisplayName: string;
+    FProductionRoot: string;
+    function FindMMenuExecutable: string;
+    function RunMockCompletion(const SystemPrompt, UserPrompt: string): string;
   public
     constructor Create(const AppDisplayName: string);
     destructor Destroy; override;
 
-    procedure LoadConfig;
-    procedure SaveConfig;
+    procedure LoadForProduction(const ProdRoot: string);
+    function ReloadIfChanged: Boolean;
     function IsConfigured: Boolean;
+    function ActiveAdapter: string;
     function ProviderDisplayName: string;
+    function SettingsSha256: string;
     function CheckOpenSSL(out InfoText: string): Boolean;
     function Ask(const SystemPrompt, UserPrompt: string;
       out ResponseText, ErrorMsg: string): Boolean;
+
+    // Abre o MMenu na aba deste aplicativo (00-comum §12.2)
+    function OpenMMenuSettings(AOwner: TComponent): Boolean;
     function ShowConfigDialog(AOwner: TComponent): Boolean;
 
+    property Settings: TMMSettings read FSettings;
     property LLM: TAIUnifiedLLM read FLLM;
-    property ConfigFile: string read FConfigFile;
   end;
 
 implementation
 
-type
-  TMmpAiConfigForm = class(TForm)
-  private
-    FProviderCombo: TComboBox;
-    FModelEdit: TEdit;
-    FEndpointEdit: TEdit;
-    FTokenEdit: TEdit;
-    FTempEdit: TEdit;
-    FMaxTokensEdit: TEdit;
-    FSSLStatusLabel: TLabel;
-    procedure OnProviderChanged(Sender: TObject);
-  public
-    constructor CreateForBridge(AOwner: TComponent; Bridge: TMmpAiBridge);
-    procedure ApplyToBridge(Bridge: TMmpAiBridge);
-  end;
-
-const
-  SupportedProviders: array[0..7] of TAILLMProviderKind = (
-    llmOpenAI,
-    llmGemini,
-    llmClaude,
-    llmDeepSeek,
-    llmOpenRouter,
-    llmGroq,
-    llmOllama,
-    llmOpenAICompatible
-  );
-
-  SupportedProviderLabels: array[0..7] of string = (
-    'OpenAI',
-    'Google Gemini',
-    'Anthropic Claude',
-    'DeepSeek',
-    'OpenRouter',
-    'Groq',
-    'Ollama (Local)',
-    'OpenAI-Compatible'
-  );
-
-  DefaultModels: array[0..7] of string = (
-    'gpt-4o-mini',
-    'gemini-2.5-flash',
-    'claude-3-5-sonnet-latest',
-    'deepseek-chat',
-    'openai/gpt-4o-mini',
-    'llama-3.3-70b-versatile',
-    'llama3.2',
-    'gpt-4o-mini'
-  );
-
-function FindProviderComboIndex(Kind: TAILLMProviderKind): Integer;
+function MapAdapterToLLMKind(const BaseUrl, ModelName: string): TAILLMProviderKind;
 var
-  I: Integer;
+  U, M: string;
 begin
-  Result := 0;
-  for I := 0 to High(SupportedProviders) do
-    if SupportedProviders[I] = Kind then
-      Exit(I);
-end;
-
-constructor TMmpAiConfigForm.CreateForBridge(AOwner: TComponent;
-  Bridge: TMmpAiBridge);
-var
-  Head, Body, Footer: TPanel;
-  L: TLabel;
-  BtnOK, BtnCancel: TButton;
-  I: Integer;
-  SSLInfo: string;
-  SSLOk: Boolean;
-begin
-  inherited CreateNew(AOwner, 1);
-  Caption := 'Configurar Provedor de IA (CHATGPT) - ' + Bridge.FAppDisplayName;
-  Width := 560;
-  Height := 420;
-  Position := poMainFormCenter;
-  BorderStyle := bsDialog;
-
-  Head := TPanel.Create(Self);
-  Head.Parent := Self;
-  Head.Align := alTop;
-  Head.Height := 52;
-  Head.BevelOuter := bvNone;
-  Head.Color := $003A3028;
-  Head.ParentBackground := False;
-
-  L := TLabel.Create(Self);
-  L.Parent := Head;
-  L.Caption := 'Integracao CHATGPT / OpenSSL';
-  L.Font.Size := 13;
-  L.Font.Style := [fsBold];
-  L.Font.Color := clWhite;
-  L.SetBounds(16, 14, 420, 24);
-
-  Footer := TPanel.Create(Self);
-  Footer.Parent := Self;
-  Footer.Align := alBottom;
-  Footer.Height := 52;
-  Footer.BevelOuter := bvLowered;
-
-  BtnOK := TButton.Create(Self);
-  BtnOK.Parent := Footer;
-  BtnOK.Caption := 'Salvar';
-  BtnOK.ModalResult := mrOK;
-  BtnOK.Default := True;
-  BtnOK.SetBounds(348, 10, 92, 32);
-
-  BtnCancel := TButton.Create(Self);
-  BtnCancel.Parent := Footer;
-  BtnCancel.Caption := 'Cancelar';
-  BtnCancel.ModalResult := mrCancel;
-  BtnCancel.Cancel := True;
-  BtnCancel.SetBounds(450, 10, 92, 32);
-
-  Body := TPanel.Create(Self);
-  Body.Parent := Self;
-  Body.Align := alClient;
-  Body.BevelOuter := bvNone;
-
-  L := TLabel.Create(Self);
-  L.Parent := Body;
-  L.Caption := 'Provedor LLM:';
-  L.SetBounds(18, 16, 140, 18);
-
-  FProviderCombo := TComboBox.Create(Self);
-  FProviderCombo.Parent := Body;
-  FProviderCombo.Style := csDropDownList;
-  for I := 0 to High(SupportedProviderLabels) do
-    FProviderCombo.Items.Add(SupportedProviderLabels[I]);
-  FProviderCombo.ItemIndex := FindProviderComboIndex(Bridge.FLLM.ProviderKind);
-  FProviderCombo.SetBounds(165, 12, 370, 26);
-  FProviderCombo.OnChange := @OnProviderChanged;
-
-  L := TLabel.Create(Self);
-  L.Parent := Body;
-  L.Caption := 'Modelo:';
-  L.SetBounds(18, 52, 140, 18);
-
-  FModelEdit := TEdit.Create(Self);
-  FModelEdit.Parent := Body;
-  FModelEdit.SetBounds(165, 48, 370, 26);
-  FModelEdit.Text := Bridge.FLLM.Model;
-
-  L := TLabel.Create(Self);
-  L.Parent := Body;
-  L.Caption := 'Endpoint (opcional):';
-  L.SetBounds(18, 88, 140, 18);
-
-  FEndpointEdit := TEdit.Create(Self);
-  FEndpointEdit.Parent := Body;
-  FEndpointEdit.SetBounds(165, 84, 370, 26);
-  FEndpointEdit.Text := Bridge.FLLM.Endpoint;
-
-  L := TLabel.Create(Self);
-  L.Parent := Body;
-  L.Caption := 'Token / API Key:';
-  L.SetBounds(18, 124, 140, 18);
-
-  FTokenEdit := TEdit.Create(Self);
-  FTokenEdit.Parent := Body;
-  FTokenEdit.SetBounds(165, 120, 370, 26);
-  FTokenEdit.PasswordChar := '*';
-  FTokenEdit.Text := Bridge.FLLM.Token;
-
-  L := TLabel.Create(Self);
-  L.Parent := Body;
-  L.Caption := 'Temperatura:';
-  L.SetBounds(18, 160, 140, 18);
-
-  FTempEdit := TEdit.Create(Self);
-  FTempEdit.Parent := Body;
-  FTempEdit.SetBounds(165, 156, 110, 26);
-  FTempEdit.Text := FloatToStr(Bridge.FLLM.Temperature);
-
-  L := TLabel.Create(Self);
-  L.Parent := Body;
-  L.Caption := 'Max Tokens:';
-  L.SetBounds(295, 160, 100, 18);
-
-  FMaxTokensEdit := TEdit.Create(Self);
-  FMaxTokensEdit.Parent := Body;
-  FMaxTokensEdit.SetBounds(405, 156, 130, 26);
-  FMaxTokensEdit.Text := IntToStr(Bridge.FLLM.MaxTokens);
-
-  L := TLabel.Create(Self);
-  L.Parent := Body;
-  L.Caption := 'Segredos ficam apenas em AppData (' + Bridge.FConfigFile + '), nunca nos arquivos da producao.';
-  L.WordWrap := True;
-  L.Font.Color := clGrayText;
-  L.SetBounds(18, 200, 518, 36);
-
-  SSLOk := Bridge.CheckOpenSSL(SSLInfo);
-  FSSLStatusLabel := TLabel.Create(Self);
-  FSSLStatusLabel.Parent := Body;
-  FSSLStatusLabel.WordWrap := True;
-  FSSLStatusLabel.SetBounds(18, 246, 518, 48);
-  FSSLStatusLabel.Caption := SSLInfo;
-  if SSLOk then
-    FSSLStatusLabel.Font.Color := $00007A00
+  U := LowerCase(BaseUrl);
+  M := LowerCase(ModelName);
+  if (Pos('generativelanguage', U) > 0) or (Pos('gemini', M) > 0) then
+    Result := llmGemini
+  else if (Pos('anthropic', U) > 0) or (Pos('claude', M) > 0) then
+    Result := llmClaude
+  else if (Pos('deepseek', U) > 0) or (Pos('deepseek', M) > 0) then
+    Result := llmDeepSeek
+  else if Pos('openrouter', U) > 0 then
+    Result := llmOpenRouter
+  else if Pos('groq', U) > 0 then
+    Result := llmGroq
+  else if (Pos('11434', U) > 0) or (Pos('ollama', U) > 0) then
+    Result := llmOllama
+  else if (U <> '') and (Pos('api.openai.com', U) = 0) then
+    Result := llmOpenAICompatible
   else
-    FSSLStatusLabel.Font.Color := clMaroon;
-end;
-
-procedure TMmpAiConfigForm.OnProviderChanged(Sender: TObject);
-var
-  Idx: Integer;
-begin
-  Idx := FProviderCombo.ItemIndex;
-  if (Idx >= 0) and (Idx <= High(DefaultModels)) then
-    FModelEdit.Text := DefaultModels[Idx];
-end;
-
-procedure TMmpAiConfigForm.ApplyToBridge(Bridge: TMmpAiBridge);
-var
-  Idx: Integer;
-begin
-  Idx := FProviderCombo.ItemIndex;
-  if (Idx >= 0) and (Idx <= High(SupportedProviders)) then
-    Bridge.FLLM.ProviderKind := SupportedProviders[Idx];
-  Bridge.FLLM.Model := Trim(FModelEdit.Text);
-  Bridge.FLLM.Endpoint := Trim(FEndpointEdit.Text);
-  Bridge.FLLM.Token := Trim(FTokenEdit.Text);
-  Bridge.FLLM.Temperature := StrToFloatDef(FTempEdit.Text, 0.7);
-  Bridge.FLLM.MaxTokens := StrToIntDef(FMaxTokensEdit.Text, 1800);
-  Bridge.SaveConfig;
+    Result := llmOpenAI;
 end;
 
 constructor TMmpAiBridge.Create(const AppDisplayName: string);
 var
-  CfgDir: string;
+  A: TMMApp;
 begin
   inherited Create;
   FAppDisplayName := AppDisplayName;
+  FAppEnum := maMMenu;
+  for A := Low(TMMApp) to High(TMMApp) do
+    if SameText(MMAppNames[A], AppDisplayName) then
+    begin
+      FAppEnum := A;
+      Break;
+    end;
+
+  FSettings := TMMSettings.Create;
   FLLM := TAIUnifiedLLM.Create(nil);
   FLLM.ProviderKind := llmOpenAI;
-  FLLM.Model := 'gpt-4o-mini';
+  FLLM.Model := 'mock-script-v1';
   FLLM.MaxTokens := 2000;
   FLLM.Temperature := 0.7;
-
-  CfgDir := GetAppConfigDir(False) + 'MaurinMovie' + PathDelim;
-  ForceDirectories(CfgDir);
-  FConfigFile := CfgDir + 'chatgpt_ai.ini';
-  LoadConfig;
 end;
 
 destructor TMmpAiBridge.Destroy;
 begin
   FLLM.Free;
+  FSettings.Free;
   inherited Destroy;
 end;
 
-procedure TMmpAiBridge.LoadConfig;
+procedure TMmpAiBridge.LoadForProduction(const ProdRoot: string);
 begin
-  if FileExists(FConfigFile) then
-    FLLM.LoadFromIni(FConfigFile);
+  FProductionRoot := ExcludeTrailingPathDelimiter(ProdRoot);
+  FSettings.Load(FProductionRoot, FAppEnum);
 end;
 
-procedure TMmpAiBridge.SaveConfig;
+function TMmpAiBridge.ReloadIfChanged: Boolean;
 begin
-  FLLM.SaveToIni(FConfigFile);
+  Result := FSettings.ReloadIfChanged(FAppEnum);
+end;
+
+function TMmpAiBridge.ActiveAdapter: string;
+var
+  Prov: TMmpAiProviderCfg;
+begin
+  FSettings.ResolveProvider('text', FAppEnum, Prov);
+  Result := Prov.Adapter;
 end;
 
 function TMmpAiBridge.IsConfigured: Boolean;
+var
+  Prov: TMmpAiProviderCfg;
+  Secret: string;
 begin
-  Result := (FLLM.ProviderKind = llmOllama) or
-            (FLLM.ProviderKind = llmLlamaCpp) or
-            (Trim(FLLM.Token) <> '');
+  FSettings.ResolveProvider('text', FAppEnum, Prov);
+  if not Prov.Enabled then Exit(False);
+  if SameText(Prov.Adapter, 'mock') or SameText(Prov.Adapter, 'local-cli') then
+    Exit(True);
+  Secret := FSettings.ResolveSecret(Prov.SecretRef);
+  Result := (Secret <> '') or (FLLM.ProviderKind = llmOllama);
 end;
 
 function TMmpAiBridge.ProviderDisplayName: string;
+var
+  Prov: TMmpAiProviderCfg;
 begin
-  Result := AILLMProviderKindName(FLLM.ProviderKind) + ' (' + FLLM.Model + ')';
+  FSettings.ResolveProvider('text', FAppEnum, Prov);
+  Result := Prov.Adapter + ' / ' + Prov.Model + ' [via MMenu]';
+end;
+
+function TMmpAiBridge.SettingsSha256: string;
+begin
+  Result := FSettings.SettingsSha256;
 end;
 
 function TMmpAiBridge.CheckOpenSSL(out InfoText: string): Boolean;
@@ -314,14 +155,14 @@ begin
   if FileExists(IncludeTrailingPathDelimiter(ExeDir) + 'libssl-1_1-x64.dll') and
      FileExists(IncludeTrailingPathDelimiter(ExeDir) + 'libcrypto-1_1-x64.dll') then
   begin
-    InfoText := 'OpenSSL pronto na pasta do aplicativo: libssl-1_1-x64.dll e libcrypto-1_1-x64.dll.';
+    InfoText := 'OpenSSL Win64 pronta: libssl-1_1-x64.dll e libcrypto-1_1-x64.dll.';
     Exit(True);
   end;
 
   if AIResolveOpenSSLLibraries(ExeDir, SSLLib, CryptoLib) and
      FileExists(SSLLib) and FileExists(CryptoLib) then
   begin
-    InfoText := 'OpenSSL localizado via CHATGPT runtime: ' + SSLLib;
+    InfoText := 'OpenSSL localizada via CHATGPT runtime: ' + SSLLib;
     Exit(True);
   end;
 
@@ -329,20 +170,73 @@ begin
   Result := False;
 end;
 
+function TMmpAiBridge.RunMockCompletion(const SystemPrompt, UserPrompt: string): string;
+begin
+  if Pos('"scenes"', SystemPrompt) > 0 then
+    Result :=
+      '{"scenes":[' +
+      '{"heading":"INT. ESTUDIO - NOITE","location":"Estudio","time_of_day":"NOITE","mood":"Misterioso",' +
+      '"estimated_duration":45,"characters":"Protagonista","objects":"Lanterna, Carta","costumes":"Casaco escuro",' +
+      '"action":"Baseado no roteiro simulado: ' + StringReplace(Copy(UserPrompt, 1, 80), '"', '''', [rfReplaceAll]) + '",' +
+      '"dialogue":"Protagonista: Precisamos validar cada revisao antes de seguir."},' +
+      '{"heading":"EXT. PRACA CENTRAL - DIA","location":"Praca Central","time_of_day":"DIA","mood":"Tenso",' +
+      '"estimated_duration":60,"characters":"Protagonista, Aliado","objects":"Pasta de documentos","costumes":"Casaco escuro, Jaqueta",' +
+      '"action":"Encontro rapido sob observacao discreta.",' +
+      '"dialogue":"Aliado: Os manifestos confirmam o caminho exato."},' +
+      '{"heading":"INT. SALA DE MONTAGEM - ENTARDECER","location":"Sala de Montagem","time_of_day":"ENTARDECER","mood":"Resolucao",' +
+      '"estimated_duration":50,"characters":"Protagonista, Aliado","objects":"Projetor","costumes":"Casaco escuro, Jaqueta",' +
+      '"action":"Projecao final confirma continuidade de todas as cenas.",' +
+      '"dialogue":"Protagonista: Agora esta pronto para validacao."}' +
+      ']}'
+  else
+    Result := '[Simulado - ' + FAppDisplayName + '] Resposta deterministica gerada localmente para: ' +
+      Copy(Trim(UserPrompt), 1, 140);
+end;
+
 function TMmpAiBridge.Ask(const SystemPrompt, UserPrompt: string;
   out ResponseText, ErrorMsg: string): Boolean;
+var
+  Prov: TMmpAiProviderCfg;
+  Secret: string;
 begin
   Result := False;
   ResponseText := '';
   ErrorMsg := '';
 
-  if not IsConfigured then
+  if FProductionRoot <> '' then
+    FSettings.ReloadIfChanged(FAppEnum);
+
+  FSettings.ResolveProvider('text', FAppEnum, Prov);
+  if not Prov.Enabled then
   begin
-    ErrorMsg := 'Token de API nao configurado. Clique em "Configurar IA..." para informar provedor e chave.';
+    ErrorMsg := 'Provedor "' + Prov.Id + '" esta desabilitado. Abra Configuracoes no MMenu.';
     Exit;
   end;
 
+  if SameText(Prov.Adapter, 'mock') or FSettings.OfflineMode then
+  begin
+    ResponseText := RunMockCompletion(SystemPrompt, UserPrompt);
+    Exit(True);
+  end;
+
+  Secret := FSettings.ResolveSecret(Prov.SecretRef);
+  FLLM.ProviderKind := MapAdapterToLLMKind(Prov.BaseUrl, Prov.Model);
+  FLLM.Endpoint := Prov.BaseUrl;
+  FLLM.Model := Prov.Model;
+  FLLM.Token := Secret;
+  FLLM.Temperature := Prov.Temperature;
+  FLLM.MaxTokens := Prov.MaxTokens;
+  FLLM.Timeout := Prov.TimeoutSec * 1000;
   FLLM.SystemPrompt := SystemPrompt;
+
+  if (Trim(FLLM.Token) = '') and (FLLM.ProviderKind <> llmOllama) and
+     (FLLM.ProviderKind <> llmLlamaCpp) then
+  begin
+    ErrorMsg := 'Provedor "' + Prov.Id + '" sem chave no cofre (secret_ref=' +
+      Prov.SecretRef + '). Abra Configuracoes no MMenu.';
+    Exit;
+  end;
+
   if FLLM.Ask(UserPrompt) then
   begin
     ResponseText := FLLM.LastResult;
@@ -352,22 +246,75 @@ begin
     ErrorMsg := FLLM.LastError;
 end;
 
-function TMmpAiBridge.ShowConfigDialog(AOwner: TComponent): Boolean;
+function TMmpAiBridge.FindMMenuExecutable: string;
 var
-  Dlg: TMmpAiConfigForm;
+  ExeDir, Suffix, Candidate: string;
+begin
+  {$IFDEF WINDOWS}
+  Suffix := '.exe';
+  {$ELSE}
+  Suffix := '';
+  {$ENDIF}
+  ExeDir := ExtractFileDir(ExpandFileName(ParamStr(0)));
+  Candidate := IncludeTrailingPathDelimiter(ExeDir) + 'mmenu' + Suffix;
+  if FileExists(Candidate) then Exit(Candidate);
+  Candidate := ExpandFileName(ExeDir + PathDelim + '..' + PathDelim + 'bin' +
+    PathDelim + 'mmenu' + Suffix);
+  if FileExists(Candidate) then Exit(Candidate);
+  Result := '';
+end;
+
+function TMmpAiBridge.OpenMMenuSettings(AOwner: TComponent): Boolean;
+var
+  MMenuExe, TabArg: string;
+  P: TProcess;
+  Prov: TMmpAiProviderCfg;
+  DlgRes: Integer;
 begin
   Result := False;
-  Dlg := TMmpAiConfigForm.CreateForBridge(AOwner, Self);
-  try
-    if Dlg.ShowModal = mrOK then
-    begin
-      Dlg.ApplyToBridge(Self);
-      Result := True;
-    end;
-  finally
-    Dlg.Free;
+  FSettings.ResolveProvider('text', FAppEnum, Prov);
+  DlgRes := MessageDlg(
+    'Configuracao centralizada no MMenu (00-comum §12):' + LineEnding + LineEnding +
+    'Aplicativo: ' + FAppDisplayName + LineEnding +
+    'Provedor ativo: ' + Prov.Id + ' (' + Prov.Adapter + ' / ' + Prov.Model + ')' + LineEnding +
+    'Endpoint: ' + Prov.BaseUrl + LineEnding +
+    'Settings SHA-256: ' + Copy(FSettings.SettingsSha256, 1, 16) + LineEnding + LineEnding +
+    'Deseja abrir a tela de Configuracoes no MMenu na aba ' + FAppDisplayName + '?',
+    mtInformation, [mbYes, mbNo], 0);
+  if DlgRes <> mrYes then Exit;
+
+  MMenuExe := FindMMenuExecutable;
+  if MMenuExe = '' then
+  begin
+    MessageDlg('Executavel do MMenu nao encontrado ao lado de ' + FAppDisplayName + '.',
+      mtWarning, [mbOK], 0);
+    Exit;
   end;
+
+  TabArg := LowerCase(FAppDisplayName);
+  P := TProcess.Create(nil);
+  try
+    P.Executable := MMenuExe;
+    if FProductionRoot <> '' then
+    begin
+      P.Parameters.Add('--production');
+      P.Parameters.Add(FProductionRoot);
+    end;
+    P.Parameters.Add('--settings');
+    P.Parameters.Add('--tab');
+    P.Parameters.Add(TabArg);
+    P.Options := [];
+    P.Execute;
+    Result := True;
+  finally
+    P.Free;
+  end;
+  if AOwner <> nil then;
+end;
+
+function TMmpAiBridge.ShowConfigDialog(AOwner: TComponent): Boolean;
+begin
+  Result := OpenMMenuSettings(AOwner);
 end;
 
 end.
-

@@ -7,7 +7,7 @@ interface
 uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
   ComCtrls, Grids, fpjson, jsonparser,
-  ummpprotocol, ummpappbase, ummpaibridge;
+  mmpcommon, ummpprotocol, ummpappbase, ummpaibridge;
 
 type
   TScriptSceneItem = record
@@ -113,6 +113,8 @@ type
 var
   mscriptMainForm: TMscriptMainForm;
 
+function RunMScriptHeadlessEvent(const Args: TMMLaunchArgs): Integer;
+
 implementation
 
 constructor TMscriptMainForm.Create(TheOwner: TComponent);
@@ -185,7 +187,7 @@ begin
 
   BtnAiCfg := TButton.Create(Self);
   BtnAiCfg.Parent := Head;
-  BtnAiCfg.Caption := 'Configurar IA...';
+  BtnAiCfg.Caption := 'Alterar no MMenu...';
   BtnAiCfg.Anchors := [akTop, akRight];
   BtnAiCfg.SetBounds(1062, 17, 122, 34);
   BtnAiCfg.OnClick := @OnAiConfigClick;
@@ -444,6 +446,7 @@ begin
     Exit;
   end;
 
+  FAi.LoadForProduction(FProd.RootDir);
   FTitleEdit.Text := FProd.Title;
   LoadScriptFromRevision(FCurrentRevId);
   RefreshUI;
@@ -1088,6 +1091,135 @@ begin
   LoadScriptFromRevision(S);
   RefreshUI;
   LogMsg('Revisao carregada para leitura/edicao: ' + S);
+end;
+
+function RunMScriptHeadlessEvent(const Args: TMMLaunchArgs): Integer;
+var
+  Prod: TMmpProduction;
+  Proj: TMmpProjectRef;
+  ProjDir, RevId, ErrMsg, EvtStr, ScriptStr, PrepRev, RevDir, NewRev, ArchivePath: string;
+  EvtData, ScriptData: TJSONData;
+  EvtObj, ScriptObj, ReqObj, OpObj, SceneObj: TJSONObject;
+  OpsArr, ScenesArr: TJSONArray;
+  EvtId, SceneId, FieldName, FromTxt, ToTxt, ActionTxt: string;
+  I, J: Integer;
+  AppliedAny, FoundTarget: Boolean;
+  Arts: array of TMmpArtifactInput;
+  Srcs: array of TMmpSourceRef;
+begin
+  Result := EXIT_UNEXPECTED_ERROR;
+  if (Args.Production = '') or (Args.EventFile = '') then
+  begin
+    WriteCliLine('Uso headless: mscript --production <pasta> --headless --event <arquivo>');
+    Exit(EXIT_INVALID_ARGS);
+  end;
+  if not FileExists(Args.EventFile) then Exit(EXIT_NOT_FOUND);
+  if not ResolveAppProject(Args.Production, 1, Args.ProjectId, Args.Revision,
+    Prod, Proj, ProjDir, RevId, ErrMsg) then
+  begin
+    WriteCliLine(ErrMsg);
+    Exit(EXIT_NOT_FOUND);
+  end;
+
+  if not ReadTextFileUtf8(Args.EventFile, EvtStr) then Exit(EXIT_NOT_FOUND);
+  EvtData := GetJSON(EvtStr);
+  if not (EvtData is TJSONObject) then begin EvtData.Free; Exit(EXIT_INVALID_ARGS); end;
+  EvtObj := TJSONObject(EvtData);
+  try
+    EvtId := EvtObj.Get('event_id', '');
+    // Idempotency check across published revisions
+    for I := 0 to High(Proj.Revisions) do
+    begin
+      if SameText(Proj.Revisions[I].ChangeEventId, EvtId) then
+      begin
+        WriteCliLine('Evento ' + EvtId + ' ja aplicado em ' + Proj.Revisions[I].RevisionId);
+        Exit(EXIT_OK);
+      end;
+    end;
+
+    if not ReadTextFileUtf8(IncludeTrailingPathDelimiter(ProjDir) + 'revisions' +
+      PathDelim + RevId + PathDelim + 'scripts' + PathDelim + 'roteiro.json', ScriptStr) then
+      Exit(EXIT_NOT_FOUND);
+
+    ScriptData := GetJSON(ScriptStr);
+    if not (ScriptData is TJSONObject) then begin ScriptData.Free; Exit(EXIT_INTEGRITY_ERROR); end;
+    ScriptObj := TJSONObject(ScriptData);
+    try
+      AppliedAny := False;
+      if (EvtObj.Find('requested_change') is TJSONObject) and
+         (ScriptObj.Find('scenes') is TJSONArray) then
+      begin
+        ReqObj := TJSONObject(EvtObj.Find('requested_change'));
+        ScenesArr := TJSONArray(ScriptObj.Find('scenes'));
+        if ReqObj.Find('operations') is TJSONArray then
+        begin
+          OpsArr := TJSONArray(ReqObj.Find('operations'));
+          for I := 0 to OpsArr.Count - 1 do
+          begin
+            OpObj := TJSONObject(OpsArr.Items[I]);
+            SceneId := OpObj.Get('scene_id', '');
+            FieldName := OpObj.Get('field', 'action');
+            FromTxt := OpObj.Get('from', '');
+            ToTxt := OpObj.Get('to', OpObj.Get('to_name', ''));
+            FoundTarget := False;
+            for J := 0 to ScenesArr.Count - 1 do
+            begin
+              SceneObj := TJSONObject(ScenesArr.Items[J]);
+              if (SceneId = '') or SameText(SceneObj.Get('scene_id', ''), SceneId) then
+              begin
+                ActionTxt := SceneObj.Get(FieldName, '');
+                if (FromTxt <> '') and (Pos(FromTxt, ActionTxt) > 0) then
+                begin
+                  SceneObj.Strings[FieldName] := StringReplace(ActionTxt, FromTxt, ToTxt, [rfReplaceAll]);
+                  FoundTarget := True;
+                  AppliedAny := True;
+                end;
+              end;
+            end;
+            if (FromTxt <> '') and not FoundTarget then
+            begin
+              WriteCliLine('Mudanca ambigua/nao encontrada: ' + FromTxt);
+              Exit(EXIT_EVENT_AMBIGUOUS);
+            end;
+          end;
+        end;
+      end;
+
+      if not PrepareNextRevisionDir(Proj.ProjectFilePath, PrepRev, RevDir) then
+        Exit(EXIT_UNEXPECTED_ERROR);
+
+      AtomicWriteTextFile(RevDir + PathDelim + 'scripts' + PathDelim + 'roteiro.json',
+        ScriptObj.FormatJSON, False);
+
+      SetLength(Srcs, 0);
+      SetLength(Arts, 1);
+      Arts[0].ArtifactId := GenerateMmpId('a');
+      Arts[0].Kind := 'script.scene';
+      Arts[0].RelUri := 'scripts/roteiro.json';
+      Arts[0].MimeType := 'application/json';
+      Arts[0].Status := 'approved';
+
+      if not PublishProjectRevision(Prod.ProductionId, Proj.ProjectFilePath, 'MScript',
+        RevId, 'approved', EvtId, Srcs, Arts, NewRev, ErrMsg, PrepRev) then
+      begin
+        WriteCliLine(ErrMsg);
+        Exit(EXIT_UNEXPECTED_ERROR);
+      end;
+
+      EvtObj.Strings['status'] := 'published';
+      ArchivePath := IncludeTrailingPathDelimiter(Prod.RootDir) + 'shared' + PathDelim +
+        'events' + PathDelim + 'archive' + PathDelim + ExtractFileName(Args.EventFile);
+      AtomicWriteTextFile(ArchivePath, EvtObj.FormatJSON, False);
+      DeleteFile(Args.EventFile);
+      AppendJsonLogLine(Prod.RootDir, 'MScript', 'info',
+        'Headless patch ' + EvtId + ' aplicado -> ' + NewRev + ' (applied=' + BoolToStr(AppliedAny, True) + ')');
+      Result := EXIT_OK;
+    finally
+      ScriptObj.Free;
+    end;
+  finally
+    EvtObj.Free;
+  end;
 end;
 
 end.

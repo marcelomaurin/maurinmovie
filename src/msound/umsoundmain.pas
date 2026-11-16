@@ -143,7 +143,7 @@ begin
   FHeaderSourceLabel.Caption := 'Fontes 1..3: -'; FHeaderSourceLabel.Font.Color := $0099E6FF;
   FHeaderSourceLabel.SetBounds(340, 36, 520, 18);
 
-  BtnAiCfg := TButton.Create(Self); BtnAiCfg.Parent := Head; BtnAiCfg.Caption := 'Configurar IA...';
+  BtnAiCfg := TButton.Create(Self); BtnAiCfg.Parent := Head; BtnAiCfg.Caption := 'Alterar no MMenu...';
   BtnAiCfg.Anchors := [akTop, akRight]; BtnAiCfg.SetBounds(1062, 17, 122, 34);
   BtnAiCfg.OnClick := @OnAiConfigClick;
 
@@ -292,6 +292,7 @@ begin
     Exit;
   end;
 
+  FAi.LoadForProduction(FProd.RootDir);
   FindProjectByApp(FProd, 1, FScriptProj);
   FindProjectByApp(FProd, 2, FVisualProj);
   FindProjectByApp(FProd, 3, FBoardProj);

@@ -15,12 +15,15 @@
     <BuildModes Count="1">
       <Item1 Name="Default" Default="True"/>
     </BuildModes>
-    <RequiredPackages Count="1">
+    <RequiredPackages Count="2">
       <Item1>
         <PackageName Value="LCL"/>
       </Item1>
+      <Item2>
+        <PackageName Value="openai_core"/>
+      </Item2>
     </RequiredPackages>
-    <Units Count="5">
+    <Units Count="8">
       <Unit0>
         <Filename Value="mmenu.lpr"/>
         <IsPartOfProject Value="True"/>
@@ -38,13 +41,25 @@
         <ResourceBaseClass Value="Form"/>
       </Unit2>
       <Unit3>
-        <Filename Value="../common/ummpprotocol.pas"/>
+        <Filename Value="../common/mmpcommon.pas"/>
         <IsPartOfProject Value="True"/>
       </Unit3>
       <Unit4>
-        <Filename Value="../common/ummpsha256.pas"/>
+        <Filename Value="../common/mmpsettings.pas"/>
         <IsPartOfProject Value="True"/>
       </Unit4>
+      <Unit5>
+        <Filename Value="../common/ummpprotocol.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit5>
+      <Unit6>
+        <Filename Value="../common/ummpsha256.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit6>
+      <Unit7>
+        <Filename Value="../common/ummpaibridge.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit7>
     </Units>
   </ProjectOptions>
   <CompilerOptions>

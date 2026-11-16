@@ -3,9 +3,12 @@ program msound;
 {$mode objfpc}{$H+}
 
 uses
-  Interfaces, Forms, umsoundmain;
+  Interfaces, Forms, mmpcommon, ummpappbase, umsoundmain;
 
 begin
+  if HandleStandardCliEarlyExit(maMSound) then
+    Exit;
+
   RequireDerivedFormResource := False;
   Application.Scaled := True;
   Application.Initialize;

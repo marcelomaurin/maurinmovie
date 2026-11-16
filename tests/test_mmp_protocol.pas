@@ -3,7 +3,8 @@ program test_mmp_protocol;
 {$mode objfpc}{$H+}
 
 uses
-  SysUtils, Classes, fpjson, jsonparser, ummpsha256, ummpprotocol;
+  SysUtils, Classes, fpjson, jsonparser,
+  mmpcommon, mmpsettings, ummpsha256, ummpprotocol;
 
 var
   PassCount: Integer = 0;
@@ -266,11 +267,106 @@ begin
   end;
 end;
 
+procedure TestSpecs020;
+var
+  TestRoot, ProdRoot, ErrMsg, LockInfo, SampleFile, SampleHash, BadFile: string;
+  Settings: TMMSettings;
+  Prov: TMmpAiProviderCfg;
+  Prod: TMmpProduction;
+  TxObj, EvtObj: TJSONObject;
+begin
+  AssertTrue(IsValidRevisionId('r0001'), 'IsValidRevisionId r0001');
+  AssertTrue(not IsValidRevisionId('r1'), 'IsValidRevisionId rejects r1');
+
+  TestRoot := IncludeTrailingPathDelimiter(GetTempDir) + 'mmp_specs_020_test';
+  RemoveDirRecursive(TestRoot);
+  ForceDirectories(TestRoot);
+  try
+    AssertTrue(CreateProduction(TestRoot, 'Filme Specs 020', ProdRoot, ErrMsg),
+      'CreateProduction with centralized settings: ' + ErrMsg);
+    AssertTrue(FileExists(ProdRoot + PathDelim + 'settings' + PathDelim + 'apps.json'),
+      'settings/apps.json created');
+    AssertTrue(FileExists(ProdRoot + PathDelim + 'settings' + PathDelim + 'policies.json'),
+      'settings/policies.json created');
+    AssertTrue(FileExists(ProdRoot + PathDelim + 'settings' + PathDelim + 'media-profiles.json'),
+      'settings/media-profiles.json created');
+    AssertTrue(FileExists(ProdRoot + PathDelim + 'settings' + PathDelim + 'presets.json'),
+      'settings/presets.json created');
+    AssertTrue(DirectoryExists(ProdRoot + PathDelim + 'shared' + PathDelim + 'events' + PathDelim + 'inbox' + PathDelim + 'MScript'),
+      'shared/events/inbox/MScript created');
+    AssertTrue(DirectoryExists(ProdRoot + PathDelim + 'shared' + PathDelim + 'transactions'),
+      'shared/transactions created');
+
+    Settings := TMMSettings.Create;
+    try
+      Settings.Load(ProdRoot, maMScript);
+      AssertTrue(Settings.ResolveProvider('text', maMScript, Prov), 'ResolveProvider text for MScript');
+      AssertEq(Prov.Adapter, 'mock', 'Default provider adapter is mock');
+      AssertTrue(Settings.SettingsSha256 <> '', 'SettingsSha256 computed');
+    finally
+      Settings.Free;
+    end;
+
+    // Test lock
+    AssertTrue(AcquireProjectLock(ProdRoot + PathDelim + 'projects' + PathDelim + '01-mscript',
+      'MScript', 'gui', ErrMsg), 'AcquireProjectLock succeeds');
+    AssertTrue(IsProjectLocked(ProdRoot + PathDelim + 'projects' + PathDelim + '01-mscript', LockInfo),
+      'IsProjectLocked detects active lock');
+    ReleaseProjectLock(ProdRoot + PathDelim + 'projects' + PathDelim + '01-mscript');
+    AssertTrue(not IsProjectLocked(ProdRoot + PathDelim + 'projects' + PathDelim + '01-mscript', LockInfo),
+      'ReleaseProjectLock clears lock');
+
+    // Test transaction + inbox event scanning
+    TxObj := TJSONObject.Create;
+    try
+      TxObj.Add('schema', MMP_SCHEMA_TX);
+      TxObj.Add('transaction_id', 'tx_test_01');
+      TxObj.Add('status', 'failed');
+      AtomicWriteTextFile(ProdRoot + PathDelim + 'shared' + PathDelim + 'transactions' +
+        PathDelim + 'tx_test_01.json', TxObj.FormatJSON, False);
+    finally
+      TxObj.Free;
+    end;
+    EvtObj := TJSONObject.Create;
+    try
+      EvtObj.Add('schema', MMP_SCHEMA_EVENT);
+      EvtObj.Add('event_id', 'evt_test_01');
+      EvtObj.Add('origin_app', 'MBoard');
+      EvtObj.Add('target_app', 'MScript');
+      EvtObj.Add('status', 'queued');
+      AtomicWriteTextFile(ProdRoot + PathDelim + 'shared' + PathDelim + 'events' +
+        PathDelim + 'inbox' + PathDelim + 'MScript' + PathDelim + 'evt_test_01.json',
+        EvtObj.FormatJSON, False);
+    finally
+      EvtObj.Free;
+    end;
+
+    AssertTrue(LoadProduction(ProdRoot, False, Prod), 'LoadProduction scans transactions and inbox');
+    AssertEq(IntToStr(Length(Prod.SyncJobs)), '2', 'Both transaction and inbox event loaded');
+    AssertTrue(Prod.HasFailures, 'Failed transaction sets HasFailures');
+
+    // Test SHA-256 verified catalog relink
+    SampleFile := ProdRoot + PathDelim + 'shared' + PathDelim + 'imports' + PathDelim + 'real.txt';
+    BadFile := ProdRoot + PathDelim + 'shared' + PathDelim + 'imports' + PathDelim + 'wrong.txt';
+    AtomicWriteTextFile(SampleFile, 'conteudo original', False);
+    AtomicWriteTextFile(BadFile, 'conteudo diferente', False);
+    SampleHash := SHA256File(SampleFile);
+
+    AssertTrue(not SaveArtifactRelinkToCatalog(ProdRoot, 'a_rel_1', 'old/uri.txt',
+      BadFile, SampleHash, ErrMsg), 'SaveArtifactRelinkToCatalog rejects wrong SHA-256');
+    AssertTrue(SaveArtifactRelinkToCatalog(ProdRoot, 'a_rel_1', 'old/uri.txt',
+      SampleFile, SampleHash, ErrMsg), 'SaveArtifactRelinkToCatalog accepts matching SHA-256');
+  finally
+    RemoveDirRecursive(TestRoot);
+  end;
+end;
+
 begin
   Randomize;
   TestSHA256;
   TestPathSafety;
   TestProductionLifecycleAndAudit;
+  TestSpecs020;
   WriteLn('---');
   WriteLn(Format('Total: %d passed, %d failed.', [PassCount, FailCount]));
   if FailCount > 0 then

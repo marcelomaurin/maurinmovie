@@ -140,7 +140,7 @@ begin
   FHeaderRevLabel.Caption := 'Revisao Filme: -'; FHeaderRevLabel.Font.Color := $0099E6FF;
   FHeaderRevLabel.SetBounds(340, 36, 460, 18);
 
-  BtnAiCfg := TButton.Create(Self); BtnAiCfg.Parent := Head; BtnAiCfg.Caption := 'Configurar IA...';
+  BtnAiCfg := TButton.Create(Self); BtnAiCfg.Parent := Head; BtnAiCfg.Caption := 'Alterar no MMenu...';
   BtnAiCfg.Anchors := [akTop, akRight]; BtnAiCfg.SetBounds(1082, 17, 122, 34);
   BtnAiCfg.OnClick := @OnAiConfigClick;
 
@@ -251,6 +251,7 @@ begin
     Exit;
   end;
 
+  FAi.LoadForProduction(FProd.RootDir);
   FindProjectByApp(FProd, 1, FScriptProj);
   FHeaderProdLabel.Caption := FProd.Title + '  (' + FProd.ProductionId + ')';
   FHeaderRevLabel.Caption := 'Revisao Filme: ' + FCurrentRevId + '  |  Roteiro: ' + FScriptProj.ActiveRevision;
@@ -498,11 +499,11 @@ begin
     Exit;
   end;
 
-  PartName := 'Avaliador_1';
-  ScoreStr := '8';
+  PartName := 'anonimo';
+  ScoreStr := '4';
   CommentStr := 'Bom ritmo, transicao clara';
   if not InputQuery('Avaliacao de Publico - Cena ' + SceneId, 'Participante (ou anonimo):', PartName) then Exit;
-  if not InputQuery('Avaliacao de Publico - Cena ' + SceneId, 'Nota (0 a 10):', ScoreStr) then Exit;
+  if not InputQuery('Avaliacao de Publico - Cena ' + SceneId, 'Nota (1 a 5):', ScoreStr) then Exit;
   if not InputQuery('Avaliacao de Publico - Cena ' + SceneId, 'Comentario:', CommentStr) then Exit;
 
   N := Length(FRatings);
@@ -512,7 +513,9 @@ begin
   FRatings[N].FilmRevision := FCurrentRevId;
   FRatings[N].SceneId := SceneId;
   FRatings[N].Participant := PartName;
-  FRatings[N].Score := StrToIntDef(ScoreStr, 8);
+  FRatings[N].Score := StrToIntDef(ScoreStr, 4);
+  if FRatings[N].Score < 1 then FRatings[N].Score := 1;
+  if FRatings[N].Score > 5 then FRatings[N].Score := 5;
   FRatings[N].Comment := CommentStr;
   FRatings[N].CreatedAt := CurrentIsoUtc;
   RefreshRatingsGrid;
@@ -549,7 +552,7 @@ begin
         [FClips[I].SceneId, FClips[I].Heading]))
     else
     begin
-      FAnalysisMemo.Lines.Add(Format('Cena %s (%s): media %.1f/10 (%d respostas)',
+      FAnalysisMemo.Lines.Add(Format('Cena %s (%s): media %.1f/5 (%d respostas)',
         [FClips[I].SceneId, FClips[I].Heading, SumScore / Cnt, Cnt]));
       FAnalysisMemo.Lines.Add(CommentsAll);
     end;
