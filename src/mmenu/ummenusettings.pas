@@ -327,6 +327,7 @@ begin
   FProvAdapterCombo.Items.Add('mock');
   FProvAdapterCombo.Items.Add('chatgpt-lib');
   FProvAdapterCombo.Items.Add('openai-compatible');
+  FProvAdapterCombo.Items.Add('parakeet');
   FProvAdapterCombo.Items.Add('kokoro-fastapi');
   FProvAdapterCombo.Items.Add('piper-http');
   FProvAdapterCombo.Items.Add('openedai-speech');
@@ -859,6 +860,8 @@ begin
   SL := TStringList.Create;
   try
     DiscoverLocalSoundServers(SL);
+    if PrepareParakeetRuntime('', PyOut, PyErr) then
+      SL.Add('Parakeet Runtime Preparado: ' + PyOut);
     if CheckAISoundCpuRuntimeHealth('', '', PyOut, PyErr) then
       SL.Add('Runtime Python CPU: ' + PyOut)
     else

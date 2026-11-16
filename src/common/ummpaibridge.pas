@@ -131,7 +131,8 @@ var
   S: string;
 begin
   S := LowerCase(Trim(Adapter) + ' ' + Trim(BaseUrl));
-  if (Pos('kokoro', S) > 0) or (Pos('8880', S) > 0) then Result := sndKokoroFastAPI
+  if (Pos('parakeet', S) > 0) or (Pos('8090', S) > 0) then Result := sndParakeet
+  else if (Pos('kokoro', S) > 0) or (Pos('8880', S) > 0) then Result := sndKokoroFastAPI
   else if (Pos('piper', S) > 0) or (Pos('5000', S) > 0) then Result := sndPiperHTTP
   else if Pos('openedai', S) > 0 then Result := sndOpenedAISpeech
   else if (Pos('coqui', S) > 0) or (Pos('xtts', S) > 0) or (Pos('8020', S) > 0) then Result := sndCoquiXTTS
@@ -408,7 +409,7 @@ begin
 
   if SameText(Prov.Adapter, 'mock') then
   begin
-    FSound.ProviderKind := sndLocalCPURuntime;
+    FSound.ProviderKind := sndParakeet;
     FSound.TaskKind := stkSpeech;
   end
   else
@@ -542,7 +543,9 @@ begin
 
   if (K = 'voice') or (K = 'sfx') then
   begin
-    if SameText(Prov.Adapter, 'local-cpu-runtime') or (Pos('local://', LowerCase(Prov.BaseUrl)) = 1) then
+    if SameText(Prov.Adapter, 'local-cpu-runtime') or
+       SameText(Prov.Adapter, 'parakeet') or
+       (Pos('local://', LowerCase(Prov.BaseUrl)) = 1) then
     begin
       if CheckAISoundCpuRuntimeHealth('', '', PyOut, PyErr) then
       begin

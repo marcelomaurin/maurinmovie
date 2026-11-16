@@ -1187,7 +1187,8 @@ begin
     SetLength(S.FProviders, 5);
     S.FProviders[0] := DefaultProvider('text.default', 'text', 'Texto (Simulado)', 'mock', 'mock-script-v1');
     S.FProviders[1] := DefaultProvider('image.default', 'image', 'Imagem (Simulado)', 'mock', 'mock-image-v1');
-    S.FProviders[2] := DefaultProvider('voice.default', 'voice', 'Voz (Simulado)', 'mock', 'mock-voice-v1');
+    S.FProviders[2] := DefaultProvider('voice.default', 'voice', 'Parakeet TTS (Runtime CPU)', 'parakeet', 'parakeet');
+    S.FProviders[2].BaseUrl := 'local://parakeet';
     S.FProviders[3] := DefaultProvider('sfx.default', 'sfx', 'Efeitos (Simulado)', 'mock', 'mock-sfx-v1');
     S.FProviders[4] := DefaultProvider('video.default', 'video', 'Video (Simulado)', 'mock', 'mock-video-v1');
 
