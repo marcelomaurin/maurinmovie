@@ -32,3 +32,8 @@ MScript → MVisual → MBoard → MSound → MScene → MCut. MMenu permite ace
 
 ## Padrão visual obrigatório
 Todos os sete aplicativos adotam **MultiCNC / MultiSuite como referência de layout e experiência de uso**, com adaptações para roteiro, imagens, storyboard, som, vídeo e montagem. Ver [padrão de interface MultiCNC](09-padrao-layout-multicnc.md).
+
+## Escopo e tecnologias definidos
+O desenvolvimento dos sete aplicativos será em **Lazarus / Free Pascal (Object Pascal, LCL)**, seguindo o **layout do MultiCNC/MultiSuite** e reutilizando o repositório [CHATGPT](https://github.com/marcelomaurin/CHATGPT) como biblioteca de ferramentaria compartilhada, mediante verificação de APIs e compatibilidade.
+
+**[Escopo consolidado do projeto](10-escopo-consolidado.md)** — responsabilidades, regras transversais, arquitetura inicial proposta, entregas, critérios de aceite e pendências técnicas.
