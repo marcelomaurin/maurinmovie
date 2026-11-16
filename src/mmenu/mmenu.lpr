@@ -5,11 +5,8 @@ program mmenu;
 uses
   Interfaces, Forms, ummenumain;
 
-{$R *.res}
-
 begin
-  RequireDerivedFormResource := True;
-  Application.Scaled := True;
+  RequireDerivedFormResource := False;
   Application.Initialize;
   Application.CreateForm(TMmenuMainForm, mmenuMainForm);
   Application.Run;
