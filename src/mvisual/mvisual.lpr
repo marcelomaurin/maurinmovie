@@ -5,10 +5,8 @@ program mvisual;
 uses
   Interfaces, Forms, umvisualmain;
 
-{$R *.res}
-
 begin
-  RequireDerivedFormResource := True;
+  RequireDerivedFormResource := False;
   Application.Scaled := True;
   Application.Initialize;
   Application.CreateForm(TMvisualMainForm, mvisualMainForm);

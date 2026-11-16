@@ -15,12 +15,15 @@
     <BuildModes Count="1">
       <Item1 Name="Default" Default="True"/>
     </BuildModes>
-    <RequiredPackages Count="1">
+    <RequiredPackages Count="2">
       <Item1>
         <PackageName Value="LCL"/>
       </Item1>
+      <Item2>
+        <PackageName Value="openai_core"/>
+      </Item2>
     </RequiredPackages>
-    <Units Count="2">
+    <Units Count="5">
       <Unit0>
         <Filename Value="msound.lpr"/>
         <IsPartOfProject Value="True"/>
@@ -31,6 +34,18 @@
         <ComponentName Value="msoundMainForm"/>
         <ResourceBaseClass Value="Form"/>
       </Unit1>
+      <Unit2>
+        <Filename Value="../common/ummpprotocol.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit2>
+      <Unit3>
+        <Filename Value="../common/ummpappbase.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit3>
+      <Unit4>
+        <Filename Value="../common/ummpaibridge.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit4>
     </Units>
   </ProjectOptions>
   <CompilerOptions>
@@ -40,13 +55,18 @@
       <Filename Value="../../bin/msound"/>
     </Target>
     <SearchPaths>
-      <OtherUnitFiles Value="../common"/>
+      <OtherUnitFiles Value="../common;../../../CHATGPT/pacote/AI Voice"/>
       <UnitOutputDirectory Value="../../build/msound"/>
     </SearchPaths>
     <Linking>
       <Debugging>
         <GenerateDebugInfo Value="True"/>
       </Debugging>
+      <Options>
+        <Win32>
+          <GraphicApplication Value="True"/>
+        </Win32>
+      </Options>
     </Linking>
   </CompilerOptions>
 </CONFIG>

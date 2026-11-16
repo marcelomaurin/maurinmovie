@@ -5,10 +5,8 @@ program mscript;
 uses
   Interfaces, Forms, umscriptmain;
 
-{$R *.res}
-
 begin
-  RequireDerivedFormResource := True;
+  RequireDerivedFormResource := False;
   Application.Scaled := True;
   Application.Initialize;
   Application.CreateForm(TMscriptMainForm, mscriptMainForm);

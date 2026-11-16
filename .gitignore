@@ -1,5 +1,7 @@
 bin/
 build/
+dist/
+install/setup_maurinmovie_[0-9][0-9][0-9].exe
 *.res
 *.lps
 *.compiled
