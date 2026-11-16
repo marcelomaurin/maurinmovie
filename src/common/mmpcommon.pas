@@ -44,7 +44,7 @@ type
   end;
 
 const
-  MAURINMOVIE_VERSION = '0.2.0';
+  MAURINMOVIE_VERSION = '0.3.0';
 
   MMP_SCHEMA_PRODUCTION = 'mmp.production/1';
   MMP_SCHEMA_PROJECT    = 'mmp.project/1';

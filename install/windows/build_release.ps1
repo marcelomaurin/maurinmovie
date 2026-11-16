@@ -1,11 +1,11 @@
 param(
   [string]$Version = $env:VERSION,
-  [ValidatePattern('^\d{3}$')][string]$SetupSeq = '002',
+  [ValidatePattern('^\d{3}$')][string]$SetupSeq = '003',
   [switch]$AllowDirty,
   [switch]$SkipBinUpdate
 )
 $ErrorActionPreference = 'Stop'
-if (-not $Version) { $Version = '0.2.0' }
+if (-not $Version) { $Version = '0.3.0' }
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 Set-Location -LiteralPath $root
 $dist = Join-Path $root 'dist'
@@ -44,7 +44,7 @@ if (Test-Path -LiteralPath $app) { Remove-Item -LiteralPath $app -Recurse -Force
 New-Item -ItemType Directory -Force -Path $app, $bin, $installRoot, (Join-Path $dist 'build-logs'), (Join-Path $root 'build\tests') | Out-Null
 
 # Compila pacotes CHATGPT utilizados pelos aplicativos
-foreach ($pkg in @('openai_core.lpk', 'openai_image.lpk', 'openai_video.lpk')) {
+foreach ($pkg in @('openai_core.lpk', 'openai_image.lpk', 'openai_voice.lpk', 'openai_video.lpk')) {
   $pkgPath = Join-Path $chatgpt ("pacote\packages\$pkg")
   Write-Host "Verificando pacote CHATGPT: $pkg..."
   & $env:LAZBUILD '--cpu=x86_64' '--os=win64' '--ws=win32' $pkgPath *> (Join-Path $dist ("build-logs\$pkg.log"))
@@ -81,7 +81,7 @@ foreach ($target in $targets) {
 
 # Executa testes automatizados do protocolo MMP v1
 Write-Host "Compilando e executando testes MMP v1..."
-& $env:FPC '-MObjFPC' '-Scghi' '-O1' "-Fu$root\src\common" "-FU$root\build\tests" "-o$root\build\tests\test_mmp_protocol.exe" "$root\tests\test_mmp_protocol.pas"
+& $env:FPC '-MObjFPC' '-Scghi' '-O1' "-Fu$root\src\common" "-Fu$chatgpt\pacote\packages\lib\x86_64-win64" '-FuC:\lazarus\components\lazutils\lib\x86_64-win64' "-FU$root\build\tests" "-FE$root\build\tests" "$root\tests\test_mmp_protocol.pas"
 if ($LASTEXITCODE -ne 0) { throw 'Falha ao compilar tests\test_mmp_protocol.pas.' }
 & "$root\build\tests\test_mmp_protocol.exe"
 if ($LASTEXITCODE -ne 0) { throw 'Testes MMP v1 falharam.' }

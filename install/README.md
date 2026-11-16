@@ -10,11 +10,11 @@ Baseado na estrutura do instalador do **MultiCNC / MultiSuite** (`multicnc/insta
 
 ## Como gerar o instalador
 ```powershell
-install\windows\build_release.bat -Version 0.2.0 -SetupSeq 002 -AllowDirty
+install\windows\build_release.bat -Version 0.3.0 -SetupSeq 003 -AllowDirty
 ```
 
 O script:
-1. Verifica/compila os pacotes `CHATGPT` (`openai_core.lpk`, `openai_image.lpk`, `openai_video.lpk`).
+1. Verifica/compila os pacotes `CHATGPT` (`openai_core.lpk`, `openai_image.lpk`, `openai_voice.lpk`, `openai_video.lpk`).
 2. Compila os 7 aplicativos em `bin\`: `mmenu.exe`, `mscript.exe`, `mvisual.exe`, `mboard.exe`, `msound.exe`, `mscene.exe`, `mcut.exe`.
 3. Executa a suíte de testes `tests\test_mmp_protocol.pas`.
 4. Copia as DLLs OpenSSL Win64 (`libssl-1_1-x64.dll`, `libcrypto-1_1-x64.dll`, `libssl-3-x64.dll`, `libcrypto-3-x64.dll`, `legacy.dll`) para `bin\` e para o staging `dist\app\`.
