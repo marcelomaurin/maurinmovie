@@ -47,3 +47,7 @@ Definir convenção final de extensão dos projetos, motor de geração de quadr
 ## Software 4 e Software 5
 - [Especificação e critérios do Software 4](06-identidade-sonora.md): duas IAs, quatro etapas, vozes/efeitos isolados, ensaio sonoro sincronizado e salvamento.
 - [Especificação e critérios do Software 5](07-geracao-e-montagem-de-cenas.md): quatro etapas, geração sequencial por cena/sub-bloco, integração, validação de ligação anterior/atual/próxima e projeto versionado por cena.
+
+
+## Software 6 — Montagem final
+- [Critérios detalhados do Software 6](08-montagem-final.md): ordem narrativa, player e cortes, transições, sessões de público, avaliação por cena, análise de resultados, reavaliação por fragmento e renderização final versionada.
