@@ -2,23 +2,33 @@ unit ummpaibridge;
 
 { Ponte de IA centralizada (specs 00-comum §9 e §12):
   - Le configuracoes gravadas pelo MMenu (TMMSettings) e segredos de secrets.ini/env.
-  - Suporta adaptador 'mock' (simulado deterministico) e 'chatgpt-lib' / 'openai-compatible'
-    via pacote openai_core (TAIUnifiedLLM).
-  - Apps 1..6 nunca gravam configuracoes; 'Alterar no MMenu...' abre o MMenu na aba certa. }
+  - Integra os pacotes da suite CHATGPT:
+    * openai_core  (TAIUnifiedLLM)
+    * openai_image (TAIUnifiedImage)
+    * openai_voice (TAIUnifiedSound / aisoundruntime)
+    * openai_video (TAIUnifiedVideo)
+  - Suporta servidores abertos locais e runtimes CPU sem GPU. }
 
 {$mode objfpc}{$H+}
 
 interface
 
 uses
-  Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
-  Process, aiunifiedllm, aillmproviders, airuntimepaths,
+  Classes, SysUtils, Math, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
+  Process,
+  aiunifiedllm, aillmproviders, airuntimepaths,
+  aiunifiedimage, aiimageproviders,
+  aiunifiedsound, aisoundproviders, aisoundruntime,
+  aiunifiedvideo, aivideoproviders,
   mmpcommon, mmpsettings;
 
 type
   TMmpAiBridge = class
   private
     FLLM: TAIUnifiedLLM;
+    FImage: TAIUnifiedImage;
+    FSound: TAIUnifiedSound;
+    FVideo: TAIUnifiedVideo;
     FSettings: TMMSettings;
     FAppEnum: TMMApp;
     FAppDisplayName: string;
@@ -36,8 +46,33 @@ type
     function ProviderDisplayName: string;
     function SettingsSha256: string;
     function CheckOpenSSL(out InfoText: string): Boolean;
+
+    // Texto / Roteiro / Planejamento
     function Ask(const SystemPrompt, UserPrompt: string;
       out ResponseText, ErrorMsg: string): Boolean;
+
+    // Imagem / Storyboard / Biblioteca Visual
+    function GenerateImage(const Prompt, OutputFile: string;
+      out ErrorMsg: string; const NegativePrompt: string = '';
+      WidthPx: Integer = 0; HeightPx: Integer = 0): Boolean;
+
+    // Som: Fala (TTS), Clonagem de Voz e Efeitos Sonoros (SFX) / Trilha
+    function SynthesizeSpeech(const Text, OutputFile: string;
+      out ErrorMsg: string; const VoiceId: string = '';
+      const RefAudioFile: string = ''; ConsentConfirmed: Boolean = False;
+      const VoiceOwner: string = ''): Boolean;
+    function GenerateSFX(const Prompt, OutputFile: string;
+      out ErrorMsg: string; DurationSec: Double = 4.0): Boolean;
+    procedure DiscoverLocalAudioServers(AList: TStrings);
+
+    // Video / Montagem de Cenas (inclui FFmpeg CPU sem GPU)
+    function GenerateVideo(const Prompt, OutputFile: string;
+      out ErrorMsg: string; const SourceImage: string = '';
+      const AudioFile: string = ''; DurationSec: Integer = 5): Boolean;
+
+    // Teste de conectividade por categoria ('text','image','voice','sfx','video')
+    function TestProviderByKind(const Kind: string;
+      out InfoMsg, ErrorMsg: string): Boolean;
 
     // Abre o MMenu na aba deste aplicativo (00-comum §12.2)
     function OpenMMenuSettings(AOwner: TComponent): Boolean;
@@ -45,6 +80,9 @@ type
 
     property Settings: TMMSettings read FSettings;
     property LLM: TAIUnifiedLLM read FLLM;
+    property ImageAI: TAIUnifiedImage read FImage;
+    property SoundAI: TAIUnifiedSound read FSound;
+    property VideoAI: TAIUnifiedVideo read FVideo;
   end;
 
 implementation
@@ -73,6 +111,61 @@ begin
     Result := llmOpenAI;
 end;
 
+function MapAdapterToImageKind(const Adapter, BaseUrl: string): TAIImageProviderKind;
+var
+  S: string;
+begin
+  S := LowerCase(Trim(Adapter) + ' ' + Trim(BaseUrl));
+  if Pos('comfy', S) > 0 then Result := imgComfyUI
+  else if (Pos('automatic', S) > 0) or (Pos('7860', S) > 0) or (Pos('sdapi', S) > 0) then Result := imgAutomatic1111
+  else if Pos('stability', S) > 0 then Result := imgStability
+  else if (Pos('bfl', S) > 0) or (Pos('flux', S) > 0) then Result := imgBlackForestLabs
+  else if (Pos('gemini', S) > 0) or (Pos('imagen', S) > 0) then Result := imgGemini
+  else if Pos('huggingface', S) > 0 then Result := imgHuggingFace
+  else if Pos('api.openai.com', S) > 0 then Result := imgOpenAI
+  else Result := imgOpenAICompatible;
+end;
+
+function MapAdapterToSoundKind(const Adapter, BaseUrl: string): TAISoundProviderKind;
+var
+  S: string;
+begin
+  S := LowerCase(Trim(Adapter) + ' ' + Trim(BaseUrl));
+  if (Pos('kokoro', S) > 0) or (Pos('8880', S) > 0) then Result := sndKokoroFastAPI
+  else if (Pos('piper', S) > 0) or (Pos('5000', S) > 0) then Result := sndPiperHTTP
+  else if Pos('openedai', S) > 0 then Result := sndOpenedAISpeech
+  else if (Pos('coqui', S) > 0) or (Pos('xtts', S) > 0) or (Pos('8020', S) > 0) then Result := sndCoquiXTTS
+  else if (Pos('alltalk', S) > 0) or (Pos('7851', S) > 0) then Result := sndAllTalkTTS
+  else if (Pos('openvoice', S) > 0) or (Pos('8030', S) > 0) then Result := sndOpenVoice
+  else if Pos('f5', S) > 0 then Result := sndF5TTSServer
+  else if (Pos('chatterbox', S) > 0) or (Pos('fish', S) > 0) then Result := sndChatterbox
+  else if (Pos('audiocraft', S) > 0) or (Pos('audiogen', S) > 0) or (Pos('musicgen', S) > 0) or (Pos('bark', S) > 0) or (Pos('8040', S) > 0) then Result := sndBarkAudioGen
+  else if Pos('eleven', S) > 0 then Result := sndElevenLabs
+  else if Pos('gemini', S) > 0 then Result := sndGeminiTTS
+  else if (Pos('local-cpu', S) > 0) or (Pos('aisound_cpu_worker', S) > 0) then Result := sndLocalCPURuntime
+  else if (Pos('system', S) > 0) or (Pos('sapi', S) > 0) then Result := sndSystemOS
+  else if Pos('api.openai.com', S) > 0 then Result := sndOpenAI
+  else if Trim(BaseUrl) = '' then Result := sndLocalCPURuntime
+  else Result := sndOpenAICompatible;
+end;
+
+function MapAdapterToVideoKind(const Adapter, BaseUrl: string): TAIVideoProviderKind;
+var
+  S: string;
+begin
+  S := LowerCase(Trim(Adapter) + ' ' + Trim(BaseUrl));
+  if (Pos('ffmpeg', S) > 0) or (Pos('local://', S) > 0) or (Trim(BaseUrl) = '') then
+    Result := vidLocalFFmpegCPU
+  else if (Pos('veo', S) > 0) or (Pos('generativelanguage', S) > 0) then
+    Result := vidGoogleVeo
+  else if Pos('runway', S) > 0 then Result := vidRunway
+  else if Pos('kling', S) > 0 then Result := vidKling
+  else if Pos('luma', S) > 0 then Result := vidLuma
+  else if Pos('comfy', S) > 0 then Result := vidComfyUIVideo
+  else if (Pos('sora', S) > 0) or (Pos('api.openai.com', S) > 0) then Result := vidOpenAISora
+  else Result := vidOpenAICompatible;
+end;
+
 constructor TMmpAiBridge.Create(const AppDisplayName: string);
 var
   A: TMMApp;
@@ -88,15 +181,31 @@ begin
     end;
 
   FSettings := TMMSettings.Create;
+
   FLLM := TAIUnifiedLLM.Create(nil);
   FLLM.ProviderKind := llmOpenAI;
   FLLM.Model := 'mock-script-v1';
   FLLM.MaxTokens := 2000;
   FLLM.Temperature := 0.7;
+
+  FImage := TAIUnifiedImage.Create(nil);
+  FImage.ProviderKind := imgOpenAICompatible;
+  FImage.UseGPU := False;
+
+  FSound := TAIUnifiedSound.Create(nil);
+  FSound.ProviderKind := sndLocalCPURuntime;
+  FSound.UseGPU := False;
+
+  FVideo := TAIUnifiedVideo.Create(nil);
+  FVideo.ProviderKind := vidLocalFFmpegCPU;
+  FVideo.UseGPU := False;
 end;
 
 destructor TMmpAiBridge.Destroy;
 begin
+  FVideo.Free;
+  FSound.Free;
+  FImage.Free;
   FLLM.Free;
   FSettings.Free;
   inherited Destroy;
@@ -244,6 +353,265 @@ begin
   end
   else
     ErrorMsg := FLLM.LastError;
+end;
+
+function TMmpAiBridge.GenerateImage(const Prompt, OutputFile: string;
+  out ErrorMsg: string; const NegativePrompt: string; WidthPx,
+  HeightPx: Integer): Boolean;
+var
+  Prov: TMmpAiProviderCfg;
+begin
+  Result := False;
+  ErrorMsg := '';
+  if FProductionRoot <> '' then FSettings.ReloadIfChanged(FAppEnum);
+  FSettings.ResolveProvider('image', FAppEnum, Prov);
+  if not Prov.Enabled then
+  begin
+    ErrorMsg := 'Provedor de imagem "' + Prov.Id + '" desabilitado.';
+    Exit;
+  end;
+  if SameText(Prov.Adapter, 'mock') or FSettings.OfflineMode then
+  begin
+    ErrorMsg := 'Modo simulado/offline ativo para imagem.';
+    Exit;
+  end;
+
+  FImage.ProviderKind := MapAdapterToImageKind(Prov.Adapter, Prov.BaseUrl);
+  FImage.Endpoint := Prov.BaseUrl;
+  FImage.Model := Prov.Model;
+  FImage.Token := FSettings.ResolveSecret(Prov.SecretRef);
+  FImage.NegativePrompt := NegativePrompt;
+  if WidthPx > 0 then FImage.Width := WidthPx else if Prov.Width > 0 then FImage.Width := Prov.Width else FImage.Width := 1024;
+  if HeightPx > 0 then FImage.Height := HeightPx else if Prov.Height > 0 then FImage.Height := Prov.Height else FImage.Height := 1024;
+  FImage.Timeout := Max(60000, Prov.TimeoutSec * 1000);
+
+  Result := FImage.Generate(Prompt, OutputFile);
+  if not Result then
+    ErrorMsg := FImage.LastError;
+end;
+
+function TMmpAiBridge.SynthesizeSpeech(const Text, OutputFile: string;
+  out ErrorMsg: string; const VoiceId, RefAudioFile: string;
+  ConsentConfirmed: Boolean; const VoiceOwner: string): Boolean;
+var
+  Prov: TMmpAiProviderCfg;
+begin
+  Result := False;
+  ErrorMsg := '';
+  if FProductionRoot <> '' then FSettings.ReloadIfChanged(FAppEnum);
+  FSettings.ResolveProvider('voice', FAppEnum, Prov);
+  if not Prov.Enabled then
+  begin
+    ErrorMsg := 'Provedor de voz "' + Prov.Id + '" desabilitado.';
+    Exit;
+  end;
+
+  if SameText(Prov.Adapter, 'mock') then
+  begin
+    FSound.ProviderKind := sndLocalCPURuntime;
+    FSound.TaskKind := stkSpeech;
+  end
+  else
+  begin
+    FSound.ProviderKind := MapAdapterToSoundKind(Prov.Adapter, Prov.BaseUrl);
+    if (RefAudioFile <> '') and FileExists(RefAudioFile) then
+      FSound.TaskKind := stkVoiceClone
+    else
+      FSound.TaskKind := stkSpeech;
+  end;
+
+  FSound.Endpoint := Prov.BaseUrl;
+  FSound.Model := Prov.Model;
+  FSound.Voice := VoiceId;
+  FSound.Language := FSettings.ProdLanguage;
+  if FSound.Language = '' then FSound.Language := 'pt';
+  FSound.Token := FSettings.ResolveSecret(Prov.SecretRef);
+  FSound.ReferenceAudio := RefAudioFile;
+  FSound.ConsentConfirmed := ConsentConfirmed;
+  FSound.VoiceOwner := VoiceOwner;
+  FSound.RequireConsent := (FSound.TaskKind = stkVoiceClone);
+  FSound.Timeout := Max(60000, Prov.TimeoutSec * 1000);
+
+  Result := FSound.SynthesizeToFile(Text, OutputFile);
+  if not Result then
+    ErrorMsg := FSound.LastError;
+end;
+
+function TMmpAiBridge.GenerateSFX(const Prompt, OutputFile: string;
+  out ErrorMsg: string; DurationSec: Double): Boolean;
+var
+  Prov: TMmpAiProviderCfg;
+begin
+  Result := False;
+  ErrorMsg := '';
+  if FProductionRoot <> '' then FSettings.ReloadIfChanged(FAppEnum);
+  FSettings.ResolveProvider('sfx', FAppEnum, Prov);
+  if not Prov.Enabled then
+  begin
+    ErrorMsg := 'Provedor de efeitos sonoros "' + Prov.Id + '" desabilitado.';
+    Exit;
+  end;
+
+  if SameText(Prov.Adapter, 'mock') or FSettings.OfflineMode then
+    FSound.ProviderKind := sndLocalCPURuntime
+  else
+    FSound.ProviderKind := MapAdapterToSoundKind(Prov.Adapter, Prov.BaseUrl);
+
+  FSound.Endpoint := Prov.BaseUrl;
+  FSound.Model := Prov.Model;
+  FSound.Token := FSettings.ResolveSecret(Prov.SecretRef);
+  FSound.Timeout := Max(60000, Prov.TimeoutSec * 1000);
+
+  Result := FSound.GenerateSFX(Prompt, OutputFile, DurationSec);
+  if not Result then
+    ErrorMsg := FSound.LastError;
+end;
+
+procedure TMmpAiBridge.DiscoverLocalAudioServers(AList: TStrings);
+begin
+  DiscoverLocalSoundServers(AList);
+end;
+
+function TMmpAiBridge.GenerateVideo(const Prompt, OutputFile: string;
+  out ErrorMsg: string; const SourceImage, AudioFile: string;
+  DurationSec: Integer): Boolean;
+var
+  Prov: TMmpAiProviderCfg;
+begin
+  Result := False;
+  ErrorMsg := '';
+  if FProductionRoot <> '' then FSettings.ReloadIfChanged(FAppEnum);
+  FSettings.ResolveProvider('video', FAppEnum, Prov);
+  if not Prov.Enabled then
+  begin
+    ErrorMsg := 'Provedor de video "' + Prov.Id + '" desabilitado.';
+    Exit;
+  end;
+
+  if SameText(Prov.Adapter, 'mock') or FSettings.OfflineMode then
+    FVideo.ProviderKind := vidLocalFFmpegCPU
+  else
+    FVideo.ProviderKind := MapAdapterToVideoKind(Prov.Adapter, Prov.BaseUrl);
+
+  FVideo.Endpoint := Prov.BaseUrl;
+  FVideo.Model := Prov.Model;
+  FVideo.Token := FSettings.ResolveSecret(Prov.SecretRef);
+  FVideo.FfmpegPath := FSettings.ToolFfmpeg;
+  FVideo.SourceImageFile := SourceImage;
+  FVideo.AudioFile := AudioFile;
+  if Prov.Width > 0 then FVideo.Width := Prov.Width else FVideo.Width := 1280;
+  if Prov.Height > 0 then FVideo.Height := Prov.Height else FVideo.Height := 720;
+  FVideo.DurationSec := DurationSec;
+  FVideo.Timeout := Max(120000, Prov.TimeoutSec * 1000);
+
+  Result := FVideo.GenerateTextToVideo(Prompt, OutputFile);
+  if not Result then
+    ErrorMsg := FVideo.LastError;
+end;
+
+function TMmpAiBridge.TestProviderByKind(const Kind: string;
+  out InfoMsg, ErrorMsg: string): Boolean;
+var
+  K: string;
+  Prov: TMmpAiProviderCfg;
+  Resp, OutTmp, PyOut, PyErr: string;
+  T0: QWord;
+begin
+  Result := False;
+  InfoMsg := '';
+  ErrorMsg := '';
+  K := LowerCase(Trim(Kind));
+  FSettings.ResolveProvider(K, FAppEnum, Prov);
+  T0 := GetTickCount64;
+
+  if SameText(Prov.Adapter, 'mock') then
+  begin
+    InfoMsg := 'OK (simulado) - latencia ' + IntToStr(GetTickCount64 - T0) + ' ms';
+    Exit(True);
+  end;
+
+  if (K = 'text') or (K = 'vision') or (K = 'asr') then
+  begin
+    if Ask('Responda apenas OK.', 'Teste de conectividade.', Resp, ErrorMsg) then
+    begin
+      InfoMsg := 'OK - latencia ' + IntToStr(GetTickCount64 - T0) + ' ms';
+      Result := True;
+    end;
+    Exit;
+  end;
+
+  if (K = 'voice') or (K = 'sfx') then
+  begin
+    if SameText(Prov.Adapter, 'local-cpu-runtime') or (Pos('local://', LowerCase(Prov.BaseUrl)) = 1) then
+    begin
+      if CheckAISoundCpuRuntimeHealth('', '', PyOut, PyErr) then
+      begin
+        InfoMsg := 'OK CPU Runtime: ' + Copy(PyOut, 1, 140);
+        Exit(True);
+      end
+      else
+      begin
+        ErrorMsg := PyErr;
+        Exit(False);
+      end;
+    end;
+    if Pos('http', LowerCase(Prov.BaseUrl)) = 1 then
+    begin
+      if ProbeSoundHttpServer(Prov.BaseUrl, 2000) then
+      begin
+        InfoMsg := 'Servidor de som acessivel (' + IntToStr(GetTickCount64 - T0) + ' ms)';
+        Exit(True);
+      end
+      else
+      begin
+        ErrorMsg := 'Servidor nao respondeu em ' + Prov.BaseUrl;
+        Exit(False);
+      end;
+    end;
+    OutTmp := IncludeTrailingPathDelimiter(GetTempDir) + 'mmp_sound_test.wav';
+    if K = 'sfx' then
+      Result := GenerateSFX('teste curto', OutTmp, ErrorMsg, 1.0)
+    else
+      Result := SynthesizeSpeech('Teste de voz MaurinMovie.', OutTmp, ErrorMsg);
+    if Result then
+      InfoMsg := 'OK audio gerado (' + IntToStr(GetTickCount64 - T0) + ' ms)';
+    Exit;
+  end;
+
+  if K = 'image' then
+  begin
+    if Pos('http', LowerCase(Prov.BaseUrl)) = 1 then
+    begin
+      if ProbeSoundHttpServer(Prov.BaseUrl, 2500) then
+      begin
+        InfoMsg := 'Endpoint de imagem acessivel (' + IntToStr(GetTickCount64 - T0) + ' ms)';
+        Exit(True);
+      end;
+    end;
+    ErrorMsg := 'Configure URL/chave valida para testar imagem (' + Prov.BaseUrl + ').';
+    Exit(False);
+  end;
+
+  if K = 'video' then
+  begin
+    if SameText(Prov.Adapter, 'ffmpeg-cpu') or (Pos('local://', LowerCase(Prov.BaseUrl)) = 1) then
+    begin
+      OutTmp := IncludeTrailingPathDelimiter(GetTempDir) + 'mmp_vid_test.mp4';
+      if GenerateVideo('Teste CPU', OutTmp, ErrorMsg, '', '', 2) then
+      begin
+        InfoMsg := 'OK FFmpeg CPU (' + IntToStr(GetTickCount64 - T0) + ' ms)';
+        DeleteFile(OutTmp);
+        Exit(True);
+      end;
+      Exit(False);
+    end;
+    if ProbeSoundHttpServer(Prov.BaseUrl, 2500) then
+    begin
+      InfoMsg := 'Endpoint de video acessivel (' + IntToStr(GetTickCount64 - T0) + ' ms)';
+      Exit(True);
+    end;
+    ErrorMsg := 'Servidor de video indisponivel em ' + Prov.BaseUrl;
+  end;
 end;
 
 function TMmpAiBridge.FindMMenuExecutable: string;

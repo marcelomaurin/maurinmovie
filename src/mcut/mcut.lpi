@@ -15,7 +15,7 @@
     <BuildModes Count="1">
       <Item1 Name="Default" Default="True"/>
     </BuildModes>
-    <RequiredPackages Count="3">
+    <RequiredPackages Count="5">
       <Item1>
         <PackageName Value="LCL"/>
       </Item1>
@@ -25,6 +25,12 @@
       <Item3>
         <PackageName Value="openai_video"/>
       </Item3>
+      <Item4>
+        <PackageName Value="openai_image"/>
+      </Item4>
+      <Item5>
+        <PackageName Value="openai_voice"/>
+      </Item5>
     </RequiredPackages>
     <Units Count="5">
       <Unit0>

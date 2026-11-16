@@ -83,7 +83,7 @@ implementation
 
 constructor TMvisualMainForm.Create(TheOwner: TComponent);
 var
-  ProdRoot, ProjId, RevId: string;
+  ProdRoot, ProjId, RevId, MMenuVer, ProdId: string;
 begin
   inherited CreateNew(TheOwner, 1);
   Randomize;
@@ -98,8 +98,9 @@ begin
   FSelectedIdx := -1;
   BuildUI;
 
-  ParseAppLaunchParams(ProdRoot, ProjId, RevId);
-  LogMsg('MVisual v' + MMP_EXECUTABLE_VERSION + ' iniciado (openai_core + openai_image).');
+  ParseAppLaunchContext(ProdRoot, ProjId, RevId, MMenuVer, ProdId);
+  LogMsg('MVisual v' + MMP_EXECUTABLE_VERSION + ' iniciado (openai_core + openai_image) | MMenu v' +
+    MMenuVer + ' | Projeto: ' + ProjId);
   if ProdRoot <> '' then
     LoadProductionAndRevision(ProdRoot, ProjId, RevId);
 end;
@@ -564,10 +565,16 @@ begin
 
     if FEntities[I].FrontRelUri = '' then
     begin
-      SavePlaceholderBitmap(Prefix + '_front.bmp',
-        FEntities[I].Name + ' [FRONTAL]', FEntities[I].Description,
-        'ID: ' + FEntities[I].EntityId + ' | Tipo: ' + FEntities[I].Kind, $00403830);
-      FEntities[I].FrontRelUri := RelBase + '_front.bmp';
+      if not FAi.GenerateImage(FEntities[I].Kind + ' "' + FEntities[I].Name + '": ' +
+        FEntities[I].Description + ' (vista frontal, cinema)', Prefix + '_front.png', Err) then
+      begin
+        SavePlaceholderBitmap(Prefix + '_front.bmp',
+          FEntities[I].Name + ' [FRONTAL]', FEntities[I].Description,
+          'ID: ' + FEntities[I].EntityId + ' | Tipo: ' + FEntities[I].Kind, $00403830);
+        FEntities[I].FrontRelUri := RelBase + '_front.bmp';
+      end
+      else
+        FEntities[I].FrontRelUri := RelBase + '_front.png';
     end;
     if FEntities[I].BackRelUri = '' then
     begin

@@ -5,7 +5,7 @@ unit ummpappbase;
 interface
 
 uses
-  Classes, SysUtils, Graphics, fpjson, jsonparser,
+  Classes, SysUtils, Graphics, Forms, LCLType, fpjson, jsonparser,
   mmpcommon, ummpsha256, ummpprotocol;
 
 type
@@ -20,7 +20,13 @@ type
   end;
 
 function HandleStandardCliEarlyExit(App: TMMApp): Boolean;
+function IsVersionCompatibleWithMMenu(const LauncherVer: string): Boolean;
+function ValidateMMenuLaunchContext(App: TMMApp; out Args: TMMLaunchArgs;
+  out ErrMsg: string): Boolean;
+function RequireMMenuLaunch(App: TMMApp; out Args: TMMLaunchArgs): Boolean;
 procedure ParseAppLaunchParams(out ProductionRoot, ProjectId, RevisionId: string);
+procedure ParseAppLaunchContext(out ProductionRoot, ProjectId, RevisionId,
+  MMenuVersion, ProductionId: string);
 
 function ResolveAppProject(const ProdRoot: string; AppIdx: Integer;
   const PreferredProjId, PreferredRevId: string;
@@ -79,6 +85,85 @@ begin
   end;
 end;
 
+function IsVersionCompatibleWithMMenu(const LauncherVer: string): Boolean;
+var
+  P1, P2: TStringArray;
+begin
+  Result := False;
+  if Trim(LauncherVer) = '' then Exit;
+  P1 := Trim(LauncherVer).Split(['.']);
+  P2 := MAURINMOVIE_VERSION.Split(['.']);
+  if (Length(P1) < 2) or (Length(P2) < 2) then Exit;
+  Result := (P1[0] = P2[0]) and (P1[1] = P2[1]);
+end;
+
+function ValidateMMenuLaunchContext(App: TMMApp; out Args: TMMLaunchArgs;
+  out ErrMsg: string): Boolean;
+begin
+  Result := False;
+  ErrMsg := '';
+  Args := ParseLaunchArgs;
+  if App = maMMenu then
+    Exit(True);
+
+  if not SameText(Trim(Args.Launcher), 'mmenu') then
+  begin
+    ErrMsg := MMAppNames[App] + ' nao pode ser executado sozinho.' + LineEnding + LineEnding +
+      'Inicie este aplicativo atraves do MMenu (Portal MaurinMovie), ' +
+      'que fornece o contexto da producao, projeto, revisao e versao.';
+    Exit;
+  end;
+
+  if Trim(Args.MMenuVersion) = '' then
+  begin
+    ErrMsg := 'Contexto invalido: versao do MMenu nao informada (--mmenu-version).';
+    Exit;
+  end;
+
+  if not IsVersionCompatibleWithMMenu(Args.MMenuVersion) then
+  begin
+    ErrMsg := Format('Versao incompativel: MMenu v%s nao corresponde a %s v%s.',
+      [Args.MMenuVersion, MMAppNames[App], MAURINMOVIE_VERSION]);
+    Exit;
+  end;
+
+  if (Trim(Args.Production) = '') or
+     (not FileExists(IncludeTrailingPathDelimiter(Args.Production) + MMP_PRODUCTION_FILE)) then
+  begin
+    ErrMsg := 'Contexto da producao nao encontrado. Abra a producao no MMenu antes de iniciar ' +
+      MMAppNames[App] + '.';
+    Exit;
+  end;
+
+  if (not Args.Headless) and (Trim(Args.ProjectId) = '') then
+  begin
+    ErrMsg := 'Contexto incompleto: o MMenu nao informou qual projeto abrir (--project-id).';
+    Exit;
+  end;
+
+  Result := True;
+end;
+
+function RequireMMenuLaunch(App: TMMApp; out Args: TMMLaunchArgs): Boolean;
+var
+  ErrMsg: string;
+begin
+  Result := ValidateMMenuLaunchContext(App, Args, ErrMsg);
+  if Result then Exit;
+
+  if Args.Headless then
+    WriteCliLine('[ERRO] ' + StringReplace(ErrMsg, LineEnding, ' ', [rfReplaceAll]))
+  else
+  begin
+    Application.Scaled := True;
+    Application.Initialize;
+    Application.MessageBox(
+      PChar(ErrMsg),
+      PChar(MMAppNames[App] + ' - Execucao Restrita ao MMenu'),
+      MB_OK or MB_ICONWARNING);
+  end;
+end;
+
 procedure ParseAppLaunchParams(out ProductionRoot, ProjectId, RevisionId: string);
 var
   Args: TMMLaunchArgs;
@@ -87,6 +172,19 @@ begin
   ProductionRoot := Args.Production;
   ProjectId := Args.ProjectId;
   RevisionId := Args.Revision;
+end;
+
+procedure ParseAppLaunchContext(out ProductionRoot, ProjectId, RevisionId,
+  MMenuVersion, ProductionId: string);
+var
+  Args: TMMLaunchArgs;
+begin
+  Args := ParseLaunchArgs;
+  ProductionRoot := Args.Production;
+  ProjectId := Args.ProjectId;
+  RevisionId := Args.Revision;
+  MMenuVersion := Args.MMenuVersion;
+  ProductionId := Args.ProductionId;
 end;
 
 function FindProjectByApp(const Prod: TMmpProduction; AppIdx: Integer;

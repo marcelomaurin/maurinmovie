@@ -15,10 +15,13 @@ type
   { Argumentos padronizados do protocolo MMP v1 }
   TMMLaunchArgs = record
     Production: string;
+    ProductionId: string;
     ProjectId: string;
     Revision: string;
     SceneId: string;
     FocusId: string;
+    Launcher: string;
+    MMenuVersion: string;
     NewProject: Boolean;
     Headless: Boolean;
     EventFile: string;
@@ -136,6 +139,8 @@ begin
 
     if Key = '--production' then
       Result.Production := TakeValue(I)
+    else if Key = '--production-id' then
+      Result.ProductionId := TakeValue(I)
     else if Key = '--project-id' then
       Result.ProjectId := TakeValue(I)
     else if Key = '--revision' then
@@ -144,6 +149,10 @@ begin
       Result.SceneId := TakeValue(I)
     else if Key = '--focus' then
       Result.FocusId := TakeValue(I)
+    else if Key = '--launcher' then
+      Result.Launcher := TakeValue(I)
+    else if Key = '--mmenu-version' then
+      Result.MMenuVersion := TakeValue(I)
     else if Key = '--event' then
       Result.EventFile := TakeValue(I)
     else if Key = '--resume-transaction' then
@@ -269,9 +278,12 @@ procedure PrintCliHelp(const AppName: string);
 begin
   WriteCliLine(AppName + ' ' + MAURINMOVIE_VERSION + ' - MaurinMovie (MMP v1)');
   WriteCliLine('Uso:');
-  WriteCliLine('  ' + LowerCase(AppName) + ' [--production <pasta>] [--project-id <id>] [--revision <rNNNN>]');
-  WriteCliLine('  [--scene-id <id>] [--focus <id>] [--new] [--headless --event <arquivo>]');
+  WriteCliLine('  ' + LowerCase(AppName) + ' --launcher mmenu --mmenu-version ' + MAURINMOVIE_VERSION +
+    ' --production <pasta> --project-id <id> [--revision <rNNNN>]');
+  WriteCliLine('  [--production-id <id>] [--scene-id <id>] [--focus <id>] [--headless --event <arquivo>]');
   WriteCliLine('  [--resume-transaction <tx_id>] [--log-level debug|info|warn|error] [--version] [--help]');
+  if not SameText(AppName, 'MMenu') then
+    WriteCliLine('Observacao: este modulo deve ser iniciado exclusivamente pelo MMenu.');
 end;
 
 end.

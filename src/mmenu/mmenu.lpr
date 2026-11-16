@@ -5,6 +5,8 @@ program mmenu;
 uses
   Interfaces, Forms, SysUtils, mmpcommon, ummpprotocol, ummpappbase, ummenumain;
 
+{$R mmenu_icon.res}
+
 var
   Args: TMMLaunchArgs;
   Prod: TMmpProduction;

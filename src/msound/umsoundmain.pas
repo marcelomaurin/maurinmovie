@@ -90,7 +90,7 @@ implementation
 
 constructor TMsoundMainForm.Create(TheOwner: TComponent);
 var
-  ProdRoot, ProjId, RevId: string;
+  ProdRoot, ProjId, RevId, MMenuVer, ProdId: string;
 begin
   inherited CreateNew(TheOwner, 1);
   Randomize;
@@ -107,8 +107,9 @@ begin
   FSelectedProfile := -1;
   BuildUI;
 
-  ParseAppLaunchParams(ProdRoot, ProjId, RevId);
-  LogMsg('MSound v' + MMP_EXECUTABLE_VERSION + ' iniciado (CHATGPT TAIVoiceSynthesizer + TAIAudioPlayer).');
+  ParseAppLaunchContext(ProdRoot, ProjId, RevId, MMenuVer, ProdId);
+  LogMsg('MSound v' + MMP_EXECUTABLE_VERSION + ' iniciado (openai_voice + TAIUnifiedSound) | MMenu v' +
+    MMenuVer + ' | Projeto: ' + ProjId);
   if ProdRoot <> '' then
     LoadProductionAndRevision(ProdRoot, ProjId, RevId);
 end;
@@ -520,11 +521,20 @@ end;
 
 procedure TMsoundMainForm.OnTestIsolatedClick(Sender: TObject);
 var
-  WavPath: string;
+  WavPath, Err: string;
 begin
   if (FSelectedProfile < 0) or (FSelectedProfile > High(FProfiles)) then Exit;
   if SameText(FProfiles[FSelectedProfile].Kind, 'voice') then
   begin
+    WavPath := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim +
+      FCurrentRevId + PathDelim + 'audio' + PathDelim + FProfiles[FSelectedProfile].AssetId + '_test.wav';
+    if FAi.SynthesizeSpeech(FTestPhraseEdit.Text, WavPath, Err,
+      FProfiles[FSelectedProfile].Timbre) and FPlayer.Play(WavPath) then
+    begin
+      LogMsg('Sintese de voz IA (TAIUnifiedSound) executada para ' +
+        FProfiles[FSelectedProfile].EntityName + ' -> ' + WavPath);
+      Exit;
+    end;
     FSynth.Engine := seSystemDefault;
     FSynth.Rate := StrToIntDef(FRateEdit.Text, 0);
     FSynth.Volume := StrToIntDef(FVolEdit.Text, 100);
@@ -536,6 +546,8 @@ begin
   begin
     WavPath := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim +
       FCurrentRevId + PathDelim + StringReplace(FProfiles[FSelectedProfile].PreviewUri, '/', PathDelim, [rfReplaceAll]);
+    if (not FileExists(WavPath)) and FAi.GenerateSFX(FProfiles[FSelectedProfile].EntityName, WavPath, Err, 3.0) then
+      LogMsg('Efeito sonoro IA gerado: ' + WavPath);
     if FPlayer.Play(WavPath) then
       LogMsg('Reproduzindo efeito isolado via TAIAudioPlayer: ' + WavPath)
     else

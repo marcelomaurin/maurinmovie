@@ -5,9 +5,16 @@ program msound;
 uses
   Interfaces, Forms, mmpcommon, ummpappbase, umsoundmain;
 
+{$R msound_icon.res}
+
+var
+  Args: TMMLaunchArgs;
 begin
   if HandleStandardCliEarlyExit(maMSound) then
     Exit;
+
+  if not RequireMMenuLaunch(maMSound, Args) then
+    Halt(EXIT_INVALID_ARGS);
 
   RequireDerivedFormResource := False;
   Application.Scaled := True;

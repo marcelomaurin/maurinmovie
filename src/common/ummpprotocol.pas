@@ -176,7 +176,7 @@ function FindProductionByIdInDir(const SearchDir, ExpectedProductionId: string;
   out FoundRootDir: string): Boolean;
 
 procedure BuildLaunchArgs(const RootDir, ProjectId, RevisionId: string;
-  Args: TStrings);
+  Args: TStrings; const ProductionId: string = '');
 
 implementation
 
@@ -1638,13 +1638,22 @@ begin
 end;
 
 procedure BuildLaunchArgs(const RootDir, ProjectId, RevisionId: string;
-  Args: TStrings);
+  Args: TStrings; const ProductionId: string);
 begin
   Args.Clear;
+  Args.Add('--launcher');
+  Args.Add('mmenu');
+  Args.Add('--mmenu-version');
+  Args.Add(MAURINMOVIE_VERSION);
   if RootDir <> '' then
   begin
     Args.Add('--production');
     Args.Add(RootDir);
+  end;
+  if ProductionId <> '' then
+  begin
+    Args.Add('--production-id');
+    Args.Add(ProductionId);
   end;
   if ProjectId <> '' then
   begin

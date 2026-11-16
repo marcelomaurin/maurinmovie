@@ -6,7 +6,10 @@ interface
 
 uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
-  ComCtrls, mmpcommon, mmpsettings, ummpaibridge;
+  ComCtrls, fpjson, jsonparser,
+  aillmmodelcatalog, aiimagemodelcatalog, aisoundmodelcatalog, aivideomodelcatalog,
+  aisoundruntime,
+  mmpcommon, mmpsettings, ummpaibridge;
 
 type
   TMmenuSettingsForm = class(TForm)
@@ -36,6 +39,9 @@ type
     FKindTabs: array[0..6] of string; // text, image, voice, sfx, video, vision, asr
     FCurrentKind: string;
     FProvKindLabel: TLabel;
+    FProvCatalogProvCombo: TComboBox;
+    FProvCatalogModelCombo: TComboBox;
+    FProvCatalogHintLabel: TLabel;
     FProvAdapterCombo: TComboBox;
     FProvBaseUrlEdit: TEdit;
     FProvModelEdit: TEdit;
@@ -49,6 +55,7 @@ type
     FProvMaxSegEdit: TEdit;
     FProvEnabledChk: TCheckBox;
     FProvTestLabel: TLabel;
+    FBtnScanAudioServers: TButton;
 
     // Programas
     FAppCombo: TComboBox;
@@ -78,21 +85,62 @@ type
 
     // Rede & Interface
     FProxyEdit: TEdit;
+    FProxyUserEdit: TEdit;
+    FCABundleEdit: TEdit;
     FOfflineChk: TCheckBox;
     FUiLangEdit: TEdit;
     FFontScaleEdit: TEdit;
     FThemeCombo: TComboBox;
+    FConfirmDestructiveChk: TCheckBox;
     FLogLevelCombo: TComboBox;
+    FLogRetentionEdit: TEdit;
+
+    // Prompts (settings/prompts/<app>/<nome>.txt)
+    FPromptAppCombo: TComboBox;
+    FPromptNameCombo: TComboBox;
+    FPromptMemo: TMemo;
+    FPromptStatusLabel: TLabel;
+
+    // Midia e Render (settings/media-profiles.json)
+    FMediaImgFmtEdit: TEdit;
+    FMediaImgWEdit: TEdit;
+    FMediaImgHEdit: TEdit;
+    FMediaAudioRateEdit: TEdit;
+    FMediaAudioBitsEdit: TEdit;
+    FMediaVidCodecEdit: TEdit;
+    FMediaVidCrfEdit: TEdit;
+
+    // Predefinicoes (settings/presets.json)
+    FPresetsStylesMemo: TMemo;
+    FPresetsTransMemo: TMemo;
+
+    // Pastas adicionais de Ferramentas
+    FSoundLibDirEdit: TEdit;
+    FMusicLibDirEdit: TEdit;
 
     procedure BuildUI(const InitialTab: string);
     procedure LoadFieldsFromSettings;
+    procedure PopulateCatalogProvidersForKind(const Kind: string);
+    procedure PopulateCatalogModelsForSelectedProvider;
     procedure LoadProviderKindFields(const Kind: string);
     procedure SaveProviderKindFields;
     procedure LoadSelectedAppFields;
     procedure SaveSelectedAppFields;
+    procedure LoadPromptsForSelectedApp;
+    procedure LoadSelectedPromptText;
+    procedure LoadMediaAndPresets;
+    procedure SaveMediaAndPresets;
     procedure UpdateToolBadges;
 
     procedure OnTreeSelectionChanged(Sender: TObject; Node: TTreeNode);
+    procedure OnPromptAppChanged(Sender: TObject);
+    procedure OnPromptNameChanged(Sender: TObject);
+    procedure OnSavePromptClick(Sender: TObject);
+    procedure OnRestorePromptClick(Sender: TObject);
+    procedure OnCatalogProvChanged(Sender: TObject);
+    procedure OnCatalogModelChanged(Sender: TObject);
+    procedure OnApplyPresetClick(Sender: TObject);
+    procedure OnScanAudioServersClick(Sender: TObject);
     procedure OnVerifyEnvClick(Sender: TObject);
     procedure OnToggleSecretClick(Sender: TObject);
     procedure OnTestProviderClick(Sender: TObject);
@@ -139,15 +187,15 @@ end;
 procedure TMmenuSettingsForm.BuildUI(const InitialTab: string);
 var
   Head, Footer, LeftPanel: TPanel;
-  TabGeral, TabProd, TabIA, TabApps, TabPol, TabTools, TabNet: TTabSheet;
+  TabGeral, TabProd, TabIA, TabApps, TabPrompts, TabMidia, TabPresets, TabPol, TabTools, TabNet: TTabSheet;
   L: TLabel;
-  BtnSave, BtnCancel, BtnEnv, BtnTest, BtnDetect, B: TButton;
+  BtnSave, BtnCancel, BtnEnv, BtnTest, BtnDetect, BtnPreset, BtnSavePrompt, BtnRestorePrompt, B: TButton;
   I, Y, SelIdx: Integer;
   Node, RootIA, TargetNode: TTreeNode;
   TargetTabLower: string;
 begin
   Head := TPanel.Create(Self); Head.Parent := Self; Head.Align := alTop; Head.Height := 56;
-  Head.BevelOuter := bvNone; Head.Color := $003A3028; Head.ParentBackground := False;
+  Head.BevelOuter := bvNone; Head.Color := $006E3B16; Head.ParentBackground := False;
 
   L := TLabel.Create(Self); L.Parent := Head;
   L.Caption := 'Configuracoes Centralizadas (MMenu — Unica fonte de gravacao)';
@@ -155,7 +203,7 @@ begin
   L.SetBounds(16, 16, 650, 24);
 
   Footer := TPanel.Create(Self); Footer.Parent := Self; Footer.Align := alBottom; Footer.Height := 52;
-  Footer.BevelOuter := bvLowered;
+  Footer.BevelOuter := bvLowered; Footer.Color := $00FCF7F1; Footer.ParentBackground := False;
 
   BtnSave := TButton.Create(Self); BtnSave.Parent := Footer; BtnSave.Caption := 'Salvar';
   BtnSave.Anchors := [akTop, akRight]; BtnSave.SetBounds(726, 10, 96, 32);
@@ -180,11 +228,14 @@ begin
   TabProd := TTabSheet.Create(FPageControl); TabProd.PageControl := FPageControl; TabProd.Caption := 'Producao';
   TabIA := TTabSheet.Create(FPageControl); TabIA.PageControl := FPageControl; TabIA.Caption := 'Provedores IA';
   TabApps := TTabSheet.Create(FPageControl); TabApps.PageControl := FPageControl; TabApps.Caption := 'Programas';
+  TabPrompts := TTabSheet.Create(FPageControl); TabPrompts.PageControl := FPageControl; TabPrompts.Caption := 'Prompts';
+  TabMidia := TTabSheet.Create(FPageControl); TabMidia.PageControl := FPageControl; TabMidia.Caption := 'Midia e Render';
+  TabPresets := TTabSheet.Create(FPageControl); TabPresets.PageControl := FPageControl; TabPresets.Caption := 'Predefinicoes';
   TabPol := TTabSheet.Create(FPageControl); TabPol.PageControl := FPageControl; TabPol.Caption := 'Politicas';
   TabTools := TTabSheet.Create(FPageControl); TabTools.PageControl := FPageControl; TabTools.Caption := 'Ferramentas';
   TabNet := TTabSheet.Create(FPageControl); TabNet.PageControl := FPageControl; TabNet.Caption := 'Rede e Interface';
 
-  // Tree nodes with Data = tab marker
+  // Tree nodes with Data = tab marker (PageIndex ou 10..16 para tipos IA)
   TargetNode := FNavTree.Items.AddObject(nil, 'Geral e Ambiente', Pointer(0));
   FNavTree.Items.AddObject(nil, 'Producao', Pointer(1));
   RootIA := FNavTree.Items.AddObject(nil, 'IA: Texto', Pointer(10));
@@ -196,9 +247,12 @@ begin
   FNavTree.Items.AddObject(RootIA, 'IA: Transcricao (opcional)', Pointer(16));
   RootIA.Expand(True);
   FNavTree.Items.AddObject(nil, 'Programas (MScript..MCut)', Pointer(3));
-  FNavTree.Items.AddObject(nil, 'Politicas', Pointer(4));
-  FNavTree.Items.AddObject(nil, 'Ferramentas e Executaveis', Pointer(5));
-  FNavTree.Items.AddObject(nil, 'Rede, Interface e Log', Pointer(6));
+  FNavTree.Items.AddObject(nil, 'Prompts', Pointer(4));
+  FNavTree.Items.AddObject(nil, 'Midia e Render', Pointer(5));
+  FNavTree.Items.AddObject(nil, 'Predefinicoes', Pointer(6));
+  FNavTree.Items.AddObject(nil, 'Politicas', Pointer(7));
+  FNavTree.Items.AddObject(nil, 'Ferramentas e Executaveis', Pointer(8));
+  FNavTree.Items.AddObject(nil, 'Rede, Interface e Log', Pointer(9));
 
   // Tab 0: Geral
   L := TLabel.Create(Self); L.Parent := TabGeral; L.Caption := 'Usuario autor/revisor (obrigatorio para aprovacoes):'; L.SetBounds(16, 16, 360, 18);
@@ -242,52 +296,101 @@ begin
   // Tab 2: Provedor IA
   FProvKindLabel := TLabel.Create(Self); FProvKindLabel.Parent := TabIA;
   FProvKindLabel.Font.Size := 12; FProvKindLabel.Font.Style := [fsBold];
-  FProvKindLabel.SetBounds(16, 14, 520, 24);
+  FProvKindLabel.SetBounds(16, 12, 540, 24);
 
   FProvEnabledChk := TCheckBox.Create(Self); FProvEnabledChk.Parent := TabIA;
-  FProvEnabledChk.Caption := 'Provedor habilitado'; FProvEnabledChk.SetBounds(16, 48, 220, 22);
+  FProvEnabledChk.Caption := 'Provedor habilitado'; FProvEnabledChk.SetBounds(16, 42, 220, 22);
 
-  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Adaptador:'; L.SetBounds(16, 82, 120, 18);
+  // Selecao rapida via Catalogo CHATGPT (Provedor + Modelo)
+  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Catalogo Provedor:'; L.SetBounds(16, 74, 126, 18);
+  FProvCatalogProvCombo := TComboBox.Create(Self); FProvCatalogProvCombo.Parent := TabIA;
+  FProvCatalogProvCombo.Style := csDropDownList;
+  FProvCatalogProvCombo.SetBounds(150, 70, 190, 26);
+  FProvCatalogProvCombo.OnChange := @OnCatalogProvChanged;
+
+  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Modelo:'; L.SetBounds(348, 74, 52, 18);
+  FProvCatalogModelCombo := TComboBox.Create(Self); FProvCatalogModelCombo.Parent := TabIA;
+  FProvCatalogModelCombo.Style := csDropDownList;
+  FProvCatalogModelCombo.SetBounds(402, 70, 180, 26);
+  FProvCatalogModelCombo.OnChange := @OnCatalogModelChanged;
+
+  BtnPreset := TButton.Create(Self); BtnPreset.Parent := TabIA; BtnPreset.Caption := 'Aplicar';
+  BtnPreset.SetBounds(588, 69, 76, 28); BtnPreset.OnClick := @OnApplyPresetClick;
+
+  FProvCatalogHintLabel := TLabel.Create(Self); FProvCatalogHintLabel.Parent := TabIA;
+  FProvCatalogHintLabel.Font.Color := $009E541B;
+  FProvCatalogHintLabel.SetBounds(150, 100, 514, 18);
+  FProvCatalogHintLabel.Caption := 'Selecione um provedor/modelo do catalogo CHATGPT e clique em Aplicar.';
+
+  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Adaptador:'; L.SetBounds(16, 128, 120, 18);
   FProvAdapterCombo := TComboBox.Create(Self); FProvAdapterCombo.Parent := TabIA; FProvAdapterCombo.Style := csDropDownList;
   FProvAdapterCombo.Items.Add('mock');
   FProvAdapterCombo.Items.Add('chatgpt-lib');
   FProvAdapterCombo.Items.Add('openai-compatible');
+  FProvAdapterCombo.Items.Add('kokoro-fastapi');
+  FProvAdapterCombo.Items.Add('piper-http');
+  FProvAdapterCombo.Items.Add('openedai-speech');
+  FProvAdapterCombo.Items.Add('coqui-xtts');
+  FProvAdapterCombo.Items.Add('alltalk-tts');
+  FProvAdapterCombo.Items.Add('openvoice-v2');
+  FProvAdapterCombo.Items.Add('f5-tts-server');
+  FProvAdapterCombo.Items.Add('chatterbox');
+  FProvAdapterCombo.Items.Add('audiocraft-bark');
+  FProvAdapterCombo.Items.Add('local-cpu-runtime');
+  FProvAdapterCombo.Items.Add('system-os');
+  FProvAdapterCombo.Items.Add('comfyui');
+  FProvAdapterCombo.Items.Add('automatic1111');
+  FProvAdapterCombo.Items.Add('stability');
+  FProvAdapterCombo.Items.Add('bfl-flux');
+  FProvAdapterCombo.Items.Add('huggingface');
+  FProvAdapterCombo.Items.Add('elevenlabs');
+  FProvAdapterCombo.Items.Add('google-veo');
+  FProvAdapterCombo.Items.Add('runway');
+  FProvAdapterCombo.Items.Add('kling');
+  FProvAdapterCombo.Items.Add('luma');
+  FProvAdapterCombo.Items.Add('openai-sora');
+  FProvAdapterCombo.Items.Add('ffmpeg-cpu');
   FProvAdapterCombo.Items.Add('local-cli');
   FProvAdapterCombo.Items.Add('http-generic');
-  FProvAdapterCombo.SetBounds(150, 78, 240, 26);
+  FProvAdapterCombo.SetBounds(150, 124, 240, 26);
 
-  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'URL Base:'; L.SetBounds(16, 118, 120, 18);
-  FProvBaseUrlEdit := TEdit.Create(Self); FProvBaseUrlEdit.Parent := TabIA; FProvBaseUrlEdit.SetBounds(150, 114, 480, 26);
+  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'URL Base:'; L.SetBounds(16, 162, 120, 18);
+  FProvBaseUrlEdit := TEdit.Create(Self); FProvBaseUrlEdit.Parent := TabIA; FProvBaseUrlEdit.SetBounds(150, 158, 514, 26);
 
-  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Modelo:'; L.SetBounds(16, 154, 120, 18);
-  FProvModelEdit := TEdit.Create(Self); FProvModelEdit.Parent := TabIA; FProvModelEdit.SetBounds(150, 150, 340, 26);
+  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Modelo ativo:'; L.SetBounds(16, 196, 120, 18);
+  FProvModelEdit := TEdit.Create(Self); FProvModelEdit.Parent := TabIA; FProvModelEdit.SetBounds(150, 192, 340, 26);
 
-  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'secret_ref:'; L.SetBounds(16, 190, 120, 18);
-  FProvSecretRefEdit := TEdit.Create(Self); FProvSecretRefEdit.Parent := TabIA; FProvSecretRefEdit.SetBounds(150, 186, 220, 26);
+  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'secret_ref:'; L.SetBounds(16, 230, 120, 18);
+  FProvSecretRefEdit := TEdit.Create(Self); FProvSecretRefEdit.Parent := TabIA; FProvSecretRefEdit.SetBounds(150, 226, 220, 26);
 
-  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Chave (cofre local):'; L.SetBounds(16, 226, 130, 18);
+  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Chave (cofre local):'; L.SetBounds(16, 264, 130, 18);
   FProvSecretValEdit := TEdit.Create(Self); FProvSecretValEdit.Parent := TabIA; FProvSecretValEdit.PasswordChar := '*';
-  FProvSecretValEdit.SetBounds(150, 222, 340, 26);
+  FProvSecretValEdit.SetBounds(150, 260, 340, 26);
 
   FProvShowSecretBtn := TButton.Create(Self); FProvShowSecretBtn.Parent := TabIA; FProvShowSecretBtn.Caption := 'Mostrar';
-  FProvShowSecretBtn.SetBounds(498, 221, 90, 28); FProvShowSecretBtn.OnClick := @OnToggleSecretClick;
+  FProvShowSecretBtn.SetBounds(498, 259, 90, 28); FProvShowSecretBtn.OnClick := @OnToggleSecretClick;
 
-  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Temperatura:'; L.SetBounds(16, 266, 95, 18);
-  FProvTempEdit := TEdit.Create(Self); FProvTempEdit.Parent := TabIA; FProvTempEdit.SetBounds(150, 262, 80, 26);
-  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Max Tokens:'; L.SetBounds(250, 266, 90, 18);
-  FProvMaxTokensEdit := TEdit.Create(Self); FProvMaxTokensEdit.Parent := TabIA; FProvMaxTokensEdit.SetBounds(342, 262, 95, 26);
+  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Temperatura:'; L.SetBounds(16, 300, 95, 18);
+  FProvTempEdit := TEdit.Create(Self); FProvTempEdit.Parent := TabIA; FProvTempEdit.SetBounds(150, 296, 80, 26);
+  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Max Tokens:'; L.SetBounds(250, 300, 90, 18);
+  FProvMaxTokensEdit := TEdit.Create(Self); FProvMaxTokensEdit.Parent := TabIA; FProvMaxTokensEdit.SetBounds(342, 296, 95, 26);
 
-  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Largura / Altura:'; L.SetBounds(16, 304, 120, 18);
-  FProvWidthEdit := TEdit.Create(Self); FProvWidthEdit.Parent := TabIA; FProvWidthEdit.SetBounds(150, 300, 80, 26);
-  FProvHeightEdit := TEdit.Create(Self); FProvHeightEdit.Parent := TabIA; FProvHeightEdit.SetBounds(238, 300, 80, 26);
-  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Max Seg(s):'; L.SetBounds(336, 304, 85, 18);
-  FProvMaxSegEdit := TEdit.Create(Self); FProvMaxSegEdit.Parent := TabIA; FProvMaxSegEdit.SetBounds(424, 300, 70, 26);
+  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Largura / Altura:'; L.SetBounds(16, 336, 120, 18);
+  FProvWidthEdit := TEdit.Create(Self); FProvWidthEdit.Parent := TabIA; FProvWidthEdit.SetBounds(150, 332, 80, 26);
+  FProvHeightEdit := TEdit.Create(Self); FProvHeightEdit.Parent := TabIA; FProvHeightEdit.SetBounds(238, 332, 80, 26);
+  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Max Seg(s):'; L.SetBounds(336, 336, 85, 18);
+  FProvMaxSegEdit := TEdit.Create(Self); FProvMaxSegEdit.Parent := TabIA; FProvMaxSegEdit.SetBounds(424, 332, 70, 26);
 
   BtnTest := TButton.Create(Self); BtnTest.Parent := TabIA; BtnTest.Caption := 'Testar Provedor';
-  BtnTest.SetBounds(16, 350, 170, 32); BtnTest.OnClick := @OnTestProviderClick;
+  BtnTest.SetBounds(16, 378, 160, 32); BtnTest.OnClick := @OnTestProviderClick;
+
+  FBtnScanAudioServers := TButton.Create(Self); FBtnScanAudioServers.Parent := TabIA;
+  FBtnScanAudioServers.Caption := 'Detectar Servidores Locais...';
+  FBtnScanAudioServers.SetBounds(184, 378, 210, 32);
+  FBtnScanAudioServers.OnClick := @OnScanAudioServersClick;
 
   FProvTestLabel := TLabel.Create(Self); FProvTestLabel.Parent := TabIA;
-  FProvTestLabel.WordWrap := True; FProvTestLabel.SetBounds(198, 352, 460, 48);
+  FProvTestLabel.WordWrap := True; FProvTestLabel.SetBounds(16, 420, 650, 56);
   FProvTestLabel.Caption := 'As chaves ficam em secrets.ini e nunca sao gravadas na pasta da producao.';
 
   TabIA.Enabled := FHasProduction;
@@ -315,7 +418,73 @@ begin
   FAppApprovedOnlyChk.Caption := 'Usar somente referencias aprovadas'; FAppApprovedOnlyChk.SetBounds(16, 286, 300, 22);
   TabApps.Enabled := FHasProduction;
 
-  // Tab 4: Politicas
+  // Tab 4: Prompts (docs/specs/08 §8 - settings/prompts/<app>/<nome>.txt)
+  L := TLabel.Create(Self); L.Parent := TabPrompts; L.Caption := 'Programa:'; L.SetBounds(16, 18, 80, 18);
+  FPromptAppCombo := TComboBox.Create(Self); FPromptAppCombo.Parent := TabPrompts;
+  FPromptAppCombo.Style := csDropDownList;
+  for I := 1 to 6 do FPromptAppCombo.Items.Add(MMAppNames[AppIndexToEnum(I)]);
+  FPromptAppCombo.ItemIndex := 0;
+  FPromptAppCombo.SetBounds(100, 14, 150, 26);
+  FPromptAppCombo.OnChange := @OnPromptAppChanged;
+
+  L := TLabel.Create(Self); L.Parent := TabPrompts; L.Caption := 'Modelo de prompt:'; L.SetBounds(268, 18, 120, 18);
+  FPromptNameCombo := TComboBox.Create(Self); FPromptNameCombo.Parent := TabPrompts;
+  FPromptNameCombo.Style := csDropDownList;
+  FPromptNameCombo.SetBounds(392, 14, 240, 26);
+  FPromptNameCombo.OnChange := @OnPromptNameChanged;
+
+  FPromptStatusLabel := TLabel.Create(Self); FPromptStatusLabel.Parent := TabPrompts;
+  FPromptStatusLabel.Font.Color := $009E541B;
+  FPromptStatusLabel.SetBounds(16, 48, 640, 18);
+  FPromptStatusLabel.Caption := 'Substituicoes gravadas em settings/prompts/<app>/<nome>.txt';
+
+  FPromptMemo := TMemo.Create(Self); FPromptMemo.Parent := TabPrompts;
+  FPromptMemo.ScrollBars := ssBoth;
+  FPromptMemo.Anchors := [akLeft, akTop, akRight, akBottom];
+  FPromptMemo.SetBounds(16, 74, 660, 380);
+
+  BtnSavePrompt := TButton.Create(Self); BtnSavePrompt.Parent := TabPrompts;
+  BtnSavePrompt.Caption := 'Salvar substituicao';
+  BtnSavePrompt.Anchors := [akLeft, akBottom];
+  BtnSavePrompt.SetBounds(16, 466, 170, 32);
+  BtnSavePrompt.OnClick := @OnSavePromptClick;
+
+  BtnRestorePrompt := TButton.Create(Self); BtnRestorePrompt.Parent := TabPrompts;
+  BtnRestorePrompt.Caption := 'Restaurar original';
+  BtnRestorePrompt.Anchors := [akLeft, akBottom];
+  BtnRestorePrompt.SetBounds(196, 466, 170, 32);
+  BtnRestorePrompt.OnClick := @OnRestorePromptClick;
+  TabPrompts.Enabled := FHasProduction;
+
+  // Tab 5: Midia e Render (docs/specs/08 §5 - settings/media-profiles.json)
+  L := TLabel.Create(Self); L.Parent := TabMidia; L.Caption := 'Perfis de Midia (settings/media-profiles.json)';
+  L.Font.Size := 11; L.Font.Style := [fsBold]; L.SetBounds(16, 14, 480, 22);
+
+  L := TLabel.Create(Self); L.Parent := TabMidia; L.Caption := 'Imagem de referencia - Formato / Largura / Altura:'; L.SetBounds(16, 54, 340, 18);
+  FMediaImgFmtEdit := TEdit.Create(Self); FMediaImgFmtEdit.Parent := TabMidia; FMediaImgFmtEdit.SetBounds(16, 74, 90, 26);
+  FMediaImgWEdit := TEdit.Create(Self); FMediaImgWEdit.Parent := TabMidia; FMediaImgWEdit.SetBounds(114, 74, 90, 26);
+  FMediaImgHEdit := TEdit.Create(Self); FMediaImgHEdit.Parent := TabMidia; FMediaImgHEdit.SetBounds(212, 74, 90, 26);
+
+  L := TLabel.Create(Self); L.Parent := TabMidia; L.Caption := 'Audio de trabalho - Taxa (Hz) / Bits:'; L.SetBounds(16, 118, 300, 18);
+  FMediaAudioRateEdit := TEdit.Create(Self); FMediaAudioRateEdit.Parent := TabMidia; FMediaAudioRateEdit.SetBounds(16, 138, 100, 26);
+  FMediaAudioBitsEdit := TEdit.Create(Self); FMediaAudioBitsEdit.Parent := TabMidia; FMediaAudioBitsEdit.SetBounds(126, 138, 80, 26);
+
+  L := TLabel.Create(Self); L.Parent := TabMidia; L.Caption := 'Video de trabalho - Codec / CRF:'; L.SetBounds(16, 182, 300, 18);
+  FMediaVidCodecEdit := TEdit.Create(Self); FMediaVidCodecEdit.Parent := TabMidia; FMediaVidCodecEdit.SetBounds(16, 202, 100, 26);
+  FMediaVidCrfEdit := TEdit.Create(Self); FMediaVidCrfEdit.Parent := TabMidia; FMediaVidCrfEdit.SetBounds(126, 202, 80, 26);
+  TabMidia.Enabled := FHasProduction;
+
+  // Tab 6: Predefinicoes (docs/specs/08 §6 - settings/presets.json)
+  L := TLabel.Create(Self); L.Parent := TabPresets; L.Caption := 'Estilos visuais (um por linha):'; L.SetBounds(16, 16, 280, 18);
+  FPresetsStylesMemo := TMemo.Create(Self); FPresetsStylesMemo.Parent := TabPresets;
+  FPresetsStylesMemo.ScrollBars := ssBoth; FPresetsStylesMemo.SetBounds(16, 36, 310, 260);
+
+  L := TLabel.Create(Self); L.Parent := TabPresets; L.Caption := 'Transicoes de montagem (uma por linha):'; L.SetBounds(346, 16, 300, 18);
+  FPresetsTransMemo := TMemo.Create(Self); FPresetsTransMemo.Parent := TabPresets;
+  FPresetsTransMemo.ScrollBars := ssBoth; FPresetsTransMemo.SetBounds(346, 36, 310, 260);
+  TabPresets.Enabled := FHasProduction;
+
+  // Tab 7: Politicas
   FPolReqBoardChk := TCheckBox.Create(Self); FPolReqBoardChk.Parent := TabPol;
   FPolReqBoardChk.Caption := 'Exigir referencias aprovadas no MBoard'; FPolReqBoardChk.SetBounds(16, 20, 340, 22);
   FPolReqVoiceChk := TCheckBox.Create(Self); FPolReqVoiceChk.Parent := TabPol;
@@ -364,27 +533,43 @@ begin
   FMpvEdit := TEdit.Create(Self); FMpvEdit.Parent := TabTools; FMpvEdit.SetBounds(100, Y + 8, 370, 26);
   B := TButton.Create(Self); B.Parent := TabTools; B.Caption := '...'; B.Tag := 3; B.SetBounds(476, Y + 7, 44, 28);
   B.OnClick := @OnBrowseToolClick;
+  Inc(Y, 36);
+
+  L := TLabel.Create(Self); L.Parent := TabTools; L.Caption := 'Banco de efeitos (SoundLibraryDir):'; L.SetBounds(16, Y + 12, 230, 18);
+  FSoundLibDirEdit := TEdit.Create(Self); FSoundLibDirEdit.Parent := TabTools; FSoundLibDirEdit.SetBounds(252, Y + 8, 308, 26);
+  Inc(Y, 36);
+
+  L := TLabel.Create(Self); L.Parent := TabTools; L.Caption := 'Banco de musicas (MusicLibraryDir):'; L.SetBounds(16, Y + 12, 230, 18);
+  FMusicLibDirEdit := TEdit.Create(Self); FMusicLibDirEdit.Parent := TabTools; FMusicLibDirEdit.SetBounds(252, Y + 8, 308, 26);
 
   BtnDetect := TButton.Create(Self); BtnDetect.Parent := TabTools; BtnDetect.Caption := 'Autodetectar tudo';
-  BtnDetect.SetBounds(16, Y + 50, 170, 32); BtnDetect.OnClick := @OnDetectAllClick;
+  BtnDetect.SetBounds(16, Y + 48, 170, 32); BtnDetect.OnClick := @OnDetectAllClick;
 
-  // Tab 6: Rede, Interface e Log
+  // Tab 9: Rede, Interface e Log
   L := TLabel.Create(Self); L.Parent := TabNet; L.Caption := 'Proxy HTTP/HTTPS (opcional):'; L.SetBounds(16, 18, 220, 18);
-  FProxyEdit := TEdit.Create(Self); FProxyEdit.Parent := TabNet; FProxyEdit.SetBounds(16, 38, 380, 26);
+  FProxyEdit := TEdit.Create(Self); FProxyEdit.Parent := TabNet; FProxyEdit.SetBounds(16, 38, 300, 26);
+  L := TLabel.Create(Self); L.Parent := TabNet; L.Caption := 'Usuario proxy:'; L.SetBounds(330, 18, 150, 18);
+  FProxyUserEdit := TEdit.Create(Self); FProxyUserEdit.Parent := TabNet; FProxyUserEdit.SetBounds(330, 38, 180, 26);
+  L := TLabel.Create(Self); L.Parent := TabNet; L.Caption := 'CA Bundle TLS (opcional):'; L.SetBounds(16, 74, 220, 18);
+  FCABundleEdit := TEdit.Create(Self); FCABundleEdit.Parent := TabNet; FCABundleEdit.SetBounds(16, 94, 380, 26);
   FOfflineChk := TCheckBox.Create(Self); FOfflineChk.Parent := TabNet;
-  FOfflineChk.Caption := 'Modo Offline (forca provedor simulado e bloqueia rede)'; FOfflineChk.SetBounds(16, 76, 420, 22);
+  FOfflineChk.Caption := 'Modo Offline (forca provedor simulado e bloqueia rede)'; FOfflineChk.SetBounds(16, 130, 420, 22);
 
-  L := TLabel.Create(Self); L.Parent := TabNet; L.Caption := 'Idioma da interface:'; L.SetBounds(16, 118, 160, 18);
-  FUiLangEdit := TEdit.Create(Self); FUiLangEdit.Parent := TabNet; FUiLangEdit.SetBounds(184, 114, 120, 26);
-  L := TLabel.Create(Self); L.Parent := TabNet; L.Caption := 'Escala da fonte (%):'; L.SetBounds(16, 154, 160, 18);
-  FFontScaleEdit := TEdit.Create(Self); FFontScaleEdit.Parent := TabNet; FFontScaleEdit.SetBounds(184, 150, 80, 26);
-  L := TLabel.Create(Self); L.Parent := TabNet; L.Caption := 'Tema:'; L.SetBounds(16, 190, 120, 18);
+  L := TLabel.Create(Self); L.Parent := TabNet; L.Caption := 'Idioma da interface:'; L.SetBounds(16, 168, 160, 18);
+  FUiLangEdit := TEdit.Create(Self); FUiLangEdit.Parent := TabNet; FUiLangEdit.SetBounds(184, 164, 120, 26);
+  L := TLabel.Create(Self); L.Parent := TabNet; L.Caption := 'Escala da fonte (%):'; L.SetBounds(16, 204, 160, 18);
+  FFontScaleEdit := TEdit.Create(Self); FFontScaleEdit.Parent := TabNet; FFontScaleEdit.SetBounds(184, 200, 80, 26);
+  L := TLabel.Create(Self); L.Parent := TabNet; L.Caption := 'Tema:'; L.SetBounds(16, 240, 120, 18);
   FThemeCombo := TComboBox.Create(Self); FThemeCombo.Parent := TabNet; FThemeCombo.Style := csDropDownList;
-  FThemeCombo.Items.Add('claro'); FThemeCombo.Items.Add('escuro'); FThemeCombo.SetBounds(184, 186, 120, 26);
-  L := TLabel.Create(Self); L.Parent := TabNet; L.Caption := 'Nivel de log:'; L.SetBounds(16, 226, 120, 18);
+  FThemeCombo.Items.Add('claro'); FThemeCombo.Items.Add('escuro'); FThemeCombo.SetBounds(184, 236, 120, 26);
+  FConfirmDestructiveChk := TCheckBox.Create(Self); FConfirmDestructiveChk.Parent := TabNet;
+  FConfirmDestructiveChk.Caption := 'Confirmar acoes destrutivas'; FConfirmDestructiveChk.SetBounds(330, 238, 240, 22);
+  L := TLabel.Create(Self); L.Parent := TabNet; L.Caption := 'Nivel de log:'; L.SetBounds(16, 276, 120, 18);
   FLogLevelCombo := TComboBox.Create(Self); FLogLevelCombo.Parent := TabNet; FLogLevelCombo.Style := csDropDownList;
   FLogLevelCombo.Items.Add('debug'); FLogLevelCombo.Items.Add('info'); FLogLevelCombo.Items.Add('warn'); FLogLevelCombo.Items.Add('error');
-  FLogLevelCombo.SetBounds(184, 222, 120, 26);
+  FLogLevelCombo.SetBounds(184, 272, 120, 26);
+  L := TLabel.Create(Self); L.Parent := TabNet; L.Caption := 'Retencao de log (dias):'; L.SetBounds(330, 276, 160, 18);
+  FLogRetentionEdit := TEdit.Create(Self); FLogRetentionEdit.Parent := TabNet; FLogRetentionEdit.SetBounds(498, 272, 70, 26);
 
   // Select initial tab
   TargetTabLower := LowerCase(Trim(InitialTab));
@@ -401,9 +586,12 @@ begin
           (TargetTabLower = 'mvisual') or (TargetTabLower = 'mboard') or
           (TargetTabLower = 'msound') or (TargetTabLower = 'mscene') or
           (TargetTabLower = 'mcut') then SelIdx := 9
-  else if TargetTabLower = 'politicas' then SelIdx := 10
-  else if TargetTabLower = 'ferramentas' then SelIdx := 11
-  else if (TargetTabLower = 'rede') or (TargetTabLower = 'interface') then SelIdx := 12;
+  else if TargetTabLower = 'prompts' then SelIdx := 10
+  else if TargetTabLower = 'midia' then SelIdx := 11
+  else if TargetTabLower = 'predefinicoes' then SelIdx := 12
+  else if TargetTabLower = 'politicas' then SelIdx := 13
+  else if TargetTabLower = 'ferramentas' then SelIdx := 14
+  else if (TargetTabLower = 'rede') or (TargetTabLower = 'interface') then SelIdx := 15;
 
   if (SelIdx >= 0) and (SelIdx < FNavTree.Items.Count) then
     FNavTree.Selected := FNavTree.Items[SelIdx]
@@ -446,20 +634,240 @@ begin
   FFfmpegEdit.Text := FSettings.ToolFfmpeg;
   FFfprobeEdit.Text := FSettings.ToolFfprobe;
   FMpvEdit.Text := FSettings.ToolMpv;
+  FSoundLibDirEdit.Text := FSettings.SoundLibraryDir;
+  FMusicLibDirEdit.Text := FSettings.MusicLibraryDir;
 
   FProxyEdit.Text := FSettings.ProxyUrl;
+  FProxyUserEdit.Text := FSettings.ProxyUser;
+  FCABundleEdit.Text := FSettings.CABundle;
   FOfflineChk.Checked := FSettings.OfflineMode;
   FUiLangEdit.Text := FSettings.UiLanguage;
   FFontScaleEdit.Text := IntToStr(FSettings.FontScale);
   FThemeCombo.ItemIndex := FThemeCombo.Items.IndexOf(FSettings.UiTheme);
   if FThemeCombo.ItemIndex < 0 then FThemeCombo.ItemIndex := 0;
+  FConfirmDestructiveChk.Checked := FSettings.ConfirmDestructive;
   FLogLevelCombo.ItemIndex := FLogLevelCombo.Items.IndexOf(FSettings.LogLevel);
   if FLogLevelCombo.ItemIndex < 0 then FLogLevelCombo.ItemIndex := 1;
+  FLogRetentionEdit.Text := IntToStr(FSettings.LogRetentionDays);
 
   LoadProviderKindFields(FCurrentKind);
   LoadSelectedAppFields;
+  LoadPromptsForSelectedApp;
+  LoadMediaAndPresets;
   UpdateToolBadges;
   OnVerifyEnvClick(nil);
+end;
+
+procedure TMmenuSettingsForm.PopulateCatalogProvidersForKind(const Kind: string);
+var
+  I: Integer;
+  LInfo: TAILLMModelInfo;
+begin
+  FProvCatalogProvCombo.Items.BeginUpdate;
+  try
+    FProvCatalogProvCombo.Items.Clear;
+    if (Kind = 'text') or (Kind = 'vision') or (Kind = 'asr') then
+    begin
+      for I := 0 to AILLMModelCount - 1 do
+        if GetAILLMModelInfo(I, LInfo) and (not LInfo.IsLegacy) and
+           (FProvCatalogProvCombo.Items.IndexOf(LInfo.Provider) < 0) then
+          FProvCatalogProvCombo.Items.Add(LInfo.Provider);
+    end
+    else if Kind = 'image' then
+      GetAIImageProviders(FProvCatalogProvCombo.Items)
+    else if (Kind = 'voice') or (Kind = 'sfx') then
+      GetAISoundProviders(FProvCatalogProvCombo.Items)
+    else if Kind = 'video' then
+      GetAIVideoProviders(FProvCatalogProvCombo.Items);
+
+    if FProvCatalogProvCombo.Items.Count > 0 then
+      FProvCatalogProvCombo.ItemIndex := 0;
+  finally
+    FProvCatalogProvCombo.Items.EndUpdate;
+  end;
+  PopulateCatalogModelsForSelectedProvider;
+  if FBtnScanAudioServers <> nil then
+    FBtnScanAudioServers.Visible := (Kind = 'voice') or (Kind = 'sfx');
+end;
+
+procedure TMmenuSettingsForm.PopulateCatalogModelsForSelectedProvider;
+var
+  ProvName: string;
+begin
+  FProvCatalogModelCombo.Items.BeginUpdate;
+  try
+    FProvCatalogModelCombo.Items.Clear;
+    ProvName := FProvCatalogProvCombo.Text;
+    if ProvName = '' then Exit;
+
+    if (FCurrentKind = 'text') or (FCurrentKind = 'vision') or (FCurrentKind = 'asr') then
+      GetAILLMModelsForProvider(ProvName, FProvCatalogModelCombo.Items, False)
+    else if FCurrentKind = 'image' then
+      GetAIImageModelsForProvider(ProvName, FProvCatalogModelCombo.Items, False)
+    else if (FCurrentKind = 'voice') or (FCurrentKind = 'sfx') then
+      GetAISoundModelsForProvider(ProvName, FProvCatalogModelCombo.Items, False)
+    else if FCurrentKind = 'video' then
+      GetAIVideoModelsForProvider(ProvName, FProvCatalogModelCombo.Items, False);
+
+    if FProvCatalogModelCombo.Items.Count > 0 then
+      FProvCatalogModelCombo.ItemIndex := 0;
+  finally
+    FProvCatalogModelCombo.Items.EndUpdate;
+  end;
+  OnCatalogModelChanged(nil);
+end;
+
+procedure TMmenuSettingsForm.OnCatalogProvChanged(Sender: TObject);
+begin
+  PopulateCatalogModelsForSelectedProvider;
+end;
+
+procedure TMmenuSettingsForm.OnCatalogModelChanged(Sender: TObject);
+var
+  ProvName, ModName, Flags: string;
+  ImgInfo: TAIImageModelInfo;
+  SndInfo: TAISoundModelInfo;
+  VidInfo: TAIVideoModelInfo;
+  LlmInfo: TAILLMModelInfo;
+begin
+  ProvName := FProvCatalogProvCombo.Text;
+  ModName := FProvCatalogModelCombo.Text;
+  if (ProvName = '') or (ModName = '') then Exit;
+
+  Flags := '';
+  if (FCurrentKind = 'text') or (FCurrentKind = 'vision') or (FCurrentKind = 'asr') then
+  begin
+    if FindAILLMModel(ProvName, ModName, LlmInfo) then
+    begin
+      if LlmInfo.RequiresAPIKey then Flags := 'Requer API Key' else Flags := 'Local sem API Key';
+      FProvCatalogHintLabel.Caption := LlmInfo.FriendlyName + ' | ' + Flags;
+    end;
+  end
+  else if FCurrentKind = 'image' then
+  begin
+    if FindAIImageModel(ProvName, ModName, ImgInfo) then
+    begin
+      if ImgInfo.RunsOnCPUWithoutGPU then Flags := 'CPU sem GPU OK' else Flags := 'Requer GPU/Nuvem';
+      FProvCatalogHintLabel.Caption := ImgInfo.FriendlyName + ' | ' + Flags;
+    end;
+  end
+  else if (FCurrentKind = 'voice') or (FCurrentKind = 'sfx') then
+  begin
+    if FindAISoundModel(ProvName, ModName, SndInfo) then
+    begin
+      if SndInfo.RunsOnCPUWithoutGPU then Flags := 'CPU sem GPU' else Flags := 'Nuvem';
+      if SndInfo.SupportsVoiceCloning then Flags := Flags + ' | Clonagem de Voz';
+      if SndInfo.SupportsSFX then Flags := Flags + ' | SFX';
+      if SndInfo.SupportsMusic then Flags := Flags + ' | Musica';
+      FProvCatalogHintLabel.Caption := SndInfo.FriendlyName + ' | ' + Flags;
+    end;
+  end
+  else if FCurrentKind = 'video' then
+  begin
+    if FindAIVideoModel(ProvName, ModName, VidInfo) then
+    begin
+      if VidInfo.RunsOnCPUWithoutGPU then Flags := 'CPU sem GPU OK' else Flags := 'GPU/Nuvem';
+      if VidInfo.SupportsImageToVideo then Flags := Flags + ' | Imagem->Video';
+      FProvCatalogHintLabel.Caption := VidInfo.FriendlyName + ' | ' + Flags;
+    end;
+  end;
+end;
+
+procedure TMmenuSettingsForm.OnApplyPresetClick(Sender: TObject);
+var
+  ProvName, ModName, AdapterName, Ep: string;
+  ImgInfo: TAIImageModelInfo;
+  SndInfo: TAISoundModelInfo;
+  VidInfo: TAIVideoModelInfo;
+  LlmInfo: TAILLMModelInfo;
+
+  procedure SelectAdapter(const AName: string);
+  var
+    Idx: Integer;
+  begin
+    Idx := FProvAdapterCombo.Items.IndexOf(AName);
+    if Idx >= 0 then FProvAdapterCombo.ItemIndex := Idx;
+  end;
+
+begin
+  ProvName := FProvCatalogProvCombo.Text;
+  ModName := FProvCatalogModelCombo.Text;
+  if (ProvName = '') or (ModName = '') then Exit;
+
+  if (FCurrentKind = 'text') or (FCurrentKind = 'vision') or (FCurrentKind = 'asr') then
+  begin
+    if FindAILLMModel(ProvName, ModName, LlmInfo) then
+    begin
+      SelectAdapter('chatgpt-lib');
+      FProvBaseUrlEdit.Text := LlmInfo.DefaultEndpoint;
+      FProvModelEdit.Text := LlmInfo.InternalName;
+      FProvTempEdit.Text := FloatToStr(LlmInfo.DefaultTemperature);
+      FProvMaxTokensEdit.Text := IntToStr(LlmInfo.MaxTokens);
+    end;
+  end
+  else if FCurrentKind = 'image' then
+  begin
+    if FindAIImageModel(ProvName, ModName, ImgInfo) then
+    begin
+      AdapterName := LowerCase(ProvName);
+      if AdapterName = 'blackforestlabs' then AdapterName := 'bfl-flux'
+      else if AdapterName = 'gemini' then AdapterName := 'openai-compatible'
+      else if AdapterName = 'openai' then AdapterName := 'openai-compatible';
+      SelectAdapter(AdapterName);
+      FProvBaseUrlEdit.Text := ImgInfo.DefaultEndpoint;
+      FProvModelEdit.Text := ImgInfo.InternalName;
+      FProvWidthEdit.Text := IntToStr(ImgInfo.DefaultWidth);
+      FProvHeightEdit.Text := IntToStr(ImgInfo.DefaultHeight);
+    end;
+  end
+  else if (FCurrentKind = 'voice') or (FCurrentKind = 'sfx') then
+  begin
+    if FindAISoundModel(ProvName, ModName, SndInfo) then
+    begin
+      AdapterName := LowerCase(ProvName);
+      if AdapterName = 'openai' then AdapterName := 'openai-compatible'
+      else if AdapterName = 'audiocraft-bark' then AdapterName := 'audiocraft-bark'
+      else if AdapterName = 'geminitts' then AdapterName := 'openai-compatible';
+      SelectAdapter(AdapterName);
+      FProvBaseUrlEdit.Text := SndInfo.DefaultEndpoint;
+      FProvModelEdit.Text := SndInfo.InternalName;
+    end;
+  end
+  else if FCurrentKind = 'video' then
+  begin
+    if FindAIVideoModel(ProvName, ModName, VidInfo) then
+    begin
+      AdapterName := LowerCase(ProvName);
+      if AdapterName = 'comfyui-video' then AdapterName := 'comfyui';
+      SelectAdapter(AdapterName);
+      Ep := VidInfo.DefaultEndpoint;
+      FProvBaseUrlEdit.Text := Ep;
+      FProvModelEdit.Text := VidInfo.InternalName;
+      FProvWidthEdit.Text := IntToStr(VidInfo.DefaultWidth);
+      FProvHeightEdit.Text := IntToStr(VidInfo.DefaultHeight);
+      FProvMaxSegEdit.Text := IntToStr(VidInfo.MaxDurationSec);
+    end;
+  end;
+  FProvEnabledChk.Checked := True;
+end;
+
+procedure TMmenuSettingsForm.OnScanAudioServersClick(Sender: TObject);
+var
+  SL: TStringList;
+  PyOut, PyErr: string;
+begin
+  SL := TStringList.Create;
+  try
+    DiscoverLocalSoundServers(SL);
+    if CheckAISoundCpuRuntimeHealth('', '', PyOut, PyErr) then
+      SL.Add('Runtime Python CPU: ' + PyOut)
+    else
+      SL.Add('Runtime Python CPU: ' + PyErr);
+    MessageDlg('Servidores Locais Abertos e Runtime CPU (Som / Clonagem / SFX):' +
+      LineEnding + LineEnding + SL.Text, mtInformation, [mbOK], 0);
+  finally
+    SL.Free;
+  end;
 end;
 
 procedure TMmenuSettingsForm.LoadProviderKindFields(const Kind: string);
@@ -467,6 +875,7 @@ var
   Prov: TMmpAiProviderCfg;
 begin
   FCurrentKind := Kind;
+  PopulateCatalogProvidersForKind(Kind);
   FSettings.ResolveProvider(Kind, maMMenu, Prov);
   FProvKindLabel.Caption := 'Provedor padrao para: ' + UpperCase(Kind) + ' (' + Prov.Id + ')';
   FProvEnabledChk.Checked := Prov.Enabled;
@@ -615,25 +1024,16 @@ end;
 
 procedure TMmenuSettingsForm.OnTestProviderClick(Sender: TObject);
 var
-  T0: QWord;
   Bridge: TMmpAiBridge;
-  Resp, Err: string;
+  Info, Err: string;
 begin
   SaveProviderKindFields;
-  T0 := GetTickCount64;
-  if SameText(FProvAdapterCombo.Text, 'mock') then
-  begin
-    FProvTestLabel.Caption := 'OK (simulado) - latencia ' + IntToStr(GetTickCount64 - T0) + ' ms';
-    FProvTestLabel.Font.Color := $00007A00;
-    Exit;
-  end;
-
   Bridge := TMmpAiBridge.Create('MMenu');
   try
     if FHasProduction then Bridge.LoadForProduction(FSettings.ProductionRoot);
-    if Bridge.Ask('Responda apenas OK.', 'Teste de conectividade.', Resp, Err) then
+    if Bridge.TestProviderByKind(FCurrentKind, Info, Err) then
     begin
-      FProvTestLabel.Caption := 'OK - latencia ' + IntToStr(GetTickCount64 - T0) + ' ms';
+      FProvTestLabel.Caption := Info;
       FProvTestLabel.Font.Color := $00007A00;
     end
     else
@@ -722,6 +1122,240 @@ begin
   UpdateToolBadges;
 end;
 
+procedure TMmenuSettingsForm.LoadPromptsForSelectedApp;
+var
+  AppIdx: Integer;
+begin
+  FPromptNameCombo.Items.Clear;
+  AppIdx := FPromptAppCombo.ItemIndex + 1;
+  case AppIdx of
+    1: begin // MScript
+      FPromptNameCombo.Items.Add('gerar_roteiro');
+      FPromptNameCombo.Items.Add('reescrever_cena');
+      FPromptNameCombo.Items.Add('extrair_personagens');
+      FPromptNameCombo.Items.Add('consistencia');
+    end;
+    2: begin // MVisual
+      FPromptNameCombo.Items.Add('indexar_cena');
+      FPromptNameCombo.Items.Add('vista_personagem');
+      FPromptNameCombo.Items.Add('vista_objeto');
+      FPromptNameCombo.Items.Add('vista_local');
+      FPromptNameCombo.Items.Add('figurino');
+    end;
+    3: begin // MBoard
+      FPromptNameCombo.Items.Add('quadro_inicial');
+      FPromptNameCombo.Items.Add('quadro_final');
+      FPromptNameCombo.Items.Add('quadro_fronteira');
+    end;
+    4: begin // MSound
+      FPromptNameCombo.Items.Add('perfil_vocal');
+      FPromptNameCombo.Items.Add('indexar_efeitos');
+    end;
+    5: FPromptNameCombo.Items.Add('segmento_video');
+    6: FPromptNameCombo.Items.Add('agrupar_comentarios');
+  end;
+  if FPromptNameCombo.Items.Count > 0 then
+    FPromptNameCombo.ItemIndex := 0;
+  LoadSelectedPromptText;
+end;
+
+procedure TMmenuSettingsForm.LoadSelectedPromptText;
+var
+  AppFolder, PName, OverridePath, Txt: string;
+begin
+  FPromptMemo.Lines.Clear;
+  if (not FHasProduction) or (FPromptNameCombo.Text = '') then Exit;
+  AppFolder := LowerCase(FPromptAppCombo.Text);
+  PName := FPromptNameCombo.Text;
+  OverridePath := IncludeTrailingPathDelimiter(FSettings.ProductionRoot) +
+    'settings' + PathDelim + 'prompts' + PathDelim + AppFolder + PathDelim + PName + '.txt';
+  if SafeReadFileUtf8(OverridePath, Txt) then
+  begin
+    FPromptMemo.Text := Txt;
+    FPromptStatusLabel.Caption := 'Substituicao ativa da producao: ' + OverridePath;
+  end
+  else
+  begin
+    FPromptMemo.Text := '# Modelo padrao embutido (' + AppFolder + '/' + PName + ')' + LineEnding +
+      '# Edite e clique em "Salvar substituicao" para customizar nesta producao.' + LineEnding +
+      'Contexto: {{contexto}}';
+    FPromptStatusLabel.Caption := 'Usando prompt embutido (sem substituicao em settings/prompts/).';
+  end;
+end;
+
+procedure TMmenuSettingsForm.OnPromptAppChanged(Sender: TObject);
+begin
+  LoadPromptsForSelectedApp;
+end;
+
+procedure TMmenuSettingsForm.OnPromptNameChanged(Sender: TObject);
+begin
+  LoadSelectedPromptText;
+end;
+
+procedure TMmenuSettingsForm.OnSavePromptClick(Sender: TObject);
+var
+  AppFolder, PName, OverridePath: string;
+begin
+  if (not FHasProduction) or (FPromptNameCombo.Text = '') then Exit;
+  AppFolder := LowerCase(FPromptAppCombo.Text);
+  PName := FPromptNameCombo.Text;
+  OverridePath := IncludeTrailingPathDelimiter(FSettings.ProductionRoot) +
+    'settings' + PathDelim + 'prompts' + PathDelim + AppFolder + PathDelim + PName + '.txt';
+  if SafeWriteFileAtomic(OverridePath, FPromptMemo.Text, True) then
+    FPromptStatusLabel.Caption := 'Salvo em: ' + OverridePath
+  else
+    MessageDlg('Falha ao salvar prompt em ' + OverridePath, mtError, [mbOK], 0);
+end;
+
+procedure TMmenuSettingsForm.OnRestorePromptClick(Sender: TObject);
+var
+  AppFolder, PName, OverridePath: string;
+begin
+  if (not FHasProduction) or (FPromptNameCombo.Text = '') then Exit;
+  AppFolder := LowerCase(FPromptAppCombo.Text);
+  PName := FPromptNameCombo.Text;
+  OverridePath := IncludeTrailingPathDelimiter(FSettings.ProductionRoot) +
+    'settings' + PathDelim + 'prompts' + PathDelim + AppFolder + PathDelim + PName + '.txt';
+  if FileExists(OverridePath) then
+    DeleteFile(OverridePath);
+  LoadSelectedPromptText;
+end;
+
+procedure TMmenuSettingsForm.LoadMediaAndPresets;
+var
+  SetDir, Content: string;
+  Data: TJSONData;
+  Obj, Sub: TJSONObject;
+  Arr: TJSONArray;
+  I: Integer;
+begin
+  FMediaImgFmtEdit.Text := 'png'; FMediaImgWEdit.Text := '1024'; FMediaImgHEdit.Text := '1024';
+  FMediaAudioRateEdit.Text := '48000'; FMediaAudioBitsEdit.Text := '24';
+  FMediaVidCodecEdit.Text := 'h264'; FMediaVidCrfEdit.Text := '16';
+  FPresetsStylesMemo.Lines.Clear;
+  FPresetsTransMemo.Lines.Clear;
+  if not FHasProduction then Exit;
+
+  SetDir := IncludeTrailingPathDelimiter(FSettings.ProductionRoot) + 'settings' + PathDelim;
+  if SafeReadFileUtf8(SetDir + 'media-profiles.json', Content) then
+  begin
+    Data := nil;
+    try
+      Data := GetJSON(Content);
+      if Data is TJSONObject then
+      begin
+        Obj := TJSONObject(Data);
+        if Obj.Find('image.reference') is TJSONObject then
+        begin
+          Sub := TJSONObject(Obj.Find('image.reference'));
+          FMediaImgFmtEdit.Text := Sub.Get('format', 'png');
+          FMediaImgWEdit.Text := IntToStr(Sub.Get('width', 1024));
+          FMediaImgHEdit.Text := IntToStr(Sub.Get('height', 1024));
+        end;
+        if Obj.Find('audio.work') is TJSONObject then
+        begin
+          Sub := TJSONObject(Obj.Find('audio.work'));
+          FMediaAudioRateEdit.Text := IntToStr(Sub.Get('sample_rate', 48000));
+          FMediaAudioBitsEdit.Text := IntToStr(Sub.Get('bit_depth', 24));
+        end;
+        if Obj.Find('video.work') is TJSONObject then
+        begin
+          Sub := TJSONObject(Obj.Find('video.work'));
+          FMediaVidCodecEdit.Text := Sub.Get('codec', 'h264');
+          FMediaVidCrfEdit.Text := IntToStr(Sub.Get('crf', 16));
+        end;
+      end;
+    except
+    end;
+    if Data <> nil then Data.Free;
+  end;
+
+  if SafeReadFileUtf8(SetDir + 'presets.json', Content) then
+  begin
+    Data := nil;
+    try
+      Data := GetJSON(Content);
+      if Data is TJSONObject then
+      begin
+        Obj := TJSONObject(Data);
+        if Obj.Find('visual_styles') is TJSONArray then
+        begin
+          Arr := TJSONArray(Obj.Find('visual_styles'));
+          for I := 0 to Arr.Count - 1 do FPresetsStylesMemo.Lines.Add(Arr.Strings[I]);
+        end;
+        if Obj.Find('transitions') is TJSONArray then
+        begin
+          Arr := TJSONArray(Obj.Find('transitions'));
+          for I := 0 to Arr.Count - 1 do FPresetsTransMemo.Lines.Add(Arr.Strings[I]);
+        end;
+      end;
+    except
+    end;
+    if Data <> nil then Data.Free;
+  end;
+end;
+
+procedure TMmenuSettingsForm.SaveMediaAndPresets;
+var
+  SetDir, NowIso, S: string;
+  Root, Sub: TJSONObject;
+  Arr: TJSONArray;
+  I: Integer;
+begin
+  if not FHasProduction then Exit;
+  SetDir := IncludeTrailingPathDelimiter(FSettings.ProductionRoot) + 'settings' + PathDelim;
+  NowIso := CurrentUtcIso;
+
+  Root := TJSONObject.Create;
+  try
+    Root.Add('schema', 'mmp.media-profiles/1');
+    Root.Add('updated_at', NowIso);
+    Sub := TJSONObject.Create;
+    Sub.Add('format', Trim(FMediaImgFmtEdit.Text));
+    Sub.Add('width', StrToIntDef(FMediaImgWEdit.Text, 1024));
+    Sub.Add('height', StrToIntDef(FMediaImgHEdit.Text, 1024));
+    Sub.Add('background', '#808080');
+    Root.Add('image.reference', Sub);
+    Sub := TJSONObject.Create;
+    Sub.Add('format', 'wav');
+    Sub.Add('sample_rate', StrToIntDef(FMediaAudioRateEdit.Text, 48000));
+    Sub.Add('bit_depth', StrToIntDef(FMediaAudioBitsEdit.Text, 24));
+    Root.Add('audio.work', Sub);
+    Sub := TJSONObject.Create;
+    Sub.Add('container', 'mp4');
+    Sub.Add('codec', Trim(FMediaVidCodecEdit.Text));
+    Sub.Add('crf', StrToIntDef(FMediaVidCrfEdit.Text, 16));
+    Root.Add('video.work', Sub);
+    SafeWriteFileAtomic(SetDir + 'media-profiles.json', Root.FormatJSON, True);
+  finally
+    Root.Free;
+  end;
+
+  Root := TJSONObject.Create;
+  try
+    Root.Add('schema', 'mmp.presets/1');
+    Root.Add('updated_at', NowIso);
+    Arr := TJSONArray.Create;
+    for I := 0 to FPresetsStylesMemo.Lines.Count - 1 do
+    begin
+      S := Trim(FPresetsStylesMemo.Lines[I]);
+      if S <> '' then Arr.Add(S);
+    end;
+    Root.Add('visual_styles', Arr);
+    Arr := TJSONArray.Create;
+    for I := 0 to FPresetsTransMemo.Lines.Count - 1 do
+    begin
+      S := Trim(FPresetsTransMemo.Lines[I]);
+      if S <> '' then Arr.Add(S);
+    end;
+    Root.Add('transitions', Arr);
+    SafeWriteFileAtomic(SetDir + 'presets.json', Root.FormatJSON, True);
+  finally
+    Root.Free;
+  end;
+end;
+
 procedure TMmenuSettingsForm.OnSaveClick(Sender: TObject);
 var
   I: Integer;
@@ -737,13 +1371,19 @@ begin
   FSettings.ToolFfmpeg := Trim(FFfmpegEdit.Text);
   FSettings.ToolFfprobe := Trim(FFfprobeEdit.Text);
   FSettings.ToolMpv := Trim(FMpvEdit.Text);
+  FSettings.SoundLibraryDir := Trim(FSoundLibDirEdit.Text);
+  FSettings.MusicLibraryDir := Trim(FMusicLibDirEdit.Text);
 
   FSettings.ProxyUrl := Trim(FProxyEdit.Text);
+  FSettings.ProxyUser := Trim(FProxyUserEdit.Text);
+  FSettings.CABundle := Trim(FCABundleEdit.Text);
   FSettings.OfflineMode := FOfflineChk.Checked;
   FSettings.UiLanguage := Trim(FUiLangEdit.Text);
   FSettings.FontScale := StrToIntDef(FFontScaleEdit.Text, 100);
   FSettings.UiTheme := FThemeCombo.Text;
+  FSettings.ConfirmDestructive := FConfirmDestructiveChk.Checked;
   FSettings.LogLevel := FLogLevelCombo.Text;
+  FSettings.LogRetentionDays := StrToIntDef(FLogRetentionEdit.Text, 30);
 
   FSettings.SaveMachineIni;
 
@@ -767,6 +1407,7 @@ begin
 
     SaveProviderKindFields;
     SaveSelectedAppFields;
+    SaveMediaAndPresets;
 
     if not FSettings.SaveProductionSettings(ErrMsg) then
     begin

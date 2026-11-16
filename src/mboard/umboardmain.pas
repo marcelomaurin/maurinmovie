@@ -95,7 +95,7 @@ implementation
 
 constructor TMboardMainForm.Create(TheOwner: TComponent);
 var
-  ProdRoot, ProjId, RevId: string;
+  ProdRoot, ProjId, RevId, MMenuVer, ProdId: string;
 begin
   inherited CreateNew(TheOwner, 1);
   Randomize;
@@ -110,8 +110,9 @@ begin
   FSelectedBoard := -1;
   BuildUI;
 
-  ParseAppLaunchParams(ProdRoot, ProjId, RevId);
-  LogMsg('MBoard v' + MMP_EXECUTABLE_VERSION + ' iniciado (openai_core + openai_image).');
+  ParseAppLaunchContext(ProdRoot, ProjId, RevId, MMenuVer, ProdId);
+  LogMsg('MBoard v' + MMP_EXECUTABLE_VERSION + ' iniciado (openai_core + openai_image) | MMenu v' +
+    MMenuVer + ' | Projeto: ' + ProjId);
   if ProdRoot <> '' then
     LoadProductionAndRevision(ProdRoot, ProjId, RevId);
 end;
@@ -471,9 +472,12 @@ begin
       FBoards[I].OpeningUri := OpenRel;
       FBoards[I].ClosingUri := CloseRel;
 
-      SavePlaceholderBitmap(BaseRevDir + PathDelim + StringReplace(OpenRel, '/', PathDelim, [rfReplaceAll]),
-        FBoards[I].Heading + ' [INICIO]', FBoards[I].DirectionNotes,
-        'Asset: ' + FBoards[I].OpeningAssetId, $00383044);
+      if not FAi.GenerateImage('Storyboard inicial: ' + FBoards[I].Heading + ' - ' +
+        FBoards[I].DirectionNotes,
+        BaseRevDir + PathDelim + StringReplace(OpenRel, '/', PathDelim, [rfReplaceAll]), Err) then
+        SavePlaceholderBitmap(BaseRevDir + PathDelim + StringReplace(OpenRel, '/', PathDelim, [rfReplaceAll]),
+          FBoards[I].Heading + ' [INICIO]', FBoards[I].DirectionNotes,
+          'Asset: ' + FBoards[I].OpeningAssetId, $00383044);
       SavePlaceholderBitmap(BaseRevDir + PathDelim + StringReplace(CloseRel, '/', PathDelim, [rfReplaceAll]),
         FBoards[I].Heading + ' [FIM]', FBoards[I].DialogueText,
         'Asset: ' + FBoards[I].ClosingAssetId, $002C3D34);

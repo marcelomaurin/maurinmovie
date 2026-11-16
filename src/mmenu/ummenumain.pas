@@ -5,9 +5,25 @@ unit ummenumain;
 interface
 
 uses
-  Classes, SysUtils, StrUtils, Forms, Controls, Graphics, Dialogs, StdCtrls,
-  ExtCtrls, ComCtrls, Grids, Process, IniFiles,
+  Classes, SysUtils, StrUtils, Math, Types, Forms, Controls, Graphics, Dialogs,
+  StdCtrls, ExtCtrls, ComCtrls, Grids, Menus, LCLProc, Process, IniFiles,
   mmpcommon, mmpsettings, ummpprotocol, ummenusettings;
+
+const
+  // Paleta Azul & Branco (formato BGR do LCL: $00BBGGRR)
+  CLR_NAVY_HEADER   = $006E3B16; // #163B6E - Azul marinho cabecalho/banners
+  CLR_BLUE_PRIMARY  = $009E541B; // #1B549E - Azul principal (faixas alternadas / botoes)
+  CLR_BLUE_DARK     = $007D3F12; // #123F7D - Azul escuro (bordas / destaque)
+  CLR_BLUE_ACCENT   = $00D47E2B; // #2B7ED4 - Azul vivo (hover / realce)
+  CLR_BLUE_SOFT     = $00FAEFDE; // #DEEFFA - Azul claro suave
+  CLR_BLUE_ICE      = $00FCF7F1; // #F1F7FC - Fundo branco-azulado limpo
+  CLR_BLUE_BORDER   = $00E8CFAF; // #AFCFE8 - Borda azul suave
+  CLR_TEXT_NAVY     = $00472812; // #122847 - Texto principal sobre branco
+  CLR_TEXT_MUTED    = $008C684C; // #4C688C - Texto secundario sobre branco
+  CLR_ICE_SUB       = $00FFE2C4; // #C4E2FF - Texto secundario sobre azul
+  CLR_STATUS_OK     = $002E7D32; // #327D2E - Verde status OK sobre branco
+  CLR_STATUS_WARN   = $000068B8; // #B86800 - Ambar aviso sobre branco
+  CLR_STATUS_ERR    = $002828B8; // #B82828 - Vermelho erro sobre branco
 
 type
   TRecentProduction = record
@@ -27,15 +43,24 @@ type
     FMonitorTimer: TTimer;
     FSelectedProjectIndex: Integer;
 
+    // Menu suspenso e Popup da Engrenagem
+    FMainMenu: TMainMenu;
+    FGearPopup: TPopupMenu;
+    FGearHover: Boolean;
+    FGearDropHover: Boolean;
+    FHeaderGearPanel: TPanel;
+    FGearPaintBox: TPaintBox;
+    FGearArrowBox: TPaintBox;
+
     // Header
     FHeaderProdLabel: TLabel;
     FHeaderStatusBadge: TLabel;
     FExeVersionLabel: TLabel;
 
     // Sidebar
-    FActiveProdTitleEdit: TEdit;
-    FActiveProdIdEdit: TEdit;
-    FActiveProdPathEdit: TEdit;
+    FActiveProdTitleLabel: TLabel;
+    FActiveProdIdLabel: TLabel;
+    FActiveProdPathLabel: TLabel;
     FRecentsList: TListBox;
     FSummaryLabel: TLabel;
 
@@ -47,11 +72,23 @@ type
     FTabArtifacts: TTabSheet;
     FTabLog: TTabSheet;
 
-    // Portal Cards (1..6)
+    // Portal (Menu visual alternado azul e branco inspirado no cardapio)
+    FPortalScroll: TScrollBox;
+    FPortalContent: TPanel;
+    FPortalBanner: TPanel;
+    FPortalBannerBadge: TLabel;
+    FPortalFooter: TPanel;
+    FPortalFooterBadge: TLabel;
     FCardPanels: array[1..6] of TPanel;
+    FCardIllustBoxes: array[1..6] of TPaintBox;
+    FCardActionBoxes: array[1..6] of TPaintBox;
+    FCardActionHover: array[1..6] of Boolean;
+    FCardActionLabels: array[1..6] of string;
+    FCardActionSubLabels: array[1..6] of string;
+    FCardActionOkFlag: array[1..6] of Integer; // 1=ok, 0=detectado, -1=ausente
     FCardProjInfoLabels: array[1..6] of TLabel;
     FCardExeInfoLabels: array[1..6] of TLabel;
-    FCardOpenButtons: array[1..6] of TButton;
+    FCardRevButtons: array[1..6] of TLabel;
 
     // Tab 2: Projects & Revisions
     FProjectsGrid: TStringGrid;
@@ -84,15 +121,21 @@ type
     FStatusLabel: TLabel;
     FProgressBar: TProgressBar;
 
+    procedure BuildMainMenu;
+    procedure BuildSettingsMenuItems(ParentItem: TMenuItem);
     procedure BuildHeader(AParent: TWinControl);
-    procedure BuildSidebar(AParent: TWinControl);
     procedure BuildFooter(AParent: TWinControl);
+    procedure BuildSidebar(AParent: TWinControl);
     procedure BuildCenterTabs(AParent: TWinControl);
     procedure BuildPortalTab;
     procedure BuildProjectsTab;
     procedure BuildSyncTab;
     procedure BuildArtifactsTab;
     procedure BuildLogTab;
+
+    procedure LayoutPortalContent;
+    procedure DrawGearIcon(ACanvas: TCanvas; CX, CY: Integer; ROuter: Double; IconColor, BgColor: TColor);
+    procedure DrawAppIllustration(ACanvas: TCanvas; W, H, AppIdx: Integer; DarkBg: Boolean);
 
     procedure LoadConfig;
     procedure SaveConfig;
@@ -114,7 +157,34 @@ type
     procedure RefreshSyncTab;
     procedure RefreshArtifactsGrid;
 
-    // Event handlers
+    // Event handlers - Menu & Gear
+    procedure OnMenuExitClick(Sender: TObject);
+    procedure OnMenuLaunchAppClick(Sender: TObject);
+    procedure OnMenuSwitchTabClick(Sender: TObject);
+    procedure OnMenuSettingsTabClick(Sender: TObject);
+    procedure OnAboutClick(Sender: TObject);
+
+    procedure OnGearPaint(Sender: TObject);
+    procedure OnGearArrowPaint(Sender: TObject);
+    procedure OnGearMouseEnter(Sender: TObject);
+    procedure OnGearMouseLeave(Sender: TObject);
+    procedure OnGearArrowMouseEnter(Sender: TObject);
+    procedure OnGearArrowMouseLeave(Sender: TObject);
+    procedure OnGearArrowClick(Sender: TObject);
+
+    // Event handlers - Portal visual
+    procedure OnPortalScrollResize(Sender: TObject);
+    procedure OnStripBorderPaint(Sender: TObject);
+    procedure OnCardBorderPaint(Sender: TObject);
+    procedure OnIllustPaint(Sender: TObject);
+    procedure OnActionPillPaint(Sender: TObject);
+    procedure OnActionPillMouseEnter(Sender: TObject);
+    procedure OnActionPillMouseLeave(Sender: TObject);
+    procedure OnRevLinkMouseEnter(Sender: TObject);
+    procedure OnRevLinkMouseLeave(Sender: TObject);
+    procedure OnQuickSyncTabClick(Sender: TObject);
+
+    // Event handlers - Core
     procedure OnNewProductionClick(Sender: TObject);
     procedure OnOpenProductionClick(Sender: TObject);
     procedure OnRefreshClick(Sender: TObject);
@@ -153,6 +223,55 @@ var
 
 implementation
 
+const
+  SETTINGS_TAB_COUNT = 16;
+  SettingsTabLabels: array[0..SETTINGS_TAB_COUNT - 1] of string = (
+    'Geral e Ambiente...',
+    'Producao Atual...',
+    'IA: Texto...',
+    'IA: Imagem / Foto...',
+    'IA: Som - Voz...',
+    'IA: Som - Efeitos...',
+    'IA: Video...',
+    'IA: Visao (opcional)...',
+    'IA: Transcricao (opcional)...',
+    'Programas (MScript..MCut)...',
+    'Prompts...',
+    'Midia e Render...',
+    'Predefinicoes...',
+    'Politicas...',
+    'Ferramentas e Executaveis...',
+    'Rede, Interface e Log...'
+  );
+  SettingsTabKeys: array[0..SETTINGS_TAB_COUNT - 1] of string = (
+    'geral',
+    'producao',
+    'ia-texto',
+    'ia-imagem',
+    'ia-voz',
+    'ia-efeitos',
+    'ia-video',
+    'ia-visao',
+    'ia-transcricao',
+    'programas',
+    'prompts',
+    'midia',
+    'predefinicoes',
+    'politicas',
+    'ferramentas',
+    'rede'
+  );
+
+function CompactMiddlePath(const S: string; MaxLen: Integer): string;
+var
+  Half: Integer;
+begin
+  if (MaxLen < 12) or (Length(S) <= MaxLen) then
+    Exit(S);
+  Half := (MaxLen - 3) div 2;
+  Result := Copy(S, 1, Half) + '...' + Copy(S, Length(S) - Half + 1, Half);
+end;
+
 constructor TMmenuMainForm.Create(TheOwner: TComponent);
 var
   Args: TMMLaunchArgs;
@@ -161,16 +280,19 @@ begin
   Randomize;
   Caption := 'MMenu - Portal MaurinMovie';
   Width := 1220;
-  Height := 780;
+  Height := 800;
   Position := poScreenCenter;
   Constraints.MinWidth := 940;
   Constraints.MinHeight := 640;
+  Color := CLR_BLUE_ICE;
+  DoubleBuffered := True;
 
   FSelectedProjectIndex := -1;
   FSettings := TMMSettings.Create;
   FConfigPath := FSettings.MachineIniPath;
   FDefaultProductionsDir := FSettings.ProductionsDir;
 
+  BuildMainMenu;
   BuildHeader(Self);
   BuildFooter(Self);
   BuildSidebar(Self);
@@ -204,103 +326,347 @@ begin
   inherited Destroy;
 end;
 
+procedure TMmenuMainForm.BuildSettingsMenuItems(ParentItem: TMenuItem);
+var
+  I: Integer;
+  Item, IaSub: TMenuItem;
+begin
+  IaSub := nil;
+  for I := 0 to SETTINGS_TAB_COUNT - 1 do
+  begin
+    if (I >= 2) and (I <= 8) then
+    begin
+      if IaSub = nil then
+      begin
+        IaSub := TMenuItem.Create(Self);
+        IaSub.Caption := 'Provedores de IA';
+        ParentItem.Add(IaSub);
+      end;
+      Item := TMenuItem.Create(Self);
+      Item.Caption := SettingsTabLabels[I];
+      Item.Tag := I;
+      Item.OnClick := @OnMenuSettingsTabClick;
+      IaSub.Add(Item);
+    end
+    else
+    begin
+      if I = 9 then
+      begin
+        Item := TMenuItem.Create(Self);
+        Item.Caption := '-';
+        ParentItem.Add(Item);
+      end;
+      Item := TMenuItem.Create(Self);
+      Item.Caption := SettingsTabLabels[I];
+      Item.Tag := I;
+      Item.OnClick := @OnMenuSettingsTabClick;
+      ParentItem.Add(Item);
+    end;
+  end;
+end;
+
+procedure TMmenuMainForm.BuildMainMenu;
+var
+  MArquivo, MAplicativos, MExibir, MFerramentas, MConfig, MAjuda, Item: TMenuItem;
+  I: Integer;
+begin
+  FMainMenu := TMainMenu.Create(Self);
+  Self.Menu := FMainMenu;
+
+  // Arquivo
+  MArquivo := TMenuItem.Create(Self);
+  MArquivo.Caption := '&Arquivo';
+  FMainMenu.Items.Add(MArquivo);
+
+  Item := TMenuItem.Create(Self);
+  Item.Caption := 'Nova Producao...';
+  Item.ShortCut := TextToShortCut('Ctrl+N');
+  Item.OnClick := @OnNewProductionClick;
+  MArquivo.Add(Item);
+
+  Item := TMenuItem.Create(Self);
+  Item.Caption := 'Abrir Producao...';
+  Item.ShortCut := TextToShortCut('Ctrl+O');
+  Item.OnClick := @OnOpenProductionClick;
+  MArquivo.Add(Item);
+
+  Item := TMenuItem.Create(Self);
+  Item.Caption := 'Atualizar';
+  Item.ShortCut := TextToShortCut('F5');
+  Item.OnClick := @OnRefreshClick;
+  MArquivo.Add(Item);
+
+  Item := TMenuItem.Create(Self);
+  Item.Caption := '-';
+  MArquivo.Add(Item);
+
+  Item := TMenuItem.Create(Self);
+  Item.Caption := 'Localizar Producao Movida...';
+  Item.OnClick := @OnLocateMovedRecentClick;
+  MArquivo.Add(Item);
+
+  Item := TMenuItem.Create(Self);
+  Item.Caption := '-';
+  MArquivo.Add(Item);
+
+  Item := TMenuItem.Create(Self);
+  Item.Caption := 'Sair';
+  Item.OnClick := @OnMenuExitClick;
+  MArquivo.Add(Item);
+
+  // Aplicativos
+  MAplicativos := TMenuItem.Create(Self);
+  MAplicativos.Caption := 'A&plicativos';
+  FMainMenu.Items.Add(MAplicativos);
+
+  for I := 1 to 6 do
+  begin
+    Item := TMenuItem.Create(Self);
+    Item.Caption := IntToStr(I) + ' - ' + MmpAppNames[I] + ' (' + MmpAppDescriptions[I] + ')';
+    Item.Tag := I;
+    Item.OnClick := @OnMenuLaunchAppClick;
+    MAplicativos.Add(Item);
+  end;
+
+  // Exibir
+  MExibir := TMenuItem.Create(Self);
+  MExibir.Caption := '&Exibir';
+  FMainMenu.Items.Add(MExibir);
+
+  for I := 0 to 4 do
+  begin
+    Item := TMenuItem.Create(Self);
+    case I of
+      0: Item.Caption := 'Portal (Aplicativos)';
+      1: Item.Caption := 'Projetos & Revisoes';
+      2: Item.Caption := 'Sincronizacoes & Pendencias';
+      3: Item.Caption := 'Artefatos & Catalogo';
+      4: Item.Caption := 'Log Operacional';
+    end;
+    Item.Tag := I;
+    Item.OnClick := @OnMenuSwitchTabClick;
+    MExibir.Add(Item);
+  end;
+
+  // Ferramentas
+  MFerramentas := TMenuItem.Create(Self);
+  MFerramentas.Caption := '&Ferramentas';
+  FMainMenu.Items.Add(MFerramentas);
+
+  Item := TMenuItem.Create(Self);
+  Item.Caption := 'Auditar Integridade (SHA-256)';
+  Item.OnClick := @OnAuditWithHashesClick;
+  MFerramentas.Add(Item);
+
+  Item := TMenuItem.Create(Self);
+  Item.Caption := 'Reconstruir catalog.json';
+  Item.OnClick := @OnRebuildCatalogClick;
+  MFerramentas.Add(Item);
+
+  // Configuracoes
+  MConfig := TMenuItem.Create(Self);
+  MConfig.Caption := '&Configuracoes';
+  FMainMenu.Items.Add(MConfig);
+  BuildSettingsMenuItems(MConfig);
+
+  // Ajuda
+  MAjuda := TMenuItem.Create(Self);
+  MAjuda.Caption := 'A&juda';
+  FMainMenu.Items.Add(MAjuda);
+
+  Item := TMenuItem.Create(Self);
+  Item.Caption := 'Sobre o MMenu / MaurinMovie...';
+  Item.OnClick := @OnAboutClick;
+  MAjuda.Add(Item);
+
+  // Popup da Engrenagem (canto superior direito)
+  FGearPopup := TPopupMenu.Create(Self);
+  BuildSettingsMenuItems(FGearPopup.Items);
+end;
+
 procedure TMmenuMainForm.BuildHeader(AParent: TWinControl);
 var
-  Head: TPanel;
+  Head, BrandPanel, RightPanel, CenterPanel, AccentLine: TPanel;
   TitleLbl: TLabel;
-  BtnNew, BtnOpen, BtnRefresh, BtnCfg: TButton;
+  BtnNew, BtnOpen, BtnRefresh: TButton;
+  GearDivider: TPanel;
 begin
   Head := TPanel.Create(Self);
   Head.Parent := AParent;
   Head.Align := alTop;
-  Head.Height := 72;
+  Head.Height := 66;
   Head.Caption := '';
   Head.BevelOuter := bvNone;
-  Head.Color := $003A3028;
+  Head.Color := CLR_NAVY_HEADER;
   Head.ParentBackground := False;
 
+  AccentLine := TPanel.Create(Self);
+  AccentLine.Parent := Head;
+  AccentLine.Align := alBottom;
+  AccentLine.Height := 3;
+  AccentLine.Caption := '';
+  AccentLine.BevelOuter := bvNone;
+  AccentLine.Color := CLR_BLUE_ACCENT;
+  AccentLine.ParentBackground := False;
+
+  // Bloco esquerdo: Identidade MaurinMovie
+  BrandPanel := TPanel.Create(Self);
+  BrandPanel.Parent := Head;
+  BrandPanel.Align := alLeft;
+  BrandPanel.Width := 272;
+  BrandPanel.Caption := '';
+  BrandPanel.BevelOuter := bvNone;
+  BrandPanel.Color := CLR_NAVY_HEADER;
+  BrandPanel.ParentBackground := False;
+
   TitleLbl := TLabel.Create(Self);
-  TitleLbl.Parent := Head;
+  TitleLbl.Parent := BrandPanel;
   TitleLbl.Caption := 'MaurinMovie  |  MMenu';
-  TitleLbl.Font.Size := 18;
+  TitleLbl.Font.Size := 16;
   TitleLbl.Font.Style := [fsBold];
   TitleLbl.Font.Color := clWhite;
-  TitleLbl.SetBounds(18, 12, 340, 28);
+  TitleLbl.SetBounds(16, 10, 250, 26);
 
   FExeVersionLabel := TLabel.Create(Self);
-  FExeVersionLabel.Parent := Head;
-  FExeVersionLabel.Caption := 'Executavel v' + MMP_EXECUTABLE_VERSION + '  |  Protocolo MMP v1';
-  FExeVersionLabel.Font.Size := 9;
-  FExeVersionLabel.Font.Color := $00D0D0D0;
-  FExeVersionLabel.SetBounds(18, 44, 340, 18);
+  FExeVersionLabel.Parent := BrandPanel;
+  FExeVersionLabel.Caption := 'Suite v' + MMP_EXECUTABLE_VERSION + '  •  Protocolo MMP v1';
+  FExeVersionLabel.Font.Size := 8;
+  FExeVersionLabel.Font.Color := CLR_ICE_SUB;
+  FExeVersionLabel.SetBounds(16, 39, 250, 16);
+
+  // Bloco direito ancorado por Align=alRight (nunca some fora da janela!)
+  RightPanel := TPanel.Create(Self);
+  RightPanel.Parent := Head;
+  RightPanel.Align := alRight;
+  RightPanel.Width := 346;
+  RightPanel.Caption := '';
+  RightPanel.BevelOuter := bvNone;
+  RightPanel.Color := CLR_NAVY_HEADER;
+  RightPanel.ParentBackground := False;
+
+  BtnNew := TButton.Create(Self);
+  BtnNew.Parent := RightPanel;
+  BtnNew.Caption := '+ Nova';
+  BtnNew.SetBounds(4, 15, 76, 34);
+  BtnNew.OnClick := @OnNewProductionClick;
+
+  BtnOpen := TButton.Create(Self);
+  BtnOpen.Parent := RightPanel;
+  BtnOpen.Caption := 'Abrir...';
+  BtnOpen.SetBounds(86, 15, 76, 34);
+  BtnOpen.OnClick := @OnOpenProductionClick;
+
+  BtnRefresh := TButton.Create(Self);
+  BtnRefresh.Parent := RightPanel;
+  BtnRefresh.Caption := 'Atualizar';
+  BtnRefresh.SetBounds(168, 15, 82, 34);
+  BtnRefresh.OnClick := @OnRefreshClick;
+
+  // Botao de Configuracoes com icone de Engrenagem + seta dropdown no canto direito superior
+  FHeaderGearPanel := TPanel.Create(Self);
+  FHeaderGearPanel.Parent := RightPanel;
+  FHeaderGearPanel.SetBounds(258, 14, 74, 36);
+  FHeaderGearPanel.BevelOuter := bvNone;
+  FHeaderGearPanel.Color := CLR_BLUE_PRIMARY;
+  FHeaderGearPanel.ParentBackground := False;
+  FHeaderGearPanel.Caption := '';
+  FHeaderGearPanel.ShowHint := True;
+  FHeaderGearPanel.Hint := 'Configuracoes da Suite (clique na engrenagem para abrir ou na seta para opcoes)';
+
+  FGearArrowBox := TPaintBox.Create(Self);
+  FGearArrowBox.Parent := FHeaderGearPanel;
+  FGearArrowBox.Align := alRight;
+  FGearArrowBox.Width := 24;
+  FGearArrowBox.Cursor := crHandPoint;
+  FGearArrowBox.ShowHint := True;
+  FGearArrowBox.Hint := 'Menu rapido de configuracoes';
+  FGearArrowBox.OnPaint := @OnGearArrowPaint;
+  FGearArrowBox.OnMouseEnter := @OnGearArrowMouseEnter;
+  FGearArrowBox.OnMouseLeave := @OnGearArrowMouseLeave;
+  FGearArrowBox.OnClick := @OnGearArrowClick;
+
+  GearDivider := TPanel.Create(Self);
+  GearDivider.Parent := FHeaderGearPanel;
+  GearDivider.Align := alRight;
+  GearDivider.Width := 1;
+  GearDivider.BevelOuter := bvNone;
+  GearDivider.Color := CLR_BLUE_ACCENT;
+  GearDivider.ParentBackground := False;
+  GearDivider.Caption := '';
+
+  FGearPaintBox := TPaintBox.Create(Self);
+  FGearPaintBox.Parent := FHeaderGearPanel;
+  FGearPaintBox.Align := alClient;
+  FGearPaintBox.Cursor := crHandPoint;
+  FGearPaintBox.ShowHint := True;
+  FGearPaintBox.Hint := 'Abrir Configuracoes Centralizadas...';
+  FGearPaintBox.OnPaint := @OnGearPaint;
+  FGearPaintBox.OnMouseEnter := @OnGearMouseEnter;
+  FGearPaintBox.OnMouseLeave := @OnGearMouseLeave;
+  FGearPaintBox.OnClick := @OnOpenSettingsClick;
+
+  // Bloco central: Contexto da producao ativa
+  CenterPanel := TPanel.Create(Self);
+  CenterPanel.Parent := Head;
+  CenterPanel.Align := alClient;
+  CenterPanel.Caption := '';
+  CenterPanel.BevelOuter := bvNone;
+  CenterPanel.Color := CLR_NAVY_HEADER;
+  CenterPanel.ParentBackground := False;
 
   FHeaderProdLabel := TLabel.Create(Self);
-  FHeaderProdLabel.Parent := Head;
+  FHeaderProdLabel.Parent := CenterPanel;
   FHeaderProdLabel.Caption := 'Nenhuma producao ativa';
   FHeaderProdLabel.Font.Size := 11;
   FHeaderProdLabel.Font.Style := [fsBold];
   FHeaderProdLabel.Font.Color := clWhite;
-  FHeaderProdLabel.SetBounds(370, 14, 420, 22);
+  FHeaderProdLabel.Anchors := [akLeft, akTop, akRight];
+  FHeaderProdLabel.SetBounds(10, 12, 560, 22);
 
   FHeaderStatusBadge := TLabel.Create(Self);
-  FHeaderStatusBadge.Parent := Head;
+  FHeaderStatusBadge.Parent := CenterPanel;
   FHeaderStatusBadge.Caption := 'Selecione ou crie uma producao';
   FHeaderStatusBadge.Font.Size := 9;
-  FHeaderStatusBadge.Font.Color := $0099E6FF;
-  FHeaderStatusBadge.SetBounds(370, 42, 420, 18);
-
-  BtnCfg := TButton.Create(Self);
-  BtnCfg.Parent := Head;
-  BtnCfg.Caption := 'Configuracoes...';
-  BtnCfg.Anchors := [akTop, akRight];
-  BtnCfg.SetBounds(1090, 18, 114, 34);
-  BtnCfg.OnClick := @OnOpenSettingsClick;
-
-  BtnRefresh := TButton.Create(Self);
-  BtnRefresh.Parent := Head;
-  BtnRefresh.Caption := 'Atualizar';
-  BtnRefresh.Anchors := [akTop, akRight];
-  BtnRefresh.SetBounds(996, 18, 86, 34);
-  BtnRefresh.OnClick := @OnRefreshClick;
-
-  BtnOpen := TButton.Create(Self);
-  BtnOpen.Parent := Head;
-  BtnOpen.Caption := 'Abrir...';
-  BtnOpen.Anchors := [akTop, akRight];
-  BtnOpen.SetBounds(902, 18, 86, 34);
-  BtnOpen.OnClick := @OnOpenProductionClick;
-
-  BtnNew := TButton.Create(Self);
-  BtnNew.Parent := Head;
-  BtnNew.Caption := 'Nova Producao...';
-  BtnNew.Anchors := [akTop, akRight];
-  BtnNew.SetBounds(774, 18, 120, 34);
-  BtnNew.OnClick := @OnNewProductionClick;
+  FHeaderStatusBadge.Font.Color := CLR_ICE_SUB;
+  FHeaderStatusBadge.Anchors := [akLeft, akTop, akRight];
+  FHeaderStatusBadge.SetBounds(10, 36, 560, 18);
 end;
 
 procedure TMmenuMainForm.BuildFooter(AParent: TWinControl);
 var
-  Bottom: TPanel;
+  Bottom, TopLine: TPanel;
 begin
   Bottom := TPanel.Create(Self);
   Bottom.Parent := AParent;
   Bottom.Align := alBottom;
-  Bottom.Height := 36;
+  Bottom.Height := 34;
   Bottom.Caption := '';
-  Bottom.BevelOuter := bvLowered;
+  Bottom.BevelOuter := bvNone;
+  Bottom.Color := clWhite;
+  Bottom.ParentBackground := False;
+
+  TopLine := TPanel.Create(Self);
+  TopLine.Parent := Bottom;
+  TopLine.Align := alTop;
+  TopLine.Height := 1;
+  TopLine.Caption := '';
+  TopLine.BevelOuter := bvNone;
+  TopLine.Color := CLR_BLUE_BORDER;
+  TopLine.ParentBackground := False;
 
   FStatusLabel := TLabel.Create(Self);
   FStatusLabel.Parent := Bottom;
-  FStatusLabel.Left := 12;
-  FStatusLabel.Top := 10;
+  FStatusLabel.Left := 14;
+  FStatusLabel.Top := 9;
   FStatusLabel.Width := 900;
   FStatusLabel.Anchors := [akLeft, akTop, akRight];
+  FStatusLabel.Font.Color := CLR_TEXT_NAVY;
   FStatusLabel.Caption := 'Pronto.';
 
   FProgressBar := TProgressBar.Create(Self);
   FProgressBar.Parent := Bottom;
   FProgressBar.Anchors := [akTop, akRight];
-  FProgressBar.SetBounds(980, 9, 224, 18);
+  FProgressBar.SetBounds(980, 8, 224, 18);
   FProgressBar.Min := 0;
   FProgressBar.Max := 100;
   FProgressBar.Position := 0;
@@ -308,101 +674,156 @@ end;
 
 procedure TMmenuMainForm.BuildSidebar(AParent: TWinControl);
 var
-  Sidebar: TPanel;
+  Sidebar, SepLine, CardWrap, ProdCard, Stripe, RecentsWrap, RecentsBottom: TPanel;
   L: TLabel;
   BtnNew, BtnOpen, BtnLocate, BtnRemove: TButton;
 begin
   Sidebar := TPanel.Create(Self);
   Sidebar.Parent := AParent;
   Sidebar.Align := alLeft;
-  Sidebar.Width := 285;
+  Sidebar.Width := 258;
   Sidebar.Caption := '';
   Sidebar.BevelOuter := bvNone;
-  Sidebar.Color := $00EFEFEF;
+  Sidebar.Color := CLR_BLUE_ICE;
   Sidebar.ParentBackground := False;
 
+  SepLine := TPanel.Create(Self);
+  SepLine.Parent := Sidebar;
+  SepLine.Align := alRight;
+  SepLine.Width := 1;
+  SepLine.Caption := '';
+  SepLine.BevelOuter := bvNone;
+  SepLine.Color := CLR_BLUE_BORDER;
+  SepLine.ParentBackground := False;
+
+  // Cartao limpo da Producao Ativa
+  CardWrap := TPanel.Create(Self);
+  CardWrap.Parent := Sidebar;
+  CardWrap.Align := alTop;
+  CardWrap.Height := 204;
+  CardWrap.Caption := '';
+  CardWrap.BevelOuter := bvNone;
+  CardWrap.Color := CLR_BLUE_ICE;
+  CardWrap.ParentBackground := False;
+
+  ProdCard := TPanel.Create(Self);
+  ProdCard.Parent := CardWrap;
+  ProdCard.SetBounds(12, 12, 232, 184);
+  ProdCard.Anchors := [akLeft, akTop, akRight];
+  ProdCard.BevelOuter := bvNone;
+  ProdCard.Color := clWhite;
+  ProdCard.ParentBackground := False;
+  ProdCard.Caption := '';
+  ProdCard.OnPaint := @OnCardBorderPaint;
+
+  Stripe := TPanel.Create(Self);
+  Stripe.Parent := ProdCard;
+  Stripe.Align := alLeft;
+  Stripe.Width := 4;
+  Stripe.BevelOuter := bvNone;
+  Stripe.Color := CLR_BLUE_PRIMARY;
+  Stripe.ParentBackground := False;
+  Stripe.Caption := '';
+
   L := TLabel.Create(Self);
-  L.Parent := Sidebar;
+  L.Parent := ProdCard;
   L.Caption := 'PRODUCAO ATIVA';
+  L.Font.Size := 8;
   L.Font.Style := [fsBold];
-  L.SetBounds(14, 14, 250, 18);
+  L.Font.Color := CLR_BLUE_PRIMARY;
+  L.SetBounds(14, 10, 206, 16);
 
-  L := TLabel.Create(Self);
-  L.Parent := Sidebar;
-  L.Caption := 'Titulo:';
-  L.SetBounds(14, 38, 60, 18);
+  FActiveProdTitleLabel := TLabel.Create(Self);
+  FActiveProdTitleLabel.Parent := ProdCard;
+  FActiveProdTitleLabel.Caption := '(nenhuma producao)';
+  FActiveProdTitleLabel.Font.Size := 11;
+  FActiveProdTitleLabel.Font.Style := [fsBold];
+  FActiveProdTitleLabel.Font.Color := CLR_TEXT_NAVY;
+  FActiveProdTitleLabel.SetBounds(14, 28, 206, 22);
 
-  FActiveProdTitleEdit := TEdit.Create(Self);
-  FActiveProdTitleEdit.Parent := Sidebar;
-  FActiveProdTitleEdit.ReadOnly := True;
-  FActiveProdTitleEdit.SetBounds(14, 56, 257, 24);
-  FActiveProdTitleEdit.Text := '(nenhuma)';
+  FActiveProdIdLabel := TLabel.Create(Self);
+  FActiveProdIdLabel.Parent := ProdCard;
+  FActiveProdIdLabel.Caption := 'ID: -';
+  FActiveProdIdLabel.Font.Size := 8;
+  FActiveProdIdLabel.Font.Color := CLR_TEXT_MUTED;
+  FActiveProdIdLabel.ShowHint := True;
+  FActiveProdIdLabel.SetBounds(14, 52, 206, 16);
 
-  L := TLabel.Create(Self);
-  L.Parent := Sidebar;
-  L.Caption := 'ID da Producao:';
-  L.SetBounds(14, 86, 150, 18);
+  FActiveProdPathLabel := TLabel.Create(Self);
+  FActiveProdPathLabel.Parent := ProdCard;
+  FActiveProdPathLabel.Caption := 'Pasta: -';
+  FActiveProdPathLabel.Font.Size := 8;
+  FActiveProdPathLabel.Font.Color := CLR_TEXT_MUTED;
+  FActiveProdPathLabel.ShowHint := True;
+  FActiveProdPathLabel.SetBounds(14, 70, 206, 16);
 
-  FActiveProdIdEdit := TEdit.Create(Self);
-  FActiveProdIdEdit.Parent := Sidebar;
-  FActiveProdIdEdit.ReadOnly := True;
-  FActiveProdIdEdit.SetBounds(14, 104, 257, 24);
-  FActiveProdIdEdit.Text := '-';
-
-  L := TLabel.Create(Self);
-  L.Parent := Sidebar;
-  L.Caption := 'Pasta raiz:';
-  L.SetBounds(14, 134, 150, 18);
-
-  FActiveProdPathEdit := TEdit.Create(Self);
-  FActiveProdPathEdit.Parent := Sidebar;
-  FActiveProdPathEdit.ReadOnly := True;
-  FActiveProdPathEdit.SetBounds(14, 152, 257, 24);
-  FActiveProdPathEdit.Text := '-';
+  FSummaryLabel := TLabel.Create(Self);
+  FSummaryLabel.Parent := ProdCard;
+  FSummaryLabel.WordWrap := True;
+  FSummaryLabel.Font.Size := 8;
+  FSummaryLabel.Font.Style := [fsBold];
+  FSummaryLabel.Font.Color := CLR_BLUE_PRIMARY;
+  FSummaryLabel.SetBounds(14, 94, 206, 36);
+  FSummaryLabel.Caption := 'Abra ou crie uma producao.';
 
   BtnNew := TButton.Create(Self);
-  BtnNew.Parent := Sidebar;
-  BtnNew.Caption := 'Nova producao...';
-  BtnNew.SetBounds(14, 186, 124, 32);
+  BtnNew.Parent := ProdCard;
+  BtnNew.Caption := 'Nova...';
+  BtnNew.SetBounds(14, 140, 98, 30);
   BtnNew.OnClick := @OnNewProductionClick;
 
   BtnOpen := TButton.Create(Self);
-  BtnOpen.Parent := Sidebar;
+  BtnOpen.Parent := ProdCard;
   BtnOpen.Caption := 'Abrir...';
-  BtnOpen.SetBounds(146, 186, 125, 32);
+  BtnOpen.SetBounds(120, 140, 98, 30);
   BtnOpen.OnClick := @OnOpenProductionClick;
 
-  FSummaryLabel := TLabel.Create(Self);
-  FSummaryLabel.Parent := Sidebar;
-  FSummaryLabel.WordWrap := True;
-  FSummaryLabel.SetBounds(14, 228, 257, 68);
-  FSummaryLabel.Caption := 'Nenhuma producao carregada.';
+  // Lista de Producoes Recentes (com rodape sempre visivel!)
+  RecentsWrap := TPanel.Create(Self);
+  RecentsWrap.Parent := Sidebar;
+  RecentsWrap.Align := alClient;
+  RecentsWrap.Caption := '';
+  RecentsWrap.BevelOuter := bvNone;
+  RecentsWrap.Color := CLR_BLUE_ICE;
+  RecentsWrap.ParentBackground := False;
+  RecentsWrap.BorderWidth := 12;
 
   L := TLabel.Create(Self);
-  L.Parent := Sidebar;
-  L.Caption := 'PRODUCOES RECENTES (duplo clique)';
+  L.Parent := RecentsWrap;
+  L.Align := alTop;
+  L.Height := 22;
+  L.Caption := 'RECENTES (duplo clique)';
+  L.Font.Size := 8;
   L.Font.Style := [fsBold];
-  L.SetBounds(14, 304, 257, 18);
+  L.Font.Color := CLR_BLUE_PRIMARY;
 
-  FRecentsList := TListBox.Create(Self);
-  FRecentsList.Parent := Sidebar;
-  FRecentsList.Anchors := [akLeft, akTop, akRight, akBottom];
-  FRecentsList.SetBounds(14, 326, 257, 280);
-  FRecentsList.OnDblClick := @OnRecentDblClick;
+  RecentsBottom := TPanel.Create(Self);
+  RecentsBottom.Parent := RecentsWrap;
+  RecentsBottom.Align := alBottom;
+  RecentsBottom.Height := 38;
+  RecentsBottom.Caption := '';
+  RecentsBottom.BevelOuter := bvNone;
+  RecentsBottom.Color := CLR_BLUE_ICE;
+  RecentsBottom.ParentBackground := False;
 
   BtnLocate := TButton.Create(Self);
-  BtnLocate.Parent := Sidebar;
-  BtnLocate.Caption := 'Localizar movida...';
-  BtnLocate.Anchors := [akLeft, akBottom];
-  BtnLocate.SetBounds(14, 616, 135, 30);
+  BtnLocate.Parent := RecentsBottom;
+  BtnLocate.Caption := 'Localizar...';
+  BtnLocate.SetBounds(0, 8, 114, 28);
   BtnLocate.OnClick := @OnLocateMovedRecentClick;
 
   BtnRemove := TButton.Create(Self);
-  BtnRemove.Parent := Sidebar;
+  BtnRemove.Parent := RecentsBottom;
   BtnRemove.Caption := 'Remover';
-  BtnRemove.Anchors := [akLeft, akBottom];
-  BtnRemove.SetBounds(156, 616, 115, 30);
+  BtnRemove.SetBounds(120, 8, 112, 28);
   BtnRemove.OnClick := @OnRemoveRecentClick;
+
+  FRecentsList := TListBox.Create(Self);
+  FRecentsList.Parent := RecentsWrap;
+  FRecentsList.Align := alClient;
+  FRecentsList.Color := clWhite;
+  FRecentsList.Font.Color := CLR_TEXT_NAVY;
+  FRecentsList.OnDblClick := @OnRecentDblClick;
 end;
 
 procedure TMmenuMainForm.BuildCenterTabs(AParent: TWinControl);
@@ -440,78 +861,533 @@ end;
 
 procedure TMmenuMainForm.BuildPortalTab;
 var
-  Scroll: TScrollBox;
-  Intro: TLabel;
-  I, Col, Row, X, Y: Integer;
-  Card: TPanel;
-  TitleL, DescL: TLabel;
-  BtnRev: TButton;
+  I: Integer;
+  Strip, TextZone: TPanel;
+  IllustBox, ActionBox: TPaintBox;
+  TitleL, DescL, ProjL, ExeL, RevBtn, BannerTitle, BannerSub, BannerLine1, BannerLine2: TLabel;
+  FooterTitle: TLabel;
+  BtnAudit, BtnPending, BtnCfg: TButton;
+  IsBlueStrip: Boolean;
 begin
-  Scroll := TScrollBox.Create(Self);
-  Scroll.Parent := FTabPortal;
-  Scroll.Align := alClient;
-  Scroll.BorderStyle := bsNone;
+  FPortalScroll := TScrollBox.Create(Self);
+  FPortalScroll.Parent := FTabPortal;
+  FPortalScroll.Align := alClient;
+  FPortalScroll.BorderStyle := bsNone;
+  FPortalScroll.Color := CLR_BLUE_ICE;
+  FPortalScroll.ParentBackground := False;
+  FPortalScroll.VertScrollBar.Tracking := True;
+  FPortalScroll.OnResize := @OnPortalScrollResize;
 
-  Intro := TLabel.Create(Self);
-  Intro.Parent := Scroll;
-  Intro.Caption := 'Aplicativos independentes da suite MaurinMovie (MScript -> MVisual -> MBoard -> MSound -> MScene -> MCut)';
-  Intro.Font.Size := 11;
-  Intro.Font.Style := [fsBold];
-  Intro.SetBounds(18, 14, 860, 24);
+  FPortalContent := TPanel.Create(Self);
+  FPortalContent.Parent := FPortalScroll;
+  FPortalContent.BevelOuter := bvNone;
+  FPortalContent.Color := CLR_BLUE_ICE;
+  FPortalContent.ParentBackground := False;
+  FPortalContent.Caption := '';
+  FPortalContent.DoubleBuffered := True;
 
+  // 1) Faixa Superior (inspirada no bloco "ENTRADAS" do cardapio)
+  FPortalBanner := TPanel.Create(Self);
+  FPortalBanner.Parent := FPortalContent;
+  FPortalBanner.BevelOuter := bvNone;
+  FPortalBanner.Color := CLR_NAVY_HEADER;
+  FPortalBanner.ParentBackground := False;
+  FPortalBanner.Caption := '';
+
+  BannerTitle := TLabel.Create(Self);
+  BannerTitle.Parent := FPortalBanner;
+  BannerTitle.Caption := 'SUITE';
+  BannerTitle.Font.Size := 17;
+  BannerTitle.Font.Style := [fsBold];
+  BannerTitle.Font.Color := clWhite;
+  BannerTitle.SetBounds(20, 10, 120, 28);
+
+  BannerSub := TLabel.Create(Self);
+  BannerSub.Parent := FPortalBanner;
+  BannerSub.Caption := 'FLUXO DE PRODUCAO';
+  BannerSub.Font.Size := 8;
+  BannerSub.Font.Style := [fsBold];
+  BannerSub.Font.Color := CLR_ICE_SUB;
+  BannerSub.SetBounds(20, 39, 140, 16);
+
+  BannerLine1 := TLabel.Create(Self);
+  BannerLine1.Parent := FPortalBanner;
+  BannerLine1.Caption := '1. MScript (Roteiro)    ->    2. MVisual (Biblioteca)    ->    3. MBoard (Storyboard)';
+  BannerLine1.Font.Size := 9;
+  BannerLine1.Font.Style := [fsBold];
+  BannerLine1.Font.Color := clWhite;
+  BannerLine1.SetBounds(174, 13, 560, 18);
+
+  BannerLine2 := TLabel.Create(Self);
+  BannerLine2.Parent := FPortalBanner;
+  BannerLine2.Caption := '4. MSound (Voz/SFX)    ->    5. MScene (Cenas)         ->    6. MCut (Montagem Final)';
+  BannerLine2.Font.Size := 9;
+  BannerLine2.Font.Color := CLR_ICE_SUB;
+  BannerLine2.SetBounds(174, 36, 560, 18);
+
+  FPortalBannerBadge := TLabel.Create(Self);
+  FPortalBannerBadge.Parent := FPortalBanner;
+  FPortalBannerBadge.Alignment := taRightJustify;
+  FPortalBannerBadge.Anchors := [akTop, akRight];
+  FPortalBannerBadge.Font.Size := 9;
+  FPortalBannerBadge.Font.Style := [fsBold];
+  FPortalBannerBadge.Font.Color := CLR_ICE_SUB;
+  FPortalBannerBadge.Caption := 'Selecione um modulo';
+  FPortalBannerBadge.SetBounds(710, 24, 180, 20);
+
+  // 2) 6 Faixas Alternadas (Branco / Azul) com Imagem Sugestiva + Pilula + Descricao
   for I := 1 to 6 do
   begin
-    Col := (I - 1) mod 2;
-    Row := (I - 1) div 2;
-    X := 18 + Col * 430;
-    Y := 50 + Row * 168;
+    IsBlueStrip := (I mod 2 = 0); // 1,3,5 Brancos | 2,4,6 Azuis
 
-    Card := TPanel.Create(Self);
-    Card.Parent := Scroll;
-    Card.SetBounds(X, Y, 412, 152);
-    Card.BevelOuter := bvRaised;
-    Card.Color := clWhite;
-    Card.ParentBackground := False;
-    Card.Caption := '';
-    FCardPanels[I] := Card;
+    Strip := TPanel.Create(Self);
+    Strip.Parent := FPortalContent;
+    Strip.Tag := I;
+    Strip.BevelOuter := bvNone;
+    Strip.ParentBackground := False;
+    Strip.Caption := '';
+    Strip.DoubleBuffered := True;
+    Strip.ChildSizing.LeftRightSpacing := 1;
+    Strip.ChildSizing.TopBottomSpacing := 1;
+    if IsBlueStrip then
+      Strip.Color := CLR_BLUE_PRIMARY
+    else
+      Strip.Color := clWhite;
+    Strip.OnPaint := @OnStripBorderPaint;
+    FCardPanels[I] := Strip;
+
+    // Zona da Imagem Sugestiva
+    IllustBox := TPaintBox.Create(Self);
+    IllustBox.Parent := Strip;
+    IllustBox.Tag := I;
+    IllustBox.Width := 134;
+    IllustBox.Cursor := crHandPoint;
+    IllustBox.ShowHint := True;
+    IllustBox.Hint := 'Clique para abrir ' + MmpAppNames[I];
+    IllustBox.OnPaint := @OnIllustPaint;
+    IllustBox.OnClick := @OnPortalOpenAppClick;
+    FCardIllustBoxes[I] := IllustBox;
+
+    // Zona Central (Pilula de acao + linha conectora, estilo preco do cardapio)
+    ActionBox := TPaintBox.Create(Self);
+    ActionBox.Parent := Strip;
+    ActionBox.Tag := I;
+    ActionBox.Width := 214;
+    ActionBox.Cursor := crHandPoint;
+    ActionBox.ShowHint := True;
+    ActionBox.Hint := 'Abrir ' + MmpAppNames[I] + ' na revisao ativa';
+    ActionBox.OnPaint := @OnActionPillPaint;
+    ActionBox.OnMouseEnter := @OnActionPillMouseEnter;
+    ActionBox.OnMouseLeave := @OnActionPillMouseLeave;
+    ActionBox.OnClick := @OnPortalOpenAppClick;
+    FCardActionBoxes[I] := ActionBox;
+    FCardActionHover[I] := False;
+    FCardActionLabels[I] := 'Abrir ' + MmpAppNames[I];
+    FCardActionSubLabels[I] := 'Sem producao';
+    FCardActionOkFlag[I] := 0;
+
+    // Zona de Texto (Titulo + Descricao curta + Status limpo + Link Revisoes)
+    TextZone := TPanel.Create(Self);
+    TextZone.Parent := Strip;
+    TextZone.BevelOuter := bvNone;
+    TextZone.ParentBackground := False;
+    TextZone.Caption := '';
+    if IsBlueStrip then
+      TextZone.Color := CLR_BLUE_PRIMARY
+    else
+      TextZone.Color := clWhite;
+
+    // Ordem alternada exatamente como o cardapio:
+    // Impar (Branco): Imagem na Esquerda -> Pilula no Centro -> Texto na Direita
+    // Par (Azul):     Texto na Esquerda -> Pilula no Centro -> Imagem na Direita
+    if IsBlueStrip then
+    begin
+      IllustBox.Align := alRight;
+      ActionBox.Align := alRight;
+      TextZone.Align := alClient;
+    end
+    else
+    begin
+      IllustBox.Align := alLeft;
+      ActionBox.Align := alLeft;
+      TextZone.Align := alClient;
+    end;
 
     TitleL := TLabel.Create(Self);
-    TitleL.Parent := Card;
+    TitleL.Parent := TextZone;
     TitleL.Caption := IntToStr(I) + '  -  ' + MmpAppNames[I];
     TitleL.Font.Size := 13;
     TitleL.Font.Style := [fsBold];
-    TitleL.Font.Color := $003A3028;
-    TitleL.SetBounds(14, 10, 240, 24);
+    if IsBlueStrip then
+      TitleL.Font.Color := clWhite
+    else
+      TitleL.Font.Color := CLR_TEXT_NAVY;
+    TitleL.SetBounds(16, 10, 300, 24);
 
     DescL := TLabel.Create(Self);
-    DescL.Parent := Card;
+    DescL.Parent := TextZone;
     DescL.Caption := MmpAppDescriptions[I];
-    DescL.Font.Color := clGrayText;
-    DescL.SetBounds(14, 34, 380, 18);
+    DescL.Font.Size := 9;
+    if IsBlueStrip then
+      DescL.Font.Color := CLR_ICE_SUB
+    else
+      DescL.Font.Color := CLR_TEXT_MUTED;
+    DescL.SetBounds(16, 35, 320, 18);
 
-    FCardProjInfoLabels[I] := TLabel.Create(Self);
-    FCardProjInfoLabels[I].Parent := Card;
-    FCardProjInfoLabels[I].Caption := 'Projeto: (nenhuma producao)';
-    FCardProjInfoLabels[I].SetBounds(14, 58, 384, 18);
+    ProjL := TLabel.Create(Self);
+    ProjL.Parent := TextZone;
+    ProjL.Caption := 'Abra ou crie uma producao';
+    ProjL.Font.Size := 8;
+    ProjL.ShowHint := True;
+    if IsBlueStrip then
+      ProjL.Font.Color := clWhite
+    else
+      ProjL.Font.Color := CLR_TEXT_NAVY;
+    ProjL.SetBounds(16, 56, 360, 16);
+    FCardProjInfoLabels[I] := ProjL;
 
-    FCardExeInfoLabels[I] := TLabel.Create(Self);
-    FCardExeInfoLabels[I].Parent := Card;
-    FCardExeInfoLabels[I].Caption := 'Executavel: verificando...';
-    FCardExeInfoLabels[I].SetBounds(14, 80, 384, 18);
+    ExeL := TLabel.Create(Self);
+    ExeL.Parent := TextZone;
+    ExeL.Caption := 'Executavel: verificando...';
+    ExeL.Font.Size := 8;
+    if IsBlueStrip then
+      ExeL.Font.Color := CLR_ICE_SUB
+    else
+      ExeL.Font.Color := CLR_TEXT_MUTED;
+    ExeL.SetBounds(16, 73, 250, 16);
+    FCardExeInfoLabels[I] := ExeL;
 
-    FCardOpenButtons[I] := TButton.Create(Self);
-    FCardOpenButtons[I].Parent := Card;
-    FCardOpenButtons[I].Tag := I;
-    FCardOpenButtons[I].Caption := 'Abrir ' + MmpAppNames[I];
-    FCardOpenButtons[I].SetBounds(14, 108, 186, 32);
-    FCardOpenButtons[I].OnClick := @OnPortalOpenAppClick;
+    RevBtn := TLabel.Create(Self);
+    RevBtn.Parent := TextZone;
+    RevBtn.Tag := I;
+    RevBtn.Caption := 'Ver revisoes >';
+    RevBtn.Font.Size := 8;
+    RevBtn.Font.Style := [fsBold, fsUnderline];
+    RevBtn.Cursor := crHandPoint;
+    RevBtn.Anchors := [akRight, akBottom];
+    RevBtn.Alignment := taRightJustify;
+    if IsBlueStrip then
+      RevBtn.Font.Color := clWhite
+    else
+      RevBtn.Font.Color := CLR_BLUE_PRIMARY;
+    RevBtn.SetBounds(280, 72, 110, 16);
+    RevBtn.OnMouseEnter := @OnRevLinkMouseEnter;
+    RevBtn.OnMouseLeave := @OnRevLinkMouseLeave;
+    RevBtn.OnClick := @OnPortalViewRevisionsClick;
+    FCardRevButtons[I] := RevBtn;
+  end;
 
-    BtnRev := TButton.Create(Self);
-    BtnRev.Parent := Card;
-    BtnRev.Tag := I;
-    BtnRev.Caption := 'Ver revisoes e vinculos';
-    BtnRev.SetBounds(210, 108, 186, 32);
-    BtnRev.OnClick := @OnPortalViewRevisionsClick;
+  // 3) Faixa Inferior de Acoes Rapidas (inspirada no rodape do cardapio)
+  FPortalFooter := TPanel.Create(Self);
+  FPortalFooter.Parent := FPortalContent;
+  FPortalFooter.BevelOuter := bvNone;
+  FPortalFooter.Color := CLR_BLUE_SOFT;
+  FPortalFooter.ParentBackground := False;
+  FPortalFooter.Caption := '';
+  FPortalFooter.OnPaint := @OnCardBorderPaint;
+
+  FooterTitle := TLabel.Create(Self);
+  FooterTitle.Parent := FPortalFooter;
+  FooterTitle.Caption := 'ACOES RAPIDAS';
+  FooterTitle.Font.Size := 9;
+  FooterTitle.Font.Style := [fsBold];
+  FooterTitle.Font.Color := CLR_BLUE_PRIMARY;
+  FooterTitle.SetBounds(16, 18, 115, 18);
+
+  BtnAudit := TButton.Create(Self);
+  BtnAudit.Parent := FPortalFooter;
+  BtnAudit.Caption := 'Auditar SHA-256';
+  BtnAudit.SetBounds(140, 11, 134, 30);
+  BtnAudit.OnClick := @OnAuditWithHashesClick;
+
+  BtnPending := TButton.Create(Self);
+  BtnPending.Parent := FPortalFooter;
+  BtnPending.Caption := 'Ver Pendencias';
+  BtnPending.SetBounds(282, 11, 126, 30);
+  BtnPending.OnClick := @OnQuickSyncTabClick;
+
+  BtnCfg := TButton.Create(Self);
+  BtnCfg.Parent := FPortalFooter;
+  BtnCfg.Caption := 'Configuracoes...';
+  BtnCfg.SetBounds(416, 11, 124, 30);
+  BtnCfg.OnClick := @OnOpenSettingsClick;
+
+  FPortalFooterBadge := TLabel.Create(Self);
+  FPortalFooterBadge.Parent := FPortalFooter;
+  FPortalFooterBadge.Alignment := taRightJustify;
+  FPortalFooterBadge.Anchors := [akTop, akRight];
+  FPortalFooterBadge.Font.Size := 9;
+  FPortalFooterBadge.Font.Style := [fsBold];
+  FPortalFooterBadge.Font.Color := CLR_TEXT_NAVY;
+  FPortalFooterBadge.Caption := 'Pronto';
+  FPortalFooterBadge.SetBounds(620, 17, 270, 18);
+
+  LayoutPortalContent;
+end;
+
+procedure TMmenuMainForm.LayoutPortalContent;
+var
+  AvailW, ContentW, LeftX, Y, I: Integer;
+begin
+  if (FPortalScroll = nil) or (FPortalContent = nil) then Exit;
+
+  AvailW := FPortalScroll.ClientWidth;
+  if AvailW < 620 then AvailW := 620;
+  ContentW := Min(940, AvailW - 32);
+  LeftX := Max(16, (AvailW - ContentW) div 2);
+
+  Y := 14;
+  FPortalBanner.SetBounds(0, Y, ContentW, 66);
+  Inc(Y, 76);
+
+  for I := 1 to 6 do
+  begin
+    if FCardPanels[I] <> nil then
+      FCardPanels[I].SetBounds(0, Y, ContentW, 96);
+    Inc(Y, 106);
+  end;
+
+  FPortalFooter.SetBounds(0, Y, ContentW, 52);
+  Inc(Y, 68);
+
+  FPortalContent.SetBounds(LeftX, 0, ContentW, Y);
+end;
+
+procedure TMmenuMainForm.DrawGearIcon(ACanvas: TCanvas; CX, CY: Integer;
+  ROuter: Double; IconColor, BgColor: TColor);
+var
+  Pts: array[0..31] of TPoint;
+  I, N: Integer;
+  Ang, RInner, RBase, R: Double;
+begin
+  RBase := ROuter * 0.76;
+  RInner := ROuter * 0.34;
+  N := 0;
+  for I := 0 to 7 do
+  begin
+    Ang := (I * 2 * Pi / 8) - Pi / 2;
+    R := ROuter;
+    Pts[N] := Point(CX + Round(Cos(Ang - 0.14) * R), CY + Round(Sin(Ang - 0.14) * R)); Inc(N);
+    Pts[N] := Point(CX + Round(Cos(Ang + 0.14) * R), CY + Round(Sin(Ang + 0.14) * R)); Inc(N);
+    R := RBase;
+    Pts[N] := Point(CX + Round(Cos(Ang + 0.23) * R), CY + Round(Sin(Ang + 0.23) * R)); Inc(N);
+    Pts[N] := Point(CX + Round(Cos(Ang + (2 * Pi / 8) - 0.23) * R),
+                    CY + Round(Sin(Ang + (2 * Pi / 8) - 0.23) * R)); Inc(N);
+  end;
+
+  ACanvas.Pen.Style := psSolid;
+  ACanvas.Pen.Width := 1;
+  ACanvas.Pen.Color := IconColor;
+  ACanvas.Brush.Style := bsSolid;
+  ACanvas.Brush.Color := IconColor;
+  ACanvas.Polygon(Pts);
+
+  ACanvas.Brush.Color := BgColor;
+  ACanvas.Pen.Color := BgColor;
+  ACanvas.Ellipse(CX - Round(RInner), CY - Round(RInner),
+                  CX + Round(RInner), CY + Round(RInner));
+end;
+
+procedure TMmenuMainForm.DrawAppIllustration(ACanvas: TCanvas; W, H, AppIdx: Integer;
+  DarkBg: Boolean);
+var
+  CX, CY, I, BarH: Integer;
+  Fg, Soft, Accent, CardFill: TColor;
+  Poly: array[0..3] of TPoint;
+  Tri: array[0..2] of TPoint;
+begin
+  CX := W div 2;
+  CY := H div 2;
+
+  if DarkBg then
+  begin
+    Fg := clWhite;
+    Soft := CLR_ICE_SUB;
+    Accent := CLR_BLUE_ACCENT;
+    CardFill := CLR_BLUE_DARK;
+  end
+  else
+  begin
+    Fg := CLR_BLUE_PRIMARY;
+    Soft := CLR_BLUE_SOFT;
+    Accent := CLR_BLUE_ACCENT;
+    CardFill := clWhite;
+  end;
+
+  // Circulo suave de fundo para dar unidade visual (estilo badge)
+  ACanvas.Pen.Style := psClear;
+  ACanvas.Brush.Style := bsSolid;
+  if DarkBg then
+    ACanvas.Brush.Color := CLR_BLUE_DARK
+  else
+    ACanvas.Brush.Color := CLR_BLUE_ICE;
+  ACanvas.Ellipse(CX - 38, CY - 38, CX + 38, CY + 38);
+
+  ACanvas.Pen.Style := psSolid;
+
+  case AppIdx of
+    1: // MScript: Pagina de roteiro + caneta + icone de personagem
+      begin
+        // Folha de roteiro
+        ACanvas.Brush.Color := CardFill;
+        ACanvas.Pen.Color := Fg;
+        ACanvas.Pen.Width := 2;
+        ACanvas.RoundRect(CX - 22, CY - 26, CX + 14, CY + 24, 5, 5);
+
+        // Linhas do roteiro
+        ACanvas.Pen.Width := 2;
+        ACanvas.Pen.Color := Accent;
+        ACanvas.MoveTo(CX - 14, CY - 14); ACanvas.LineTo(CX + 5, CY - 14);
+        ACanvas.Pen.Color := Fg;
+        ACanvas.MoveTo(CX - 14, CY - 5);  ACanvas.LineTo(CX + 6, CY - 5);
+        ACanvas.MoveTo(CX - 14, CY + 4);  ACanvas.LineTo(CX + 3, CY + 4);
+        ACanvas.MoveTo(CX - 14, CY + 13); ACanvas.LineTo(CX - 2, CY + 13);
+
+        // Badge personagem no canto inferior direito
+        ACanvas.Brush.Color := Fg;
+        ACanvas.Pen.Color := CardFill;
+        ACanvas.Pen.Width := 2;
+        ACanvas.Ellipse(CX + 6, CY - 2, CX + 28, CY + 20);
+        ACanvas.Brush.Color := CardFill;
+        ACanvas.Pen.Style := psClear;
+        ACanvas.Ellipse(CX + 13, CY + 3, CX + 21, CY + 11);
+        ACanvas.Chord(CX + 10, CY + 11, CX + 24, CY + 23, 0, 180*16);
+        ACanvas.Pen.Style := psSolid;
+      end;
+
+    2: // MVisual: Molduras de galeria + paisagem (montanhas + sol)
+      begin
+        // Moldura traseira
+        ACanvas.Brush.Color := Soft;
+        ACanvas.Pen.Color := Fg;
+        ACanvas.Pen.Width := 2;
+        ACanvas.RoundRect(CX - 28, CY - 22, CX + 14, CY + 14, 5, 5);
+
+        // Moldura frontal
+        ACanvas.Brush.Color := CardFill;
+        ACanvas.Pen.Color := Fg;
+        ACanvas.Pen.Width := 2;
+        ACanvas.RoundRect(CX - 14, CY - 12, CX + 28, CY + 24, 5, 5);
+
+        // Sol
+        ACanvas.Brush.Color := Accent;
+        ACanvas.Pen.Style := psClear;
+        ACanvas.Ellipse(CX + 12, CY - 6, CX + 21, CY + 3);
+
+        // Montanhas
+        ACanvas.Brush.Color := Fg;
+        Tri[0] := Point(CX - 10, CY + 19);
+        Tri[1] := Point(CX + 2,  CY + 3);
+        Tri[2] := Point(CX + 14, CY + 19);
+        ACanvas.Polygon(Tri);
+
+        Tri[0] := Point(CX + 4,  CY + 19);
+        Tri[1] := Point(CX + 15, CY + 7);
+        Tri[2] := Point(CX + 24, CY + 19);
+        ACanvas.Polygon(Tri);
+        ACanvas.Pen.Style := psSolid;
+      end;
+
+    3: // MBoard: Grade 2x2 de Storyboard + setas de sincronizacao
+      begin
+        ACanvas.Pen.Color := Fg;
+        ACanvas.Pen.Width := 2;
+        ACanvas.Brush.Color := CardFill;
+        ACanvas.RoundRect(CX - 26, CY - 22, CX - 2, CY - 2, 4, 4);
+        ACanvas.RoundRect(CX + 2,  CY - 22, CX + 26, CY - 2, 4, 4);
+        ACanvas.RoundRect(CX - 26, CY + 2,  CX - 2, CY + 22, 4, 4);
+        ACanvas.Brush.Color := Soft;
+        ACanvas.RoundRect(CX + 2,  CY + 2,  CX + 26, CY + 22, 4, 4);
+
+        // Mini cenas dentro dos quadros
+        ACanvas.Pen.Color := Accent;
+        ACanvas.MoveTo(CX - 21, CY - 8); ACanvas.LineTo(CX - 7, CY - 16);
+        ACanvas.MoveTo(CX + 7,  CY - 12); ACanvas.LineTo(CX + 21, CY - 12);
+        ACanvas.MoveTo(CX - 21, CY + 12); ACanvas.LineTo(CX - 7, CY + 12);
+        // Seta sync no ultimo quadro
+        ACanvas.Pen.Color := Fg;
+        ACanvas.MoveTo(CX + 9, CY + 12); ACanvas.LineTo(CX + 20, CY + 12);
+        ACanvas.MoveTo(CX + 16, CY + 8); ACanvas.LineTo(CX + 20, CY + 12);
+        ACanvas.LineTo(CX + 16, CY + 16);
+      end;
+
+    4: // MSound: Ondas sonoras / Equalizador de voz e audio
+      begin
+        ACanvas.Pen.Style := psClear;
+        for I := -3 to 3 do
+        begin
+          case Abs(I) of
+            0: BarH := 24;
+            1: BarH := 18;
+            2: BarH := 12;
+          else
+            BarH := 7;
+          end;
+          if (I mod 2 = 0) then
+            ACanvas.Brush.Color := Fg
+          else
+            ACanvas.Brush.Color := Accent;
+          ACanvas.RoundRect(CX + I * 8 - 3, CY - BarH, CX + I * 8 + 3, CY + BarH, 4, 4);
+        end;
+        ACanvas.Pen.Style := psSolid;
+      end;
+
+    5: // MScene: Claquete de cinema + botao Play
+      begin
+        // Corpo da claquete
+        ACanvas.Brush.Color := CardFill;
+        ACanvas.Pen.Color := Fg;
+        ACanvas.Pen.Width := 2;
+        ACanvas.RoundRect(CX - 24, CY - 10, CX + 24, CY + 22, 5, 5);
+
+        // Barra superior da claquete
+        ACanvas.Brush.Color := Fg;
+        Poly[0] := Point(CX - 25, CY - 12);
+        Poly[1] := Point(CX + 22, CY - 22);
+        Poly[2] := Point(CX + 24, CY - 13);
+        Poly[3] := Point(CX - 23, CY - 5);
+        ACanvas.Polygon(Poly);
+
+        // Triangulo Play no centro
+        ACanvas.Brush.Color := Accent;
+        ACanvas.Pen.Style := psClear;
+        Tri[0] := Point(CX - 6, CY - 3);
+        Tri[1] := Point(CX + 10, CY + 6);
+        Tri[2] := Point(CX - 6, CY + 15);
+        ACanvas.Polygon(Tri);
+        ACanvas.Pen.Style := psSolid;
+      end;
+
+    6: // MCut: Tira de filme / Timeline com corte
+      begin
+        // Tira de filme
+        ACanvas.Brush.Color := CardFill;
+        ACanvas.Pen.Color := Fg;
+        ACanvas.Pen.Width := 2;
+        ACanvas.RoundRect(CX - 26, CY - 16, CX + 26, CY + 16, 4, 4);
+
+        // Perfurações superior e inferior
+        ACanvas.Brush.Color := Fg;
+        ACanvas.Pen.Style := psClear;
+        for I := -2 to 2 do
+        begin
+          ACanvas.Rectangle(CX + I * 10 - 2, CY - 13, CX + I * 10 + 3, CY - 9);
+          ACanvas.Rectangle(CX + I * 10 - 2, CY + 9,  CX + I * 10 + 3, CY + 13);
+        end;
+
+        // Blocos de cena na timeline
+        ACanvas.Brush.Color := Soft;
+        ACanvas.Rectangle(CX - 21, CY - 6, CX - 3, CY + 6);
+        ACanvas.Brush.Color := Accent;
+        ACanvas.Rectangle(CX + 3, CY - 6, CX + 21, CY + 6);
+
+        // Linha de corte vertical (playhead)
+        ACanvas.Pen.Style := psSolid;
+        ACanvas.Pen.Color := Fg;
+        ACanvas.Pen.Width := 2;
+        ACanvas.MoveTo(CX, CY - 23);
+        ACanvas.LineTo(CX, CY + 23);
+      end;
   end;
 end;
 
@@ -833,6 +1709,329 @@ begin
   FLogMemo.ScrollBars := ssBoth;
 end;
 
+// === Event handlers de desenho e menus ===
+
+procedure TMmenuMainForm.OnMenuExitClick(Sender: TObject);
+begin
+  Close;
+end;
+
+procedure TMmenuMainForm.OnMenuLaunchAppClick(Sender: TObject);
+var
+  AppIdx, I: Integer;
+  ProjId, RevId: string;
+begin
+  AppIdx := (Sender as TComponent).Tag;
+  ProjId := '';
+  RevId := '';
+  if FProd.Loaded then
+  begin
+    for I := 0 to High(FProd.Projects) do
+    begin
+      if (FProd.Projects[I].SoftwareIndex = AppIdx) and (FProd.Projects[I].SceneId = '') then
+      begin
+        ProjId := FProd.Projects[I].ProjectId;
+        RevId := FProd.Projects[I].ActiveRevision;
+        Break;
+      end;
+    end;
+  end;
+  LaunchApplication(AppIdx, ProjId, RevId);
+end;
+
+procedure TMmenuMainForm.OnMenuSwitchTabClick(Sender: TObject);
+var
+  TabIdx: Integer;
+begin
+  TabIdx := (Sender as TComponent).Tag;
+  if (TabIdx >= 0) and (TabIdx < FPageControl.PageCount) then
+    FPageControl.ActivePageIndex := TabIdx;
+end;
+
+procedure TMmenuMainForm.OnMenuSettingsTabClick(Sender: TObject);
+var
+  Idx: Integer;
+begin
+  Idx := (Sender as TComponent).Tag;
+  if (Idx >= 0) and (Idx < SETTINGS_TAB_COUNT) then
+    OpenSettingsTab(SettingsTabKeys[Idx])
+  else
+    OpenSettingsTab('geral');
+end;
+
+procedure TMmenuMainForm.OnAboutClick(Sender: TObject);
+begin
+  MessageDlg(
+    'MaurinMovie  |  MMenu (Portal da Suite)' + LineEnding +
+    'Versao: ' + MMP_EXECUTABLE_VERSION + LineEnding +
+    'Protocolo: MMP v1' + LineEnding + LineEnding +
+    'Aplicativos: MScript -> MVisual -> MBoard -> MSound -> MScene -> MCut',
+    mtInformation, [mbOK], 0);
+end;
+
+procedure TMmenuMainForm.OnGearPaint(Sender: TObject);
+var
+  PB: TPaintBox;
+  Bg: TColor;
+begin
+  PB := Sender as TPaintBox;
+  if FGearHover then Bg := CLR_BLUE_ACCENT else Bg := CLR_BLUE_PRIMARY;
+  PB.Canvas.Brush.Style := bsSolid;
+  PB.Canvas.Brush.Color := Bg;
+  PB.Canvas.FillRect(0, 0, PB.Width, PB.Height);
+  DrawGearIcon(PB.Canvas, PB.Width div 2, PB.Height div 2, 11.5, clWhite, Bg);
+end;
+
+procedure TMmenuMainForm.OnGearArrowPaint(Sender: TObject);
+var
+  PB: TPaintBox;
+  Bg: TColor;
+  CX, CY: Integer;
+  Tri: array[0..2] of TPoint;
+begin
+  PB := Sender as TPaintBox;
+  if FGearDropHover then Bg := CLR_BLUE_ACCENT else Bg := CLR_BLUE_PRIMARY;
+  PB.Canvas.Brush.Style := bsSolid;
+  PB.Canvas.Brush.Color := Bg;
+  PB.Canvas.FillRect(0, 0, PB.Width, PB.Height);
+
+  CX := PB.Width div 2;
+  CY := PB.Height div 2;
+  Tri[0] := Point(CX - 4, CY - 2);
+  Tri[1] := Point(CX + 4, CY - 2);
+  Tri[2] := Point(CX, CY + 3);
+  PB.Canvas.Pen.Style := psClear;
+  PB.Canvas.Brush.Color := clWhite;
+  PB.Canvas.Polygon(Tri);
+end;
+
+procedure TMmenuMainForm.OnGearMouseEnter(Sender: TObject);
+begin
+  FGearHover := True;
+  if FGearPaintBox <> nil then FGearPaintBox.Invalidate;
+end;
+
+procedure TMmenuMainForm.OnGearMouseLeave(Sender: TObject);
+begin
+  FGearHover := False;
+  if FGearPaintBox <> nil then FGearPaintBox.Invalidate;
+end;
+
+procedure TMmenuMainForm.OnGearArrowMouseEnter(Sender: TObject);
+begin
+  FGearDropHover := True;
+  if FGearArrowBox <> nil then FGearArrowBox.Invalidate;
+end;
+
+procedure TMmenuMainForm.OnGearArrowMouseLeave(Sender: TObject);
+begin
+  FGearDropHover := False;
+  if FGearArrowBox <> nil then FGearArrowBox.Invalidate;
+end;
+
+procedure TMmenuMainForm.OnGearArrowClick(Sender: TObject);
+var
+  P: TPoint;
+begin
+  if (FHeaderGearPanel <> nil) and (FGearPopup <> nil) then
+  begin
+    P := FHeaderGearPanel.ClientToScreen(Point(0, FHeaderGearPanel.Height));
+    FGearPopup.Popup(P.X, P.Y);
+  end;
+end;
+
+procedure TMmenuMainForm.OnPortalScrollResize(Sender: TObject);
+begin
+  LayoutPortalContent;
+end;
+
+procedure TMmenuMainForm.OnStripBorderPaint(Sender: TObject);
+var
+  P: TPanel;
+begin
+  P := Sender as TPanel;
+  P.Canvas.Brush.Style := bsClear;
+  P.Canvas.Pen.Style := psSolid;
+  P.Canvas.Pen.Width := 1;
+  if (P.Tag mod 2 = 0) then
+    P.Canvas.Pen.Color := CLR_BLUE_DARK
+  else
+    P.Canvas.Pen.Color := CLR_BLUE_BORDER;
+  P.Canvas.Rectangle(0, 0, P.Width, P.Height);
+end;
+
+procedure TMmenuMainForm.OnCardBorderPaint(Sender: TObject);
+var
+  P: TPanel;
+begin
+  P := Sender as TPanel;
+  P.Canvas.Brush.Style := bsClear;
+  P.Canvas.Pen.Style := psSolid;
+  P.Canvas.Pen.Width := 1;
+  P.Canvas.Pen.Color := CLR_BLUE_BORDER;
+  P.Canvas.Rectangle(0, 0, P.Width, P.Height);
+end;
+
+procedure TMmenuMainForm.OnIllustPaint(Sender: TObject);
+var
+  PB: TPaintBox;
+  AppIdx: Integer;
+  DarkBg: Boolean;
+begin
+  PB := Sender as TPaintBox;
+  AppIdx := PB.Tag;
+  DarkBg := (AppIdx mod 2 = 0);
+  PB.Canvas.Brush.Style := bsSolid;
+  if DarkBg then
+    PB.Canvas.Brush.Color := CLR_BLUE_PRIMARY
+  else
+    PB.Canvas.Brush.Color := clWhite;
+  PB.Canvas.FillRect(0, 0, PB.Width, PB.Height);
+  DrawAppIllustration(PB.Canvas, PB.Width, PB.Height, AppIdx, DarkBg);
+end;
+
+procedure TMmenuMainForm.OnActionPillPaint(Sender: TObject);
+var
+  PB: TPaintBox;
+  AppIdx, PillW, PillH, PillX, PillY, MidY: Integer;
+  DarkBg, IsHover: Boolean;
+  PillBg, PillBorder, PillText, LineCol, SubCol: TColor;
+  S, SubS: string;
+  TS: TSize;
+begin
+  PB := Sender as TPaintBox;
+  AppIdx := PB.Tag;
+  DarkBg := (AppIdx mod 2 = 0);
+  IsHover := FCardActionHover[AppIdx];
+
+  // Fundo da faixa
+  PB.Canvas.Brush.Style := bsSolid;
+  if DarkBg then
+    PB.Canvas.Brush.Color := CLR_BLUE_PRIMARY
+  else
+    PB.Canvas.Brush.Color := clWhite;
+  PB.Canvas.FillRect(0, 0, PB.Width, PB.Height);
+
+  PillW := 168;
+  PillH := 36;
+  PillX := (PB.Width - PillW) div 2;
+  PillY := 20;
+  MidY := PillY + (PillH div 2);
+
+  // Linha conectora estilo cardapio ligando a imagem a pilula
+  if DarkBg then
+    LineCol := CLR_ICE_SUB
+  else
+    LineCol := CLR_BLUE_BORDER;
+  PB.Canvas.Pen.Style := psSolid;
+  PB.Canvas.Pen.Width := 2;
+  PB.Canvas.Pen.Color := LineCol;
+  if DarkBg then
+  begin
+    PB.Canvas.MoveTo(PillX + PillW, MidY);
+    PB.Canvas.LineTo(PB.Width - 4, MidY);
+  end
+  else
+  begin
+    PB.Canvas.MoveTo(4, MidY);
+    PB.Canvas.LineTo(PillX, MidY);
+  end;
+
+  // Cores da pilula
+  if DarkBg then
+  begin
+    if IsHover then PillBg := CLR_BLUE_SOFT else PillBg := clWhite;
+    PillBorder := clWhite;
+    PillText := CLR_BLUE_PRIMARY;
+  end
+  else
+  begin
+    if IsHover then PillBg := CLR_BLUE_ACCENT else PillBg := CLR_BLUE_PRIMARY;
+    PillBorder := CLR_BLUE_DARK;
+    PillText := clWhite;
+  end;
+
+  PB.Canvas.Brush.Style := bsSolid;
+  PB.Canvas.Brush.Color := PillBg;
+  PB.Canvas.Pen.Color := PillBorder;
+  PB.Canvas.Pen.Width := 2;
+  PB.Canvas.RoundRect(PillX, PillY, PillX + PillW, PillY + PillH, 18, 18);
+
+  S := FCardActionLabels[AppIdx];
+  PB.Canvas.Font.Size := 10;
+  PB.Canvas.Font.Style := [fsBold];
+  PB.Canvas.Font.Color := PillText;
+  PB.Canvas.Brush.Style := bsClear;
+  TS := PB.Canvas.TextExtent(S);
+  PB.Canvas.TextOut(PillX + (PillW - TS.cx) div 2, PillY + (PillH - TS.cy) div 2, S);
+
+  // Sub-badge de revisao/status abaixo da pilula
+  SubS := FCardActionSubLabels[AppIdx];
+  PB.Canvas.Font.Size := 8;
+  PB.Canvas.Font.Style := [fsBold];
+  if DarkBg then
+    SubCol := CLR_ICE_SUB
+  else
+  begin
+    case FCardActionOkFlag[AppIdx] of
+      1: SubCol := CLR_STATUS_OK;
+      -1: SubCol := CLR_STATUS_ERR;
+    else
+      SubCol := CLR_TEXT_MUTED;
+    end;
+  end;
+  PB.Canvas.Font.Color := SubCol;
+  TS := PB.Canvas.TextExtent(SubS);
+  PB.Canvas.TextOut((PB.Width - TS.cx) div 2, PillY + PillH + 7, SubS);
+end;
+
+procedure TMmenuMainForm.OnActionPillMouseEnter(Sender: TObject);
+var
+  Idx: Integer;
+begin
+  Idx := (Sender as TPaintBox).Tag;
+  FCardActionHover[Idx] := True;
+  (Sender as TPaintBox).Invalidate;
+end;
+
+procedure TMmenuMainForm.OnActionPillMouseLeave(Sender: TObject);
+var
+  Idx: Integer;
+begin
+  Idx := (Sender as TPaintBox).Tag;
+  FCardActionHover[Idx] := False;
+  (Sender as TPaintBox).Invalidate;
+end;
+
+procedure TMmenuMainForm.OnRevLinkMouseEnter(Sender: TObject);
+var
+  L: TLabel;
+begin
+  L := Sender as TLabel;
+  if (L.Tag mod 2 = 0) then
+    L.Font.Color := CLR_ICE_SUB
+  else
+    L.Font.Color := CLR_BLUE_ACCENT;
+end;
+
+procedure TMmenuMainForm.OnRevLinkMouseLeave(Sender: TObject);
+var
+  L: TLabel;
+begin
+  L := Sender as TLabel;
+  if (L.Tag mod 2 = 0) then
+    L.Font.Color := clWhite
+  else
+    L.Font.Color := CLR_BLUE_PRIMARY;
+end;
+
+procedure TMmenuMainForm.OnQuickSyncTabClick(Sender: TObject);
+begin
+  FPageControl.ActivePage := FTabSync;
+end;
+
+// === Logica existente preservada ===
+
 procedure TMmenuMainForm.LogMsg(const Msg: string);
 begin
   if FLogMemo <> nil then
@@ -956,7 +2155,7 @@ begin
         TagStr := ''
       else
         TagStr := ' [movida/ausente]';
-      FRecentsList.Items.Add(FRecents[I].Title + TagStr + '  (' + FRecents[I].ProductionId + ')');
+      FRecentsList.Items.Add(FRecents[I].Title + TagStr);
     end;
   finally
     FRecentsList.Items.EndUpdate;
@@ -984,7 +2183,7 @@ end;
 function TMmenuMainForm.LaunchApplication(AppIdx: Integer;
   const ProjectId, RevisionId: string): Boolean;
 var
-  Executable, ArgLine, ProjDir, LockInfo: string;
+  Executable, ArgLine, ProjDir, LockInfo, EffProjId, EffRevId: string;
   P: TProcess;
   I: Integer;
 begin
@@ -995,17 +2194,57 @@ begin
     Exit;
   end;
 
-  if FProd.Loaded and (FProd.RootDir <> '') then
+  if (not FProd.Loaded) or (FProd.RootDir = '') or
+     (not FileExists(IncludeTrailingPathDelimiter(FProd.RootDir) + MMP_PRODUCTION_FILE)) then
   begin
-    ProjDir := IncludeTrailingPathDelimiter(FProd.RootDir) + 'projects' +
-      PathDelim + MmpAppFolders[AppIdx];
-    if IsProjectLocked(ProjDir, LockInfo) then
-    begin
-      if MessageDlg('O aplicativo ' + MmpAppNames[AppIdx] + ' ja possui lock ativo (' +
-        LockInfo + ').' + LineEnding + 'Deseja abrir mesmo assim?',
-        mtConfirmation, [mbYes, mbNo], 0) <> mrYes then
-        Exit;
-    end;
+    MessageDlg('Abra ou crie uma producao no MMenu antes de iniciar ' + MmpAppNames[AppIdx] + '.' +
+      LineEnding + LineEnding +
+      'Os aplicativos da suite dependem do contexto de producao e projeto fornecido pelo MMenu.',
+      mtInformation, [mbOK], 0);
+    Exit;
+  end;
+
+  EffProjId := Trim(ProjectId);
+  EffRevId := Trim(RevisionId);
+  if EffProjId = '' then
+  begin
+    for I := 0 to High(FProd.Projects) do
+      if (FProd.Projects[I].SoftwareIndex = AppIdx) and (FProd.Projects[I].SceneId = '') then
+      begin
+        EffProjId := FProd.Projects[I].ProjectId;
+        if EffRevId = '' then
+          EffRevId := FProd.Projects[I].ActiveRevision;
+        Break;
+      end;
+  end;
+  if EffProjId = '' then
+  begin
+    for I := 0 to High(FProd.Projects) do
+      if FProd.Projects[I].SoftwareIndex = AppIdx then
+      begin
+        EffProjId := FProd.Projects[I].ProjectId;
+        if EffRevId = '' then
+          EffRevId := FProd.Projects[I].ActiveRevision;
+        Break;
+      end;
+  end;
+  if EffProjId = '' then
+  begin
+    MessageDlg('Nenhum projeto de ' + MmpAppNames[AppIdx] +
+      ' foi encontrado na producao ativa (' + FProd.Title + ').', mtWarning, [mbOK], 0);
+    Exit;
+  end;
+  if EffRevId = '' then
+    EffRevId := 'r0001';
+
+  ProjDir := IncludeTrailingPathDelimiter(FProd.RootDir) + 'projects' +
+    PathDelim + MmpAppFolders[AppIdx];
+  if IsProjectLocked(ProjDir, LockInfo) then
+  begin
+    if MessageDlg('O aplicativo ' + MmpAppNames[AppIdx] + ' ja possui lock ativo (' +
+      LockInfo + ').' + LineEnding + 'Deseja abrir mesmo assim?',
+      mtConfirmation, [mbYes, mbNo], 0) <> mrYes then
+      Exit;
   end;
 
   Executable := FAppPaths[AppIdx];
@@ -1015,7 +2254,7 @@ begin
   if Executable = '' then
   begin
     MessageDlg('Executavel de ' + MmpAppNames[AppIdx] +
-      ' nao encontrado. Configure o caminho em Configuracoes.', mtWarning, [mbOK], 0);
+      ' nao encontrado. Configure o caminho na engrenagem (Configuracoes).', mtWarning, [mbOK], 0);
     LogMsg('FALHA ao iniciar ' + MmpAppNames[AppIdx] + ': executavel ausente.');
     Exit;
   end;
@@ -1023,8 +2262,7 @@ begin
   P := TProcess.Create(nil);
   try
     P.Executable := Executable;
-    if FProd.Loaded and (FProd.RootDir <> '') then
-      BuildLaunchArgs(FProd.RootDir, ProjectId, RevisionId, P.Parameters);
+    BuildLaunchArgs(FProd.RootDir, EffProjId, EffRevId, P.Parameters, FProd.ProductionId);
     P.Options := [];
 
     ArgLine := Executable;
@@ -1033,8 +2271,10 @@ begin
 
     try
       P.Execute;
-      LogMsg('Iniciado: ' + ArgLine);
-      SetStatus(MmpAppNames[AppIdx] + ' iniciado (revisao ' + RevisionId + ').', 100);
+      LogMsg('Iniciado (MMenu v' + MAURINMOVIE_VERSION + ', proj=' + EffProjId +
+        ', rev=' + EffRevId + '): ' + ArgLine);
+      SetStatus(MmpAppNames[AppIdx] + ' iniciado (projeto ' + EffProjId +
+        ', revisao ' + EffRevId + ').', 100);
       Result := True;
     except
       on E: Exception do
@@ -1085,20 +2325,38 @@ begin
     FHeaderProdLabel.Caption := FProd.Title + '  (' + FProd.ProductionId + ')';
     FHeaderStatusBadge.Caption := FProd.OverallStatusText;
     if FProd.HasFailures then
-      FHeaderStatusBadge.Font.Color := $008080FF
+    begin
+      FHeaderStatusBadge.Font.Color := $008080FF;
+      FPortalBannerBadge.Caption := 'Atencao: falhas';
+      FPortalBannerBadge.Font.Color := $008080FF;
+      FPortalFooterBadge.Caption := FProd.OverallStatusText;
+      FPortalFooterBadge.Font.Color := CLR_STATUS_ERR;
+    end
     else if FProd.HasPendingWork then
-      FHeaderStatusBadge.Font.Color := $0066D9FF
+    begin
+      FHeaderStatusBadge.Font.Color := $0066D9FF;
+      FPortalBannerBadge.Caption := 'Pendencias ativas';
+      FPortalBannerBadge.Font.Color := $0066D9FF;
+      FPortalFooterBadge.Caption := FProd.OverallStatusText;
+      FPortalFooterBadge.Font.Color := CLR_STATUS_WARN;
+    end
     else
+    begin
       FHeaderStatusBadge.Font.Color := $0090EE90;
+      FPortalBannerBadge.Caption := 'Suite integra';
+      FPortalBannerBadge.Font.Color := $0090EE90;
+      FPortalFooterBadge.Caption := FProd.OverallStatusText;
+      FPortalFooterBadge.Font.Color := CLR_STATUS_OK;
+    end;
 
-    FActiveProdTitleEdit.Text := FProd.Title;
-    FActiveProdIdEdit.Text := FProd.ProductionId;
-    FActiveProdPathEdit.Text := FProd.RootDir;
+    FActiveProdTitleLabel.Caption := FProd.Title;
+    FActiveProdIdLabel.Caption := 'ID: ' + CompactMiddlePath(FProd.ProductionId, 24);
+    FActiveProdIdLabel.Hint := FProd.ProductionId;
+    FActiveProdPathLabel.Caption := 'Pasta: ' + CompactMiddlePath(FProd.RootDir, 24);
+    FActiveProdPathLabel.Hint := FProd.RootDir;
     FSummaryLabel.Caption := Format(
-      'Projetos: %d' + LineEnding +
-      'Artefatos: %d' + LineEnding +
-      'Jobs de sync: %d' + LineEnding +
-      'Links/alertas: %d',
+      'Projetos: %d  •  Artefatos: %d' + LineEnding +
+      'Sync: %d  •  Alertas: %d',
       [Length(FProd.Projects), Length(FProd.Artifacts),
        Length(FProd.SyncJobs), Length(FProd.MissingLinks)]);
   end
@@ -1106,11 +2364,18 @@ begin
   begin
     FHeaderProdLabel.Caption := 'Nenhuma producao ativa';
     FHeaderStatusBadge.Caption := 'Crie ou abra uma producao para iniciar';
-    FHeaderStatusBadge.Font.Color := $0099E6FF;
-    FActiveProdTitleEdit.Text := '(nenhuma)';
-    FActiveProdIdEdit.Text := '-';
-    FActiveProdPathEdit.Text := '-';
-    FSummaryLabel.Caption := 'Nenhuma producao carregada.';
+    FHeaderStatusBadge.Font.Color := CLR_ICE_SUB;
+    FPortalBannerBadge.Caption := 'Sem producao';
+    FPortalBannerBadge.Font.Color := CLR_ICE_SUB;
+    FPortalFooterBadge.Caption := 'Nenhuma producao carregada';
+    FPortalFooterBadge.Font.Color := CLR_TEXT_MUTED;
+
+    FActiveProdTitleLabel.Caption := '(nenhuma)';
+    FActiveProdIdLabel.Caption := 'ID: -';
+    FActiveProdIdLabel.Hint := '';
+    FActiveProdPathLabel.Caption := 'Pasta: -';
+    FActiveProdPathLabel.Hint := '';
+    FSummaryLabel.Caption := 'Abra ou crie uma producao.';
   end;
 
   RefreshPortalCards;
@@ -1123,9 +2388,11 @@ procedure TMmenuMainForm.RefreshPortalCards;
 var
   I, PIdx: Integer;
   ProjId, RevStr, StatusStr, ExePath: string;
+  IsBlue: Boolean;
 begin
   for I := 1 to 6 do
   begin
+    IsBlue := (I mod 2 = 0);
     ProjId := '-';
     RevStr := '-';
     StatusStr := 'sem producao';
@@ -1145,31 +2412,48 @@ begin
     end;
 
     if FProd.Loaded then
-      FCardProjInfoLabels[I].Caption := Format('Projeto: %s  |  Rev: %s  |  %s',
-        [ProjId, RevStr, StatusStr])
+    begin
+      FCardProjInfoLabels[I].Caption := Format('Revisao: %s  •  Estado: %s', [RevStr, StatusStr]);
+      FCardProjInfoLabels[I].Hint := 'Project ID: ' + ProjId;
+      FCardActionSubLabels[I] := RevStr + '  •  ' + StatusStr;
+    end
     else
-      FCardProjInfoLabels[I].Caption := 'Projeto: (abra ou crie uma producao)';
+    begin
+      FCardProjInfoLabels[I].Caption := 'Abra ou crie uma producao para editar';
+      FCardProjInfoLabels[I].Hint := '';
+      FCardActionSubLabels[I] := 'Sem producao';
+    end;
 
     ExePath := FAppPaths[I];
     if (ExePath <> '') and FileExists(ExePath) then
     begin
-      FCardExeInfoLabels[I].Caption := 'Executavel: configurado';
-      FCardExeInfoLabels[I].Font.Color := $00007A00;
+      FCardExeInfoLabels[I].Caption := 'Executavel configurado (' + ExtractFileName(ExePath) + ')';
+      if IsBlue then FCardExeInfoLabels[I].Font.Color := CLR_ICE_SUB
+      else FCardExeInfoLabels[I].Font.Color := CLR_STATUS_OK;
+      FCardActionOkFlag[I] := 1;
     end
     else
     begin
       ExePath := FindExecutable(MmpAppNames[I]);
       if ExePath <> '' then
       begin
-        FCardExeInfoLabels[I].Caption := 'Executavel: detectado (' + ExtractFileName(ExePath) + ')';
-        FCardExeInfoLabels[I].Font.Color := $00805000;
+        FCardExeInfoLabels[I].Caption := 'Pronto (' + ExtractFileName(ExePath) + ')';
+        if IsBlue then FCardExeInfoLabels[I].Font.Color := CLR_ICE_SUB
+        else FCardExeInfoLabels[I].Font.Color := CLR_BLUE_PRIMARY;
+        FCardActionOkFlag[I] := 1;
       end
       else
       begin
-        FCardExeInfoLabels[I].Caption := 'Executavel: nao configurado';
-        FCardExeInfoLabels[I].Font.Color := clMaroon;
+        FCardExeInfoLabels[I].Caption := 'Executavel nao encontrado (configure na engrenagem)';
+        if IsBlue then FCardExeInfoLabels[I].Font.Color := $00B0C4FF
+        else FCardExeInfoLabels[I].Font.Color := CLR_STATUS_ERR;
+        FCardActionOkFlag[I] := -1;
+        FCardActionSubLabels[I] := 'Exe ausente';
       end;
     end;
+
+    if FCardActionBoxes[I] <> nil then
+      FCardActionBoxes[I].Invalidate;
   end;
 end;
 
@@ -1525,7 +2809,7 @@ begin
   begin
     MessageDlg('A pasta desta producao nao foi encontrada em:' + LineEnding +
       FRecents[Idx].RootDir + LineEnding + LineEnding +
-      'Use "Localizar movida..." para buscar pelo ID ' + FRecents[Idx].ProductionId + '.',
+      'Use "Localizar..." para buscar pelo ID ' + FRecents[Idx].ProductionId + '.',
       mtWarning, [mbOK], 0);
   end;
 end;
@@ -1586,7 +2870,7 @@ var
   AppIdx, I: Integer;
   ProjId, RevId: string;
 begin
-  AppIdx := (Sender as TButton).Tag;
+  AppIdx := (Sender as TComponent).Tag;
   ProjId := '';
   RevId := '';
   if FProd.Loaded then
@@ -1609,7 +2893,7 @@ procedure TMmenuMainForm.OnPortalViewRevisionsClick(Sender: TObject);
 var
   AppIdx, I: Integer;
 begin
-  AppIdx := (Sender as TButton).Tag;
+  AppIdx := (Sender as TComponent).Tag;
   FPageControl.ActivePage := FTabProjects;
   if not FProd.Loaded then Exit;
   for I := 0 to High(FProd.Projects) do

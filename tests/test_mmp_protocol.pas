@@ -248,17 +248,23 @@ begin
     AssertEq(ExcludeTrailingPathDelimiter(FoundDir),
       ExcludeTrailingPathDelimiter(MovedRoot), 'Located path matches moved folder');
 
-    // Test launch args builder
+    // Test launch args builder with MMenu context and version
     Args := TStringList.Create;
     try
-      BuildLaunchArgs(MovedRoot, 'pr_script_01', 'r0002', Args);
-      AssertEq(IntToStr(Args.Count), '6', 'BuildLaunchArgs emits 6 tokens');
-      AssertEq(Args[0], '--production', 'Arg 0 is --production');
-      AssertEq(Args[1], MovedRoot, 'Arg 1 is root dir');
-      AssertEq(Args[2], '--project-id', 'Arg 2 is --project-id');
-      AssertEq(Args[3], 'pr_script_01', 'Arg 3 is project_id');
-      AssertEq(Args[4], '--revision', 'Arg 4 is --revision');
-      AssertEq(Args[5], 'r0002', 'Arg 5 is revision_id');
+      BuildLaunchArgs(MovedRoot, 'pr_script_01', 'r0002', Args, 'p_test_01');
+      AssertEq(IntToStr(Args.Count), '12', 'BuildLaunchArgs emits 12 tokens with launcher context');
+      AssertEq(Args[0], '--launcher', 'Arg 0 is --launcher');
+      AssertEq(Args[1], 'mmenu', 'Arg 1 is mmenu');
+      AssertEq(Args[2], '--mmenu-version', 'Arg 2 is --mmenu-version');
+      AssertEq(Args[3], MAURINMOVIE_VERSION, 'Arg 3 is version');
+      AssertEq(Args[4], '--production', 'Arg 4 is --production');
+      AssertEq(Args[5], MovedRoot, 'Arg 5 is root dir');
+      AssertEq(Args[6], '--production-id', 'Arg 6 is --production-id');
+      AssertEq(Args[7], 'p_test_01', 'Arg 7 is production_id');
+      AssertEq(Args[8], '--project-id', 'Arg 8 is --project-id');
+      AssertEq(Args[9], 'pr_script_01', 'Arg 9 is project_id');
+      AssertEq(Args[10], '--revision', 'Arg 10 is --revision');
+      AssertEq(Args[11], 'r0002', 'Arg 11 is revision_id');
     finally
       Args.Free;
     end;

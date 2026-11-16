@@ -119,7 +119,7 @@ implementation
 
 constructor TMscriptMainForm.Create(TheOwner: TComponent);
 var
-  ProdRoot, ProjId, RevId: string;
+  ProdRoot, ProjId, RevId, MMenuVer, ProdId: string;
 begin
   inherited CreateNew(TheOwner, 1);
   Randomize;
@@ -134,8 +134,9 @@ begin
   FSelectedScene := -1;
   BuildUI;
 
-  ParseAppLaunchParams(ProdRoot, ProjId, RevId);
-  LogMsg('MScript v' + MMP_EXECUTABLE_VERSION + ' iniciado | IA: ' + FAi.ProviderDisplayName);
+  ParseAppLaunchContext(ProdRoot, ProjId, RevId, MMenuVer, ProdId);
+  LogMsg('MScript v' + MMP_EXECUTABLE_VERSION + ' iniciado | Contexto MMenu v' +
+    MMenuVer + ' | Projeto: ' + ProjId + ' | IA: ' + FAi.ProviderDisplayName);
   if ProdRoot <> '' then
     LoadProductionAndRevision(ProdRoot, ProjId, RevId)
   else

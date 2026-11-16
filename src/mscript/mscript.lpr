@@ -5,6 +5,8 @@ program mscript;
 uses
   Interfaces, Forms, SysUtils, mmpcommon, ummpappbase, umscriptmain;
 
+{$R mscript_icon.res}
+
 var
   Args: TMMLaunchArgs;
   ExitCode: Integer;
@@ -12,7 +14,9 @@ begin
   if HandleStandardCliEarlyExit(maMScript) then
     Exit;
 
-  Args := ParseLaunchArgs;
+  if not RequireMMenuLaunch(maMScript, Args) then
+    Halt(EXIT_INVALID_ARGS);
+
   if Args.Headless then
   begin
     ExitCode := RunMScriptHeadlessEvent(Args);

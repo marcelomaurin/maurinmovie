@@ -89,7 +89,7 @@ implementation
 
 constructor TMcutMainForm.Create(TheOwner: TComponent);
 var
-  ProdRoot, ProjId, RevId: string;
+  ProdRoot, ProjId, RevId, MMenuVer, ProdId: string;
 begin
   inherited CreateNew(TheOwner, 1);
   Randomize;
@@ -105,8 +105,9 @@ begin
   FCurrentSessionId := GenerateMmpId('sess');
   BuildUI;
 
-  ParseAppLaunchParams(ProdRoot, ProjId, RevId);
-  LogMsg('MCut v' + MMP_EXECUTABLE_VERSION + ' iniciado (openai_core + openai_video).');
+  ParseAppLaunchContext(ProdRoot, ProjId, RevId, MMenuVer, ProdId);
+  LogMsg('MCut v' + MMP_EXECUTABLE_VERSION + ' iniciado (openai_core + openai_video) | MMenu v' +
+    MMenuVer + ' | Projeto: ' + ProjId);
   if ProdRoot <> '' then
     LoadProductionAndRevision(ProdRoot, ProjId, RevId);
 end;

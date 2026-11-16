@@ -76,7 +76,7 @@ implementation
 
 constructor TMsceneMainForm.Create(TheOwner: TComponent);
 var
-  ProdRoot, ProjId, RevId: string;
+  ProdRoot, ProjId, RevId, MMenuVer, ProdId: string;
 begin
   inherited CreateNew(TheOwner, 1);
   Randomize;
@@ -94,8 +94,9 @@ begin
   FNextSceneLinkStatus := 'ligacao_posterior_pendente';
   BuildUI;
 
-  ParseAppLaunchParams(ProdRoot, ProjId, RevId);
-  LogMsg('MScene v' + MMP_EXECUTABLE_VERSION + ' iniciado (openai_core + openai_video TAIH264Decoder).');
+  ParseAppLaunchContext(ProdRoot, ProjId, RevId, MMenuVer, ProdId);
+  LogMsg('MScene v' + MMP_EXECUTABLE_VERSION + ' iniciado (openai_core + openai_video) | MMenu v' +
+    MMenuVer + ' | Projeto: ' + ProjId);
   if ProdRoot <> '' then
     LoadProduction(ProdRoot, ProjId, RevId);
 end;
@@ -499,6 +500,11 @@ begin
     FCurrentSceneHeading, 'Sub-blocos gerados: ' + IntToStr(Length(FSegments)), $00283848);
   if FileExists(PreviewBmp) then
     FPreviewImg.Picture.LoadFromFile(PreviewBmp);
+
+  if FAi.GenerateVideo(FCurrentSceneHeading,
+    RevDir + PathDelim + 'video' + PathDelim + 'segments' + PathDelim + FCurrentSceneId + '_preview.mp4',
+    Err, PreviewBmp, '', 4) then
+    LogMsg('Video de previa gerado via TAIUnifiedVideo para cena ' + FCurrentSceneId);
 
   RefreshSegmentsGrid;
   LogMsg('Etapa 1: Gerados ' + IntToStr(Length(FSegments)) + ' sub-blocos apenas para cena ' +
