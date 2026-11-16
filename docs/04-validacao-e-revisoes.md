@@ -29,3 +29,16 @@
 
 ## Pendências para próxima rodada
 Definir plataforma/linguagem, formatos de projeto, motores de IA e geração de imagens, armazenamento de mídia, políticas de custos/execução local, e interfaces dos dois aplicativos.
+
+## Software 3 — Storyboard
+1. Importa revisões específicas dos projetos 1 e 2 e gera automaticamente para **cada cena** quadro inicial, quadro final, falas vinculadas e duração estimada em segundos/minutos.
+2. Permite revisar e substituir quadros, alterar duração e dividir uma cena em múltiplos segmentos, mantendo relação hierárquica com a cena.
+3. A imagem final de um segmento é exatamente a inicial do próximo, referenciada pelo mesmo ID de ativo.
+4. A etapa 3 permite editar falas, ações e orientações de ambiente no storyboard; ao aprovar, dispara revisões automáticas no 1, depois no 2 e finalmente atualiza quadros afetados no 3.
+5. Alterar um objeto (pistola → bazuca) cria nova revisão do roteiro, gera referências visuais da bazuca e regenera quadros afetados, preservando os demais.
+6. Cada projeto salva arquivo com nome-base, tipo e revisão independente; versões anteriores não são sobrescritas.
+7. Falhas deixam transação pendente e recuperável; evento de origem único impede loops e aplicação duplicada.
+8. A revisão só recebe status de sincronização completa quando todos os vínculos e ativos requeridos estiverem íntegros.
+
+## Pendências adicionais
+Definir convenção final de extensão dos projetos, motor de geração de quadros, tratamento de conflitos simultâneos e interface de revisão de segmentos.
