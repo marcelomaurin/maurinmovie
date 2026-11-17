@@ -842,10 +842,47 @@ end;
 
 procedure TMscriptMainForm.ExtractCharacterMap;
 var
-  I, J, K, N: Integer;
+  I: Integer;
   Parts: TStringList;
-  NameTrim: string;
-  FoundIdx: Integer;
+
+  procedure AddEntriesFromCsv(const ACsv, ADefaultDesc, ADefaultWardrobe, ASceneId: string);
+  var
+    J, K, N, FoundIdx: Integer;
+    NameTrim: string;
+  begin
+    Parts.DelimitedText := ACsv;
+    for J := 0 to Parts.Count - 1 do
+    begin
+      NameTrim := Trim(Parts[J]);
+      if NameTrim = '' then Continue;
+      FoundIdx := -1;
+      for K := 0 to High(FChars) do
+        if SameText(FChars[K].Name, NameTrim) then
+        begin
+          FoundIdx := K;
+          Break;
+        end;
+      if FoundIdx < 0 then
+      begin
+        N := Length(FChars);
+        SetLength(FChars, N + 1);
+        FChars[N].CharacterId := GenerateMmpId('ch');
+        FChars[N].Name := NameTrim;
+        FChars[N].PhysicalDesc := ADefaultDesc;
+        FChars[N].WardrobeDesc := ADefaultWardrobe;
+        FChars[N].ScenesCsv := ASceneId;
+      end
+      else
+      begin
+        if Pos(ASceneId, FChars[FoundIdx].ScenesCsv) = 0 then
+          FChars[FoundIdx].ScenesCsv := FChars[FoundIdx].ScenesCsv + ', ' + ASceneId;
+        if (ADefaultWardrobe <> '') and
+           (Pos(ADefaultWardrobe, FChars[FoundIdx].WardrobeDesc) = 0) then
+          FChars[FoundIdx].WardrobeDesc := FChars[FoundIdx].WardrobeDesc + '; ' + ADefaultWardrobe;
+      end;
+    end;
+  end;
+
 begin
   SetLength(FChars, 0);
   Parts := TStringList.Create;
@@ -854,37 +891,14 @@ begin
     Parts.StrictDelimiter := True;
     for I := 0 to High(FScenes) do
     begin
-      Parts.DelimitedText := FScenes[I].CharactersCsv;
-      for J := 0 to Parts.Count - 1 do
-      begin
-        NameTrim := Trim(Parts[J]);
-        if NameTrim = '' then Continue;
-        FoundIdx := -1;
-        for K := 0 to High(FChars) do
-          if SameText(FChars[K].Name, NameTrim) then
-          begin
-            FoundIdx := K;
-            Break;
-          end;
-        if FoundIdx < 0 then
-        begin
-          N := Length(FChars);
-          SetLength(FChars, N + 1);
-          FChars[N].CharacterId := GenerateMmpId('ch');
-          FChars[N].Name := NameTrim;
-          FChars[N].PhysicalDesc := 'Extraido do roteiro (' + FScenes[I].Mood + ')';
-          FChars[N].WardrobeDesc := FScenes[I].CostumesCsv;
-          FChars[N].ScenesCsv := FScenes[I].SceneId;
-        end
-        else
-        begin
-          if Pos(FScenes[I].SceneId, FChars[FoundIdx].ScenesCsv) = 0 then
-            FChars[FoundIdx].ScenesCsv := FChars[FoundIdx].ScenesCsv + ', ' + FScenes[I].SceneId;
-          if (FScenes[I].CostumesCsv <> '') and
-             (Pos(FScenes[I].CostumesCsv, FChars[FoundIdx].WardrobeDesc) = 0) then
-            FChars[FoundIdx].WardrobeDesc := FChars[FoundIdx].WardrobeDesc + '; ' + FScenes[I].CostumesCsv;
-        end;
-      end;
+      AddEntriesFromCsv(FScenes[I].CharactersCsv,
+        'Personagem (' + FScenes[I].Mood + ')',
+        FScenes[I].CostumesCsv,
+        FScenes[I].SceneId);
+      AddEntriesFromCsv(FScenes[I].ObjectsCsv,
+        'Objeto de cena (' + FScenes[I].Mood + ')',
+        'Objeto / Adereco',
+        FScenes[I].SceneId);
     end;
   finally
     Parts.Free;

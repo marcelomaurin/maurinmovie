@@ -264,8 +264,10 @@ begin
     Conn.Open;
     if Conn.Handle <> nil then
     begin
-      sqlite3_busy_timeout(Conn.Handle, 5000);
-      sqlite3_exec(Conn.Handle, 'PRAGMA foreign_keys=OFF; PRAGMA synchronous=NORMAL;', nil, nil, nil);
+      sqlite3_busy_timeout(Conn.Handle, 15000);
+      sqlite3_exec(Conn.Handle,
+        'PRAGMA busy_timeout=15000; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=OFF; PRAGMA synchronous=NORMAL;',
+        nil, nil, nil);
     end;
     Result := True;
   except
@@ -409,14 +411,41 @@ const
   );
 var
   I: Integer;
+  Q: TSQLQuery;
+  NeedSchema: Boolean;
 begin
-  if not Tr.Active then Tr.StartTransaction;
-  for I := 0 to High(DDL) do
-    Conn.ExecuteDirect(DDL[I]);
-  Conn.ExecuteDirect(
-    'INSERT OR REPLACE INTO schema_meta(key, value) VALUES(''schema_version'', ''' +
-    MMP_DB_SCHEMA_VERSION + ''');');
-  Tr.Commit;
+  NeedSchema := True;
+  try
+    Q := TSQLQuery.Create(nil);
+    try
+      Q.DataBase := Conn;
+      Q.Transaction := Tr;
+      Q.SQL.Text := 'SELECT value FROM schema_meta WHERE key=''schema_version'' LIMIT 1;';
+      Q.Open;
+      if (not Q.EOF) and (Q.Fields[0].AsString = MMP_DB_SCHEMA_VERSION) then
+        NeedSchema := False;
+      Q.Close;
+    finally
+      Q.Free;
+    end;
+    if Tr.Active then Tr.Commit;
+  except
+    if Tr.Active then Tr.Rollback;
+    NeedSchema := True;
+  end;
+  if not NeedSchema then Exit;
+
+  try
+    if not Tr.Active then Tr.StartTransaction;
+    for I := 0 to High(DDL) do
+      Conn.ExecuteDirect(DDL[I]);
+    Conn.ExecuteDirect(
+      'INSERT OR REPLACE INTO schema_meta(key, value) VALUES(''schema_version'', ''' +
+      MMP_DB_SCHEMA_VERSION + ''');');
+    Tr.Commit;
+  except
+    if Tr.Active then Tr.Rollback;
+  end;
 end;
 
 function MmpProductionDbPath(const ProdRoot: string): string;

@@ -88,7 +88,68 @@ type
 implementation
 
 uses
-  ummpappbase;
+  ummpappbase, fphttpclient, opensslsockets;
+
+function ProbeHttpAiEndpoint(const ABaseUrl, AApiKey: string;
+  ATimeoutMs: Integer; out AError: string): Boolean;
+var
+  C: TFPHTTPClient;
+  S: TStringStream;
+  LowUrl, ProbeUrl: string;
+  P, Status: Integer;
+begin
+  Result := False;
+  AError := '';
+  LowUrl := LowerCase(Trim(ABaseUrl));
+  if Pos('http', LowUrl) <> 1 then
+  begin
+    AError := 'URL invalida: ' + ABaseUrl;
+    Exit;
+  end;
+
+  ProbeUrl := Trim(ABaseUrl);
+  P := Pos('/v1/', LowUrl);
+  if (P > 0) and (Trim(AApiKey) <> '') then
+    ProbeUrl := Copy(Trim(ABaseUrl), 1, P + 3) + 'models';
+
+  C := TFPHTTPClient.Create(nil);
+  S := TStringStream.Create('');
+  try
+    C.ConnectTimeout := ATimeoutMs;
+    C.IOTimeout := ATimeoutMs;
+    C.AllowRedirect := True;
+    if Trim(AApiKey) <> '' then
+      C.AddHeader('Authorization', 'Bearer ' + Trim(AApiKey));
+    try
+      C.Get(ProbeUrl, S);
+      Status := C.ResponseStatusCode;
+      if (Status >= 200) and (Status < 400) then
+        Exit(True);
+      if (Status = 401) or (Status = 403) then
+      begin
+        AError := 'Chave de API invalida ou sem permissao (HTTP ' + IntToStr(Status) + ').';
+        Exit(False);
+      end;
+      Result := (Status > 0) and (Status < 500);
+      if not Result then
+        AError := 'HTTP ' + IntToStr(Status) + ' em ' + ProbeUrl;
+    except
+      on E: Exception do
+      begin
+        Status := C.ResponseStatusCode;
+        if (Status = 401) or (Status = 403) then
+          AError := 'Chave de API invalida ou sem permissao (HTTP ' + IntToStr(Status) + ').'
+        else if (Status = 405) or (Status = 400) or (Status = 404) then
+          Exit(True)
+        else
+          AError := 'Falha de conexao com ' + ProbeUrl + ': ' + E.Message;
+      end;
+    end;
+  finally
+    S.Free;
+    C.Free;
+  end;
+end;
 
 function MapAdapterToLLMKind(const BaseUrl, ModelName: string): TAILLMProviderKind;
 var
@@ -580,14 +641,15 @@ begin
     end;
     if Pos('http', LowerCase(Prov.BaseUrl)) = 1 then
     begin
-      if ProbeSoundHttpServer(Prov.BaseUrl, 2000) then
+      if ProbeHttpAiEndpoint(Prov.BaseUrl, FSettings.ResolveSecret(Prov.SecretRef), 4000, ErrorMsg) then
       begin
         InfoMsg := 'Servidor de som acessivel (' + IntToStr(GetTickCount64 - T0) + ' ms)';
         Exit(True);
       end
       else
       begin
-        ErrorMsg := 'Servidor nao respondeu em ' + Prov.BaseUrl;
+        if ErrorMsg = '' then
+          ErrorMsg := 'Servidor nao respondeu em ' + Prov.BaseUrl;
         Exit(False);
       end;
     end;
@@ -605,13 +667,14 @@ begin
   begin
     if Pos('http', LowerCase(Prov.BaseUrl)) = 1 then
     begin
-      if ProbeSoundHttpServer(Prov.BaseUrl, 2500) then
+      if ProbeHttpAiEndpoint(Prov.BaseUrl, FSettings.ResolveSecret(Prov.SecretRef), 4000, ErrorMsg) then
       begin
         InfoMsg := 'Endpoint de imagem acessivel (' + IntToStr(GetTickCount64 - T0) + ' ms)';
         Exit(True);
       end;
     end;
-    ErrorMsg := 'Configure URL/chave valida para testar imagem (' + Prov.BaseUrl + ').';
+    if ErrorMsg = '' then
+      ErrorMsg := 'Configure URL/chave valida para testar imagem (' + Prov.BaseUrl + ').';
     Exit(False);
   end;
 
@@ -628,12 +691,13 @@ begin
       end;
       Exit(False);
     end;
-    if ProbeSoundHttpServer(Prov.BaseUrl, 2500) then
+    if ProbeHttpAiEndpoint(Prov.BaseUrl, FSettings.ResolveSecret(Prov.SecretRef), 4000, ErrorMsg) then
     begin
       InfoMsg := 'Endpoint de video acessivel (' + IntToStr(GetTickCount64 - T0) + ' ms)';
       Exit(True);
     end;
-    ErrorMsg := 'Servidor de video indisponivel em ' + Prov.BaseUrl;
+    if ErrorMsg = '' then
+      ErrorMsg := 'Servidor de video indisponivel em ' + Prov.BaseUrl;
   end;
 end;
 

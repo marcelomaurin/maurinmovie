@@ -777,13 +777,22 @@ end;
 procedure MmpLogAppOperation(const ProdRoot, ProdId, AppName, Msg: string;
   const RevId: string; const ActionName: string; const UserName: string);
 var
-  Up, Lvl, DbTarget: string;
+  Up, UpClean, Lvl, DbTarget: string;
 begin
   if Trim(Msg) = '' then Exit;
   Up := UpperCase(Msg);
-  if (Pos('ERRO', Up) > 0) or (Pos('FALHA', Up) > 0) then
+  UpClean := StringReplace(Up, 'SEM FALHAS', '', [rfReplaceAll]);
+  UpClean := StringReplace(UpClean, 'SEM FALHA', '', [rfReplaceAll]);
+  UpClean := StringReplace(UpClean, 'SEM ERROS', '', [rfReplaceAll]);
+  UpClean := StringReplace(UpClean, 'SEM ERRO', '', [rfReplaceAll]);
+  UpClean := StringReplace(UpClean, 'NENHUMA FALHA', '', [rfReplaceAll]);
+  UpClean := StringReplace(UpClean, 'NENHUM ERRO', '', [rfReplaceAll]);
+  UpClean := StringReplace(UpClean, '0 FALHA', '', [rfReplaceAll]);
+  UpClean := StringReplace(UpClean, '0 ERRO', '', [rfReplaceAll]);
+
+  if (Pos('ERRO', UpClean) > 0) or (Pos('FALHA', UpClean) > 0) then
     Lvl := 'error'
-  else if (Pos('AVISO', Up) > 0) or (Pos('PENDENCIA', Up) > 0) or (Pos('SIMULADO', Up) > 0) then
+  else if (Pos('AVISO', UpClean) > 0) or (Pos('PENDENCIA', UpClean) > 0) or (Pos('SIMULADO', UpClean) > 0) then
     Lvl := 'warn'
   else
     Lvl := 'info';

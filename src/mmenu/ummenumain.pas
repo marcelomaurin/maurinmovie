@@ -4408,8 +4408,10 @@ begin
   if E.Resolved then
     FLogMemo.Lines.Add('CORRIGIDO por ' + E.ResolvedBy + ' em ' + E.ResolvedAt +
       IfThen(E.ResolutionNote <> '', ': ' + E.ResolutionNote, ''))
+  else if SameText(E.Level, 'error') or SameText(E.Level, 'warn') then
+    FLogMemo.Lines.Add('Situacao: Pendente / Nao marcado como corrigido.')
   else
-    FLogMemo.Lines.Add('Situacao: Pendente / Nao marcado como corrigido.');
+    FLogMemo.Lines.Add('Situacao: Registro informativo.');
   if Sender <> nil then;
   if aCol >= 0 then;
 end;

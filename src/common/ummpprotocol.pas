@@ -1424,7 +1424,7 @@ end;
 function LoadProduction(const RootOrJsonPath: string; CheckFileHashes: Boolean;
   out Prod: TMmpProduction): Boolean;
 var
-  JsonPath, RootDir, ExpectedPath, FoundPath, RelinkTarget: string;
+  InputPath, JsonPath, RootDir, ExpectedPath, FoundPath, RelinkTarget: string;
   ProdObj, ActiveObj, AppEntry, RelinkObj, OverridesObj: TJSONObject;
   ExpectedIds: array[0..6] of string;
   I, N: Integer;
@@ -1433,22 +1433,23 @@ var
   SR: TSearchRec;
   SceneProjPath, ScenesDir: string;
 begin
+  InputPath := RootOrJsonPath;
   Result := False;
   FillChar(Prod, SizeOf(Prod), 0);
 
-  if DirectoryExists(RootOrJsonPath) then
+  if DirectoryExists(InputPath) then
   begin
-    RootDir := ExcludeTrailingPathDelimiter(ExpandFileName(RootOrJsonPath));
+    RootDir := ExcludeTrailingPathDelimiter(ExpandFileName(InputPath));
     JsonPath := RootDir + PathDelim + 'production.json';
   end
-  else if SameText(ExtractFileName(RootOrJsonPath), MMP_DB_FILENAME) then
+  else if SameText(ExtractFileName(InputPath), MMP_DB_FILENAME) then
   begin
-    RootDir := ExtractFileDir(ExpandFileName(RootOrJsonPath));
+    RootDir := ExtractFileDir(ExpandFileName(InputPath));
     JsonPath := RootDir + PathDelim + 'production.json';
   end
   else
   begin
-    JsonPath := ExpandFileName(RootOrJsonPath);
+    JsonPath := ExpandFileName(InputPath);
     RootDir := ExtractFileDir(JsonPath);
   end;
 

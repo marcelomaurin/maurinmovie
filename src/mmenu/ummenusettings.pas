@@ -39,6 +39,7 @@ type
     // Provedor IA (editando o tipo selecionado)
     FKindTabs: array[0..6] of string; // text, image, voice, sfx, video, vision, asr
     FCurrentKind: string;
+    FLoadingUI: Boolean;
     FProvKindLabel: TLabel;
     FProvCatalogProvCombo: TComboBox;
     FProvCatalogModelCombo: TComboBox;
@@ -51,13 +52,17 @@ type
     FProvShowSecretBtn: TButton;
     FProvTempEdit: TEdit;
     FProvMaxTokensEdit: TEdit;
+    FProvResLabel: TLabel;
     FProvResCombo: TComboBox;
+    FProvSizeLabel: TLabel;
     FProvWidthEdit: TEdit;
     FProvHeightEdit: TEdit;
+    FProvMaxSegLabel: TLabel;
     FProvMaxSegEdit: TEdit;
     FProvEnabledChk: TCheckBox;
     FProvTestLabel: TLabel;
     FBtnScanAudioServers: TButton;
+    FBtnCreateParakeet: TButton;
 
     // Programas
     FAppCombo: TComboBox;
@@ -158,6 +163,7 @@ type
     procedure OnCatalogModelChanged(Sender: TObject);
     procedure OnApplyPresetClick(Sender: TObject);
     procedure OnScanAudioServersClick(Sender: TObject);
+    procedure OnCreateParakeetClick(Sender: TObject);
     procedure OnVerifyEnvClick(Sender: TObject);
     procedure OnToggleSecretClick(Sender: TObject);
     procedure OnTestProviderClick(Sender: TObject);
@@ -172,6 +178,9 @@ type
     procedure OnAccessRemoveUserClick(Sender: TObject);
     procedure OnAccessClearUserClick(Sender: TObject);
     procedure OnAccessResetAdminClick(Sender: TObject);
+    function PersistAllSettings(out ErrMsg: string): Boolean;
+    procedure OnSaveStayClick(Sender: TObject);
+    procedure OnSettingsCloseQuery(Sender: TObject; var CanClose: Boolean);
     procedure OnSaveClick(Sender: TObject);
   public
     constructor CreateForSettings(TheOwner: TComponent;
@@ -205,9 +214,15 @@ begin
   Position := poScreenCenter;
   Constraints.MinWidth := 820;
   Constraints.MinHeight := 560;
+  OnCloseQuery := @OnSettingsCloseQuery;
 
-  BuildUI(InitialTab);
-  LoadFieldsFromSettings;
+  FLoadingUI := True;
+  try
+    BuildUI(InitialTab);
+    LoadFieldsFromSettings;
+  finally
+    FLoadingUI := False;
+  end;
 end;
 
 procedure TMmenuSettingsForm.BuildUI(const InitialTab: string);
@@ -413,15 +428,15 @@ begin
   L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Max Tokens:'; L.SetBounds(250, 300, 90, 18);
   FProvMaxTokensEdit := TEdit.Create(Self); FProvMaxTokensEdit.Parent := TabIA; FProvMaxTokensEdit.SetBounds(342, 296, 95, 26);
 
-  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Resolucao padrao:'; L.SetBounds(16, 336, 125, 18);
+  FProvResLabel := TLabel.Create(Self); FProvResLabel.Parent := TabIA; FProvResLabel.Caption := 'Resolucao padrao:'; FProvResLabel.SetBounds(16, 336, 125, 18);
   FProvResCombo := TComboBox.Create(Self); FProvResCombo.Parent := TabIA; FProvResCombo.Style := csDropDownList;
   MmpPopulateResolutionCombo(FProvResCombo.Items);
   FProvResCombo.SetBounds(150, 332, 220, 26); FProvResCombo.OnChange := @OnProvResChanged;
 
-  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Largura / Altura:'; L.SetBounds(16, 372, 120, 18);
+  FProvSizeLabel := TLabel.Create(Self); FProvSizeLabel.Parent := TabIA; FProvSizeLabel.Caption := 'Largura / Altura:'; FProvSizeLabel.SetBounds(16, 372, 120, 18);
   FProvWidthEdit := TEdit.Create(Self); FProvWidthEdit.Parent := TabIA; FProvWidthEdit.SetBounds(150, 368, 80, 26);
   FProvHeightEdit := TEdit.Create(Self); FProvHeightEdit.Parent := TabIA; FProvHeightEdit.SetBounds(238, 368, 80, 26);
-  L := TLabel.Create(Self); L.Parent := TabIA; L.Caption := 'Max Seg(s):'; L.SetBounds(336, 372, 85, 18);
+  FProvMaxSegLabel := TLabel.Create(Self); FProvMaxSegLabel.Parent := TabIA; FProvMaxSegLabel.Caption := 'Max Seg(s):'; FProvMaxSegLabel.SetBounds(336, 372, 85, 18);
   FProvMaxSegEdit := TEdit.Create(Self); FProvMaxSegEdit.Parent := TabIA; FProvMaxSegEdit.SetBounds(424, 368, 70, 26);
 
   BtnTest := TButton.Create(Self); BtnTest.Parent := TabIA; BtnTest.Caption := 'Testar Provedor';
@@ -432,9 +447,19 @@ begin
   FBtnScanAudioServers.SetBounds(184, 408, 210, 32);
   FBtnScanAudioServers.OnClick := @OnScanAudioServersClick;
 
+  FBtnCreateParakeet := TButton.Create(Self); FBtnCreateParakeet.Parent := TabIA;
+  FBtnCreateParakeet.Caption := 'Criar / Usar Parakeet';
+  FBtnCreateParakeet.SetBounds(402, 408, 175, 32);
+  FBtnCreateParakeet.OnClick := @OnCreateParakeetClick;
+
   FProvTestLabel := TLabel.Create(Self); FProvTestLabel.Parent := TabIA;
-  FProvTestLabel.WordWrap := True; FProvTestLabel.SetBounds(16, 448, 650, 56);
+  FProvTestLabel.WordWrap := True; FProvTestLabel.SetBounds(16, 448, 650, 44);
   FProvTestLabel.Caption := 'As chaves ficam em secrets.ini e nunca sao gravadas na pasta da producao.';
+
+  B := TButton.Create(Self); B.Parent := TabIA; B.Caption := 'Salvar';
+  B.SetBounds(16, 498, 130, 30); B.OnClick := @OnSaveStayClick;
+  B := TButton.Create(Self); B.Parent := TabIA; B.Caption := 'Cancelar';
+  B.ModalResult := mrCancel; B.SetBounds(154, 498, 130, 30);
 
   TabIA.Enabled := FHasProduction;
 
@@ -818,6 +843,8 @@ begin
   PopulateCatalogModelsForSelectedProvider;
   if FBtnScanAudioServers <> nil then
     FBtnScanAudioServers.Visible := (Kind = 'voice') or (Kind = 'sfx');
+  if FBtnCreateParakeet <> nil then
+    FBtnCreateParakeet.Visible := (Kind = 'voice');
 end;
 
 procedure TMmenuSettingsForm.PopulateCatalogModelsForSelectedProvider;
@@ -1006,17 +1033,84 @@ begin
   end;
 end;
 
+procedure TMmenuSettingsForm.OnCreateParakeetClick(Sender: TObject);
+var
+  Idx: Integer;
+begin
+  if FCurrentKind <> 'voice' then Exit;
+  Idx := FProvCatalogProvCombo.Items.IndexOf('Parakeet');
+  if Idx >= 0 then
+  begin
+    FProvCatalogProvCombo.ItemIndex := Idx;
+    PopulateCatalogModelsForSelectedProvider;
+    Idx := FProvCatalogModelCombo.Items.IndexOf('parakeet');
+    if Idx >= 0 then FProvCatalogModelCombo.ItemIndex := Idx;
+    OnCatalogModelChanged(nil);
+    OnApplyPresetClick(nil);
+  end
+  else
+  begin
+    Idx := FProvAdapterCombo.Items.IndexOf('parakeet');
+    if Idx >= 0 then FProvAdapterCombo.ItemIndex := Idx;
+    FProvBaseUrlEdit.Text := 'local://parakeet';
+    FProvModelEdit.Text := 'parakeet';
+    FProvEnabledChk.Checked := True;
+  end;
+  SaveProviderKindFields;
+  FProvTestLabel.Caption := 'Provedor Parakeet configurado para Som - Voz (clique em Salvar para gravar em disco).';
+  FProvTestLabel.Font.Color := $00007A00;
+end;
+
 procedure TMmenuSettingsForm.LoadProviderKindFields(const Kind: string);
 var
   Prov: TMmpAiProviderCfg;
+  I, AdapterIdx: Integer;
+  HasResolution, HasMaxSeg: Boolean;
 begin
   FCurrentKind := Kind;
   PopulateCatalogProvidersForKind(Kind);
-  FSettings.ResolveProvider(Kind, maMMenu, Prov);
+  FSettings.ResolveProvider(Kind, maMMenu, Prov, False);
+
+  // Sincroniza os combos do catalogo com o provedor/modelo realmente salvo
+  for I := 0 to FProvCatalogProvCombo.Items.Count - 1 do
+  begin
+    FProvCatalogProvCombo.ItemIndex := I;
+    PopulateCatalogModelsForSelectedProvider;
+    AdapterIdx := FProvCatalogModelCombo.Items.IndexOf(Prov.Model);
+    if AdapterIdx >= 0 then
+    begin
+      FProvCatalogModelCombo.ItemIndex := AdapterIdx;
+      OnCatalogModelChanged(nil);
+      Break;
+    end;
+  end;
+  if (Kind = 'voice') and SameText(Prov.Adapter, 'parakeet') then
+  begin
+    AdapterIdx := FProvCatalogProvCombo.Items.IndexOf('Parakeet');
+    if AdapterIdx >= 0 then
+    begin
+      FProvCatalogProvCombo.ItemIndex := AdapterIdx;
+      PopulateCatalogModelsForSelectedProvider;
+      AdapterIdx := FProvCatalogModelCombo.Items.IndexOf(Prov.Model);
+      if AdapterIdx >= 0 then
+      begin
+        FProvCatalogModelCombo.ItemIndex := AdapterIdx;
+        OnCatalogModelChanged(nil);
+      end;
+    end;
+  end;
   FProvKindLabel.Caption := 'Provedor padrao para: ' + UpperCase(Kind) + ' (' + Prov.Id + ')';
   FProvEnabledChk.Checked := Prov.Enabled;
-  FProvAdapterCombo.ItemIndex := FProvAdapterCombo.Items.IndexOf(Prov.Adapter);
-  if FProvAdapterCombo.ItemIndex < 0 then FProvAdapterCombo.ItemIndex := 0;
+  AdapterIdx := FProvAdapterCombo.Items.IndexOf(Trim(Prov.Adapter));
+  if AdapterIdx < 0 then
+    for I := 0 to FProvAdapterCombo.Items.Count - 1 do
+      if SameText(FProvAdapterCombo.Items[I], Trim(Prov.Adapter)) then
+      begin
+        AdapterIdx := I;
+        Break;
+      end;
+  if AdapterIdx < 0 then AdapterIdx := 0;
+  FProvAdapterCombo.ItemIndex := AdapterIdx;
   FProvBaseUrlEdit.Text := Prov.BaseUrl;
   FProvModelEdit.Text := Prov.Model;
   if Prov.SecretRef = '' then
@@ -1030,18 +1124,40 @@ begin
   FProvHeightEdit.Text := IntToStr(Prov.Height);
   FProvResCombo.ItemIndex := MmpFindResolutionPresetIndex(Prov.Width, Prov.Height);
   FProvMaxSegEdit.Text := IntToStr(Prov.MaxSegmentSec);
+
+  HasResolution := (Kind = 'image') or (Kind = 'video') or (Kind = 'vision');
+  HasMaxSeg := (Kind = 'voice') or (Kind = 'sfx') or (Kind = 'video') or (Kind = 'asr');
+  FProvResLabel.Visible := HasResolution;
+  FProvResCombo.Visible := HasResolution;
+  FProvSizeLabel.Visible := HasResolution;
+  FProvWidthEdit.Visible := HasResolution;
+  FProvHeightEdit.Visible := HasResolution;
+  FProvMaxSegLabel.Visible := HasMaxSeg;
+  FProvMaxSegEdit.Visible := HasMaxSeg;
+  if HasMaxSeg and (not HasResolution) then
+  begin
+    FProvMaxSegLabel.SetBounds(16, 336, 120, 18);
+    FProvMaxSegEdit.SetBounds(150, 332, 80, 26);
+  end
+  else
+  begin
+    FProvMaxSegLabel.SetBounds(336, 372, 85, 18);
+    FProvMaxSegEdit.SetBounds(424, 368, 70, 26);
+  end;
 end;
 
 procedure TMmenuSettingsForm.SaveProviderKindFields;
 var
   Prov: TMmpAiProviderCfg;
 begin
-  FSettings.ResolveProvider(FCurrentKind, maMMenu, Prov);
+  if FCurrentKind = '' then Exit;
+  FSettings.ResolveProvider(FCurrentKind, maMMenu, Prov, False);
   if Trim(Prov.Id) = '' then
     Prov.Id := FCurrentKind + '.default';
   Prov.Kind := FCurrentKind;
   Prov.Enabled := FProvEnabledChk.Checked;
-  Prov.Adapter := FProvAdapterCombo.Text;
+  if Trim(FProvAdapterCombo.Text) <> '' then
+    Prov.Adapter := Trim(FProvAdapterCombo.Text);
   Prov.BaseUrl := Trim(FProvBaseUrlEdit.Text);
   Prov.Model := Trim(FProvModelEdit.Text);
   Prov.SecretRef := Trim(FProvSecretRefEdit.Text);
@@ -1123,12 +1239,16 @@ var
   TagVal: PtrInt;
 begin
   if Node = nil then Exit;
+  if (not FLoadingUI) and (FPageControl.ActivePageIndex = 2) then
+    SaveProviderKindFields;
   TagVal := PtrInt(Node.Data);
   if (TagVal >= 10) and (TagVal <= 16) then
   begin
-    SaveProviderKindFields;
     FPageControl.ActivePageIndex := 2;
-    LoadProviderKindFields(FKindTabs[TagVal - 10]);
+    if FLoadingUI then
+      FCurrentKind := FKindTabs[TagVal - 10]
+    else
+      LoadProviderKindFields(FKindTabs[TagVal - 10]);
   end
   else if TagVal = 20 then
     FPageControl.ActivePageIndex := 10
@@ -1202,6 +1322,7 @@ end;
 procedure TMmenuSettingsForm.OnTestProviderClick(Sender: TObject);
 var
   Bridge: TMmpAiBridge;
+  Prov: TMmpAiProviderCfg;
   Info, Err: string;
 begin
   SaveProviderKindFields;
@@ -1211,9 +1332,13 @@ begin
     FProvTestLabel.Font.Color := $000068B8;
     Exit;
   end;
+  FSettings.ResolveProvider(FCurrentKind, maMMenu, Prov, False);
   Bridge := TMmpAiBridge.Create('MMenu');
   try
     if FHasProduction then Bridge.LoadForProduction(FSettings.ProductionRoot);
+    Bridge.Settings.OfflineMode := FOfflineChk.Checked;
+    Bridge.Settings.SetOrAddProvider(Prov, True);
+    Bridge.Settings.SetAppProvider(maMMenu, FCurrentKind, Prov.Id);
     if Bridge.TestProviderByKind(FCurrentKind, Info, Err) then
     begin
       FProvTestLabel.Caption := Info;
@@ -1542,11 +1667,12 @@ begin
   end;
 end;
 
-procedure TMmenuSettingsForm.OnSaveClick(Sender: TObject);
+function TMmenuSettingsForm.PersistAllSettings(out ErrMsg: string): Boolean;
 var
   I: Integer;
-  ErrMsg: string;
 begin
+  Result := False;
+  ErrMsg := '';
   FSettings.UserName := Trim(FUserNameEdit.Text);
   FSettings.UserRole := Trim(FUserRoleEdit.Text);
   FSettings.UserEmail := Trim(FUserEmailEdit.Text);
@@ -1575,20 +1701,12 @@ begin
     FSettings.AccessMode := amRestricted
   else
     FSettings.AccessMode := amOpen;
-  if not FSettings.SaveAccessControl(ErrMsg) then
-  begin
-    MessageDlg(ErrMsg, mtError, [mbOK], 0);
-    Exit;
-  end;
+  if not FSettings.SaveAccessControl(ErrMsg) then Exit;
 
   SaveProviderKindFields;
   SaveSelectedAppFields;
   FSettings.SaveMachineIni;
-  if not FSettings.SaveMachineAiSettings(ErrMsg) then
-  begin
-    MessageDlg(ErrMsg, mtError, [mbOK], 0);
-    Exit;
-  end;
+  if not FSettings.SaveMachineAiSettings(ErrMsg) then Exit;
 
   if FHasProduction then
   begin
@@ -1610,13 +1728,74 @@ begin
 
     SaveMediaAndPresets;
 
-    if not FSettings.SaveProductionSettings(ErrMsg) then
-    begin
-      MessageDlg(ErrMsg, mtError, [mbOK], 0);
-      Exit;
-    end;
+    if not FSettings.SaveProductionSettings(ErrMsg) then Exit;
   end;
 
+  Result := True;
+end;
+
+procedure TMmenuSettingsForm.OnSaveStayClick(Sender: TObject);
+var
+  ErrMsg: string;
+begin
+  if not PersistAllSettings(ErrMsg) then
+  begin
+    MessageDlg(ErrMsg, mtError, [mbOK], 0);
+    Exit;
+  end;
+  if FProvTestLabel <> nil then
+  begin
+    FProvTestLabel.Caption := 'Configuracoes salvas em disco com sucesso.';
+    FProvTestLabel.Font.Color := $00007A00;
+  end;
+  if Sender <> nil then;
+end;
+
+procedure TMmenuSettingsForm.OnSettingsCloseQuery(Sender: TObject; var CanClose: Boolean);
+var
+  Res: TModalResult;
+  ErrMsg: string;
+begin
+  if (ModalResult = mrOK) or (ModalResult = mrCancel) then
+  begin
+    CanClose := True;
+    Exit;
+  end;
+  Res := MessageDlg('Configuracoes',
+    'Deseja salvar as alteracoes antes de fechar?',
+    mtConfirmation, [mbYes, mbNo, mbCancel], 0);
+  if Res = mrYes then
+  begin
+    if PersistAllSettings(ErrMsg) then
+    begin
+      ModalResult := mrOK;
+      CanClose := True;
+    end
+    else
+    begin
+      MessageDlg(ErrMsg, mtError, [mbOK], 0);
+      CanClose := False;
+    end;
+  end
+  else if Res = mrNo then
+  begin
+    ModalResult := mrCancel;
+    CanClose := True;
+  end
+  else
+    CanClose := False;
+  if Sender <> nil then;
+end;
+
+procedure TMmenuSettingsForm.OnSaveClick(Sender: TObject);
+var
+  ErrMsg: string;
+begin
+  if not PersistAllSettings(ErrMsg) then
+  begin
+    MessageDlg(ErrMsg, mtError, [mbOK], 0);
+    Exit;
+  end;
   ModalResult := mrOK;
 end;
 

@@ -150,7 +150,7 @@ type
     function ReloadIfChanged(App: TMMApp = maMMenu): Boolean;
 
     function ResolveProvider(const Kind: string; App: TMMApp;
-      out Prov: TMmpAiProviderCfg): Boolean;
+      out Prov: TMmpAiProviderCfg; ApplyOfflineMask: Boolean = True): Boolean;
     function FindProviderById(const Id: string; out Prov: TMmpAiProviderCfg): Boolean;
     procedure SetOrAddProvider(const Prov: TMmpAiProviderCfg; SetAsDefault: Boolean);
     procedure SetAppProvider(App: TMMApp; const Kind, ProviderId: string);
@@ -557,7 +557,8 @@ begin
   SetLength(FProviders, 5);
   FProviders[0] := DefaultProvider('text.default', 'text', 'Texto (Simulado)', 'mock', 'mock-script-v1');
   FProviders[1] := DefaultProvider('image.default', 'image', 'Imagem (Simulado)', 'mock', 'mock-image-v1');
-  FProviders[2] := DefaultProvider('voice.default', 'voice', 'Voz (Simulado)', 'mock', 'mock-voice-v1');
+  FProviders[2] := DefaultProvider('voice.default', 'voice', 'Parakeet TTS (Runtime CPU)', 'parakeet', 'parakeet');
+  FProviders[2].BaseUrl := 'local://parakeet';
   FProviders[3] := DefaultProvider('sfx.default', 'sfx', 'Efeitos (Simulado)', 'mock', 'mock-sfx-v1');
   FProviders[4] := DefaultProvider('video.default', 'video', 'Video (Simulado)', 'mock', 'mock-video-v1');
   SetLength(FDefaultProviders, 5);
@@ -817,20 +818,20 @@ begin
 end;
 
 function TMMSettings.ResolveProvider(const Kind: string; App: TMMApp;
-  out Prov: TMmpAiProviderCfg): Boolean;
+  out Prov: TMmpAiProviderCfg; ApplyOfflineMask: Boolean): Boolean;
 var
   Pid: string;
 begin
   Pid := GetAppProviderId(App, Kind);
   if (Pid <> '') and FindProviderById(Pid, Prov) then
   begin
-    if FOfflineMode then Prov.Adapter := 'mock';
+    if ApplyOfflineMask and FOfflineMode then Prov.Adapter := 'mock';
     Exit(True);
   end;
   Pid := GetDefaultProviderId(Kind);
   if (Pid <> '') and FindProviderById(Pid, Prov) then
   begin
-    if FOfflineMode then Prov.Adapter := 'mock';
+    if ApplyOfflineMask and FOfflineMode then Prov.Adapter := 'mock';
     Exit(True);
   end;
   Prov := DefaultProvider(Kind + '.default', Kind, Kind + ' (Simulado)', 'mock', 'mock-' + Kind);
