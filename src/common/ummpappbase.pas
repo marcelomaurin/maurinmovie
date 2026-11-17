@@ -6,7 +6,7 @@ interface
 
 uses
   Classes, SysUtils, Graphics, Forms, LCLType, fpjson, jsonparser,
-  mmpcommon, ummpsha256, ummpprotocol;
+  mmpcommon, ummpsha256, ummpprotocol, ummpdb;
 
 type
   TMmpArtifactInput = record
@@ -24,6 +24,10 @@ function IsVersionCompatibleWithMMenu(const LauncherVer: string): Boolean;
 function ValidateMMenuLaunchContext(App: TMMApp; out Args: TMMLaunchArgs;
   out ErrMsg: string): Boolean;
 function RequireMMenuLaunch(App: TMMApp; out Args: TMMLaunchArgs): Boolean;
+function IsAppInstanceRunning(App: TMMApp): Boolean;
+function FocusAppInstanceWindow(App: TMMApp): Boolean;
+function RequireSingleAppInstance(App: TMMApp; IsHeadless: Boolean = False): Boolean;
+procedure ReleaseSingleAppInstance;
 procedure ParseAppLaunchParams(out ProductionRoot, ProjectId, RevisionId: string);
 procedure ParseAppLaunchContext(out ProductionRoot, ProjectId, RevisionId,
   MMenuVersion, ProductionId: string);
@@ -58,12 +62,19 @@ function EmitSyncEvent(
   SourceRevision, RequestedChange, Stage, Status, ErrText: string;
   out EventId: string): Boolean;
 
+procedure MmpLogAppOperation(const ProdRoot, ProdId, AppName, Msg: string;
+  const RevId: string = ''; const ActionName: string = 'operation';
+  const UserName: string = '');
+
 function StripMarkdownJsonFence(const Raw: string): string;
 
 function SavePlaceholderBitmap(const FilePath, Title, Subtitle, Footer: string;
   BgColor: TColor; WidthPx: Integer = 640; HeightPx: Integer = 360): Boolean;
 
 implementation
+
+uses
+  {$IFDEF WINDOWS}Windows{$ELSE}BaseUnix{$ENDIF};
 
 function HandleStandardCliEarlyExit(App: TMMApp): Boolean;
 var
@@ -366,7 +377,12 @@ var
   Hist: array of string;
   I, AppIdx: Integer;
   Data: TJSONData;
-  NameBaseStr, SceneIdStr: string;
+  NameBaseStr, SceneIdStr, FoundProdRoot, RelMedia, DbErr, ArtSha: string;
+  ArtBytes: Int64;
+  DbProjRow: TMmpDbProjectRow;
+  DbRevRow: TMmpDbRevisionRow;
+  DbSrcs: array of TMmpDbSourceRow;
+  DbArt: TMmpDbMediaAssetRow;
 begin
   Result := False;
   NewRevId := '';
@@ -484,7 +500,21 @@ begin
       ManifestObj.Free;
     end;
 
-    HistArr.Add(NewRevId);
+    if not (
+      (Length(Hist) > 0) and
+      SameText(Hist[High(Hist)], NewRevId)
+    ) then
+    begin
+      AppIdx := 0;
+      for I := 0 to HistArr.Count - 1 do
+        if SameText(HistArr.Strings[I], NewRevId) then
+        begin
+          AppIdx := 1;
+          Break;
+        end;
+      if AppIdx = 0 then
+        HistArr.Add(NewRevId);
+    end;
     if ProjObj.IndexOfName('active_revision') >= 0 then
       ProjObj.Strings['active_revision'] := NewRevId
     else
@@ -515,7 +545,115 @@ begin
       LabelsObj.Add(NewRevId, FormatRevisionLabel(NameBaseStr, AppIndexToEnum(AppIdx), NewRevId, SceneIdStr));
 
     Result := AtomicWriteTextFile(ProjectJsonPath, ProjObj.FormatJSON, True);
-    if not Result then
+    if Result then
+    begin
+      // Walk up from project.json to find production root, sync SQLite DB & copy media to media/<cat>/
+      FoundProdRoot := '';
+      RelMedia := ExtractFileDir(ExcludeTrailingPathDelimiter(ProjectJsonPath));
+      for AppIdx := 1 to 5 do
+      begin
+        if FileExists(IncludeTrailingPathDelimiter(RelMedia) + MMP_DB_FILENAME) or
+           FileExists(IncludeTrailingPathDelimiter(RelMedia) + MMP_PRODUCTION_FILE) then
+        begin
+          FoundProdRoot := RelMedia;
+          Break;
+        end;
+        RelMedia := ExtractFileDir(ExcludeTrailingPathDelimiter(RelMedia));
+        if RelMedia = '' then Break;
+      end;
+
+      if FoundProdRoot <> '' then
+      begin
+        if not FileExists(MmpProductionDbPath(FoundProdRoot)) then
+          MmpInitProductionDbFromTemplate(FoundProdRoot, '', RelMedia, DbErr);
+        MmpEnsureProductionMediaDirs(FoundProdRoot);
+
+        AppIdx := AppNameToIndex(AppName);
+        if AppIdx < 0 then AppIdx := 0;
+
+        FillChar(DbProjRow, SizeOf(DbProjRow), 0);
+        DbProjRow.ProjectId := ProjId;
+        DbProjRow.ProductionId := ProductionId;
+        DbProjRow.SoftwareIndex := AppIdx;
+        DbProjRow.AppName := AppName;
+        DbProjRow.SceneId := SceneIdStr;
+        DbProjRow.NameBase := NameBaseStr;
+        DbProjRow.ActiveRevision := NewRevId;
+        DbProjRow.Status := NewState;
+        DbProjRow.CreatedAt := ProjObj.Get('created_at', NowIso);
+        DbProjRow.UpdatedAt := NowIso;
+        DbProjRow.ProjectFilePath := NormalizeRelPath(ExtractRelativepath(
+          IncludeTrailingPathDelimiter(FoundProdRoot), ProjectJsonPath));
+        MmpDbUpsertProject(FoundProdRoot, DbProjRow, DbErr);
+
+        FillChar(DbRevRow, SizeOf(DbRevRow), 0);
+        DbRevRow.ProjectId := ProjId;
+        DbRevRow.RevisionId := NewRevId;
+        DbRevRow.ParentRevisionId := ParentRevId;
+        DbRevRow.State := NewState;
+        DbRevRow.RevLabel := FormatRevisionLabel(NameBaseStr, AppIndexToEnum(AppIdx), NewRevId, SceneIdStr);
+        DbRevRow.ManifestPath := NormalizeRelPath(ExtractRelativepath(
+          IncludeTrailingPathDelimiter(FoundProdRoot), RevDir + PathDelim + 'manifest.json'));
+        DbRevRow.ManifestSha256 := SHA256File(RevDir + PathDelim + 'manifest.json');
+        DbRevRow.CreatedAt := NowIso;
+        MmpDbUpsertRevision(FoundProdRoot, ProductionId, DbRevRow, DbErr);
+
+        SetLength(DbSrcs, Length(Sources));
+        for I := 0 to High(Sources) do
+        begin
+          DbSrcs[I].ProjectId := ProjId;
+          DbSrcs[I].RevisionId := NewRevId;
+          DbSrcs[I].SourceProjectId := Sources[I].ProjectId;
+          DbSrcs[I].SourceRevisionId := Sources[I].RevisionId;
+          DbSrcs[I].SourceManifestSha256 := Sources[I].ManifestSha256;
+        end;
+        MmpDbReplaceRevisionSources(FoundProdRoot, ProjId, NewRevId, DbSrcs, DbErr);
+
+        for I := 0 to High(Artifacts) do
+        begin
+          FillChar(DbArt, SizeOf(DbArt), 0);
+          if Artifacts[I].ArtifactId <> '' then
+            DbArt.ArtifactId := Artifacts[I].ArtifactId
+          else
+            DbArt.ArtifactId := GenerateMmpId('a');
+          DbArt.ProductionId := ProductionId;
+          DbArt.ProjectId := ProjId;
+          DbArt.RevisionId := NewRevId;
+          DbArt.AppName := AppName;
+          DbArt.Kind := Artifacts[I].Kind;
+          DbArt.MimeType := Artifacts[I].MimeType;
+          DbArt.LegacyUri := NormalizeRelPath(Artifacts[I].RelUri);
+          DbArt.MediaCategory := MmpDetectMediaCategory(DbArt.Kind, DbArt.MimeType, DbArt.LegacyUri);
+          DbArt.SceneId := Artifacts[I].SceneId;
+          DbArt.SegmentId := Artifacts[I].SegmentId;
+          DbArt.Status := Artifacts[I].Status;
+          DbArt.CreatedAt := NowIso;
+
+          ArtSha := '';
+          ArtBytes := 0;
+          RelMedia := DbArt.LegacyUri;
+          if ResolveSafePath(RevDir, Artifacts[I].RelUri, FullArtPath) and FileExists(FullArtPath) then
+          begin
+            ArtSha := SHA256File(FullArtPath);
+            ArtBytes := FileSizeBytes(FullArtPath);
+            if DbArt.MediaCategory <> 'other' then
+              MmpEnsureAssetStoredInMediaDir(
+                FoundProdRoot, FullArtPath, AppName, DbArt.SceneId,
+                NewRevId, DbArt.Kind, DbArt.MimeType, DbArt.LegacyUri, RelMedia);
+          end;
+          DbArt.RelativePath := RelMedia;
+          DbArt.Sha256 := ArtSha;
+          DbArt.Bytes := ArtBytes;
+          MmpDbUpsertMediaAsset(FoundProdRoot, DbArt, DbErr);
+        end;
+
+        AppendJsonLogLine(FoundProdRoot, AppName, 'info',
+          'Publicada Versao ' + IntToStr(RevisionVersionNumber(NewRevId)) +
+          ' (' + NewRevId + ', estado=' + NewState + ', ' +
+          IntToStr(Length(Artifacts)) + ' artefato(s))');
+      end;
+    end
+    else
       ErrMsg := 'Falha ao atualizar project.json.';
   finally
     ProjObj.Free;
@@ -527,10 +665,11 @@ function EmitSyncEvent(
   SourceRevision, RequestedChange, Stage, Status, ErrText: string;
   out EventId: string): Boolean;
 var
-  InboxDir, TxDir, EvtPath, TxPath, TxId, NowIso: string;
+  InboxDir, TxDir, EvtPath, TxPath, TxId, NowIso, DbErr: string;
   Obj, ReqObj, TxObj, OrigObj, StageObj: TJSONObject;
   StagesArr, ErrArr: TJSONArray;
   AppIdx: Integer;
+  DbSync: TMmpDbSyncJobRow;
 begin
   Result := False;
   NowIso := CurrentIsoUtc;
@@ -613,6 +752,48 @@ begin
   if AppIdx >= 0 then
     AppendJsonLogLine(ProdRoot, OriginApp, 'info',
       'Evento ' + EventId + ' / Transacao ' + TxId + ' emitida para ' + TargetApp);
+
+  if FileExists(MmpProductionDbPath(ProdRoot)) then
+  begin
+    FillChar(DbSync, SizeOf(DbSync), 0);
+    DbSync.EventId := EventId;
+    DbSync.TransactionId := TxId;
+    DbSync.ProductionId := '';
+    DbSync.OriginApp := OriginApp;
+    DbSync.TargetApp := TargetApp;
+    DbSync.ProjectId := TargetProjectId;
+    DbSync.SourceRevision := SourceRevision;
+    DbSync.RequestedChange := RequestedChange;
+    DbSync.Stage := Stage;
+    DbSync.Status := Status;
+    DbSync.ErrorText := ErrText;
+    DbSync.CreatedAt := NowIso;
+    DbSync.UpdatedAt := NowIso;
+    DbSync.SourceFile := EvtPath;
+    MmpDbUpsertSyncJob(ProdRoot, DbSync, DbErr);
+  end;
+end;
+
+procedure MmpLogAppOperation(const ProdRoot, ProdId, AppName, Msg: string;
+  const RevId: string; const ActionName: string; const UserName: string);
+var
+  Up, Lvl, DbTarget: string;
+begin
+  if Trim(Msg) = '' then Exit;
+  Up := UpperCase(Msg);
+  if (Pos('ERRO', Up) > 0) or (Pos('FALHA', Up) > 0) then
+    Lvl := 'error'
+  else if (Pos('AVISO', Up) > 0) or (Pos('PENDENCIA', Up) > 0) or (Pos('SIMULADO', Up) > 0) then
+    Lvl := 'warn'
+  else
+    Lvl := 'info';
+
+  if (Trim(ProdRoot) <> '') and FileExists(MmpProductionDbPath(ProdRoot)) then
+    DbTarget := MmpProductionDbPath(ProdRoot)
+  else
+    DbTarget := MmpGlobalCentralLogDbPath;
+
+  MmpDbAddCentralLog(DbTarget, ProdId, Lvl, AppName, UserName, ActionName, RevId, Msg, '');
 end;
 
 function StripMarkdownJsonFence(const Raw: string): string;
@@ -636,14 +817,14 @@ end;
 function SavePlaceholderBitmap(const FilePath, Title, Subtitle, Footer: string;
   BgColor: TColor; WidthPx: Integer; HeightPx: Integer): Boolean;
 var
-  Bmp: TBitmap;
+  Bmp: Graphics.TBitmap;
   Dir: string;
 begin
   Result := False;
   Dir := ExtractFileDir(FilePath);
   if Dir <> '' then ForceDirectories(Dir);
 
-  Bmp := TBitmap.Create;
+  Bmp := Graphics.TBitmap.Create;
   try
     Bmp.SetSize(WidthPx, HeightPx);
     Bmp.Canvas.Brush.Color := BgColor;
@@ -674,5 +855,192 @@ begin
     Bmp.Free;
   end;
 end;
+
+{$IFDEF WINDOWS}
+var
+  GSingleInstanceMutex: THandle = 0;
+  GEnumTargetPrefix: string = '';
+  GEnumFoundWnd: HWND = 0;
+
+function SingleInstanceMutexName(App: TMMApp): string;
+begin
+  Result := 'Local\MaurinMovie_' + LowerCase(MMAppNames[App]) + '_SingleInstance';
+end;
+
+function EnumAppWindowProc(Wnd: HWND; lParam: LPARAM): BOOL; stdcall;
+var
+  Buf: array[0..511] of Char;
+  Title: string;
+begin
+  Result := True;
+  if not IsWindowVisible(Wnd) then Exit;
+  Buf[0] := #0;
+  if GetWindowTextA(Wnd, @Buf[0], SizeOf(Buf)) > 0 then
+  begin
+    Title := LowerCase(StrPas(@Buf[0]));
+    if (Pos(GEnumTargetPrefix, Title) = 1) and (Pos('maurinmovie', Title) > 0) then
+    begin
+      GEnumFoundWnd := Wnd;
+      Result := False;
+    end;
+  end;
+  if lParam <> 0 then;
+end;
+
+function IsAppInstanceRunning(App: TMMApp): Boolean;
+var
+  H: THandle;
+begin
+  H := OpenMutexA(SYNCHRONIZE, False, PChar(SingleInstanceMutexName(App)));
+  if H <> 0 then
+  begin
+    CloseHandle(H);
+    Result := True;
+  end
+  else
+    Result := False;
+end;
+
+function FocusAppInstanceWindow(App: TMMApp): Boolean;
+begin
+  Result := False;
+  GEnumTargetPrefix := LowerCase(MMAppNames[App]) + ' - ';
+  GEnumFoundWnd := 0;
+  EnumWindows(@EnumAppWindowProc, 0);
+  if GEnumFoundWnd <> 0 then
+  begin
+    if IsIconic(GEnumFoundWnd) then
+      ShowWindow(GEnumFoundWnd, SW_RESTORE);
+    SetForegroundWindow(GEnumFoundWnd);
+    Result := True;
+  end;
+end;
+
+function RequireSingleAppInstance(App: TMMApp; IsHeadless: Boolean): Boolean;
+var
+  H: THandle;
+  LastErr: DWORD;
+  Focused: Boolean;
+  Msg: string;
+begin
+  if GSingleInstanceMutex <> 0 then
+    Exit(True);
+
+  H := CreateMutexA(nil, False, PChar(SingleInstanceMutexName(App)));
+  LastErr := GetLastError;
+  if H = 0 then
+    Exit(True);
+
+  if LastErr = ERROR_ALREADY_EXISTS then
+  begin
+    CloseHandle(H);
+    Focused := False;
+    if not IsHeadless then
+      Focused := FocusAppInstanceWindow(App);
+    Msg := 'O aplicativo ' + MMAppNames[App] + ' ja esta em execucao (permitida apenas 1 instancia).';
+    if IsHeadless then
+      WriteCliLine('[ERRO] ' + Msg)
+    else if not Focused then
+    begin
+      Application.Scaled := True;
+      Application.Initialize;
+      Application.MessageBox(
+        PChar(Msg),
+        PChar(MMAppNames[App] + ' - Instancia Unica'),
+        MB_OK or MB_ICONINFORMATION);
+    end;
+    Exit(False);
+  end;
+
+  GSingleInstanceMutex := H;
+  Result := True;
+end;
+
+procedure ReleaseSingleAppInstance;
+begin
+  if GSingleInstanceMutex <> 0 then
+  begin
+    CloseHandle(GSingleInstanceMutex);
+    GSingleInstanceMutex := 0;
+  end;
+end;
+{$ELSE}
+var
+  GSingleInstanceFd: cint = -1;
+
+function SingleInstanceLockPath(App: TMMApp): string;
+begin
+  Result := '/tmp/maurinmovie_' + LowerCase(MMAppNames[App]) + '.instance.lock';
+end;
+
+function IsAppInstanceRunning(App: TMMApp): Boolean;
+var
+  Fd: cint;
+begin
+  Result := False;
+  Fd := FpOpen(SingleInstanceLockPath(App), O_RDONLY);
+  if Fd < 0 then Exit;
+  try
+    if FpFlock(Fd, LOCK_EX or LOCK_NB) <> 0 then
+      Result := True
+    else
+      FpFlock(Fd, LOCK_UN);
+  finally
+    FpClose(Fd);
+  end;
+end;
+
+function FocusAppInstanceWindow(App: TMMApp): Boolean;
+begin
+  if App = maMMenu then;
+  Result := False;
+end;
+
+function RequireSingleAppInstance(App: TMMApp; IsHeadless: Boolean): Boolean;
+var
+  Fd: cint;
+  Msg: string;
+begin
+  if GSingleInstanceFd >= 0 then
+    Exit(True);
+  Fd := FpOpen(SingleInstanceLockPath(App), O_CREAT or O_RDWR, &644);
+  if Fd < 0 then
+    Exit(True);
+  if FpFlock(Fd, LOCK_EX or LOCK_NB) <> 0 then
+  begin
+    FpClose(Fd);
+    Msg := 'O aplicativo ' + MMAppNames[App] + ' ja esta em execucao (permitida apenas 1 instancia).';
+    if IsHeadless then
+      WriteCliLine('[ERRO] ' + Msg)
+    else
+    begin
+      Application.Scaled := True;
+      Application.Initialize;
+      Application.MessageBox(
+        PChar(Msg),
+        PChar(MMAppNames[App] + ' - Instancia Unica'),
+        MB_OK or MB_ICONINFORMATION);
+    end;
+    Exit(False);
+  end;
+  GSingleInstanceFd := Fd;
+  Result := True;
+end;
+
+procedure ReleaseSingleAppInstance;
+begin
+  if GSingleInstanceFd >= 0 then
+  begin
+    FpFlock(GSingleInstanceFd, LOCK_UN);
+    FpClose(GSingleInstanceFd);
+    GSingleInstanceFd := -1;
+  end;
+end;
+{$ENDIF}
+
+initialization
+
+finalization
+  ReleaseSingleAppInstance;
 
 end.

@@ -324,6 +324,8 @@ begin
     FLogMemo.Lines.Add('[' + FormatDateTime('hh:nn:ss', Now) + '] ' + Msg);
   if FStatusLabel <> nil then
     FStatusLabel.Caption := Msg;
+  if FProd.Loaded then
+    MmpLogAppOperation(FProd.RootDir, FProd.ProductionId, 'MBoard', Msg, FCurrentRevId);
 end;
 
 procedure TMboardMainForm.LoadProductionAndRevision(const ProdRoot, ProjId, RevId: string);

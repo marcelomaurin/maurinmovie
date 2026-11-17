@@ -44,6 +44,9 @@ type
     FScenes: array of TScriptSceneItem;
     FChars: array of TScriptCharItem;
     FSelectedScene: Integer;
+    FWorkDirty: Boolean;
+    FLoadingFields: Boolean;
+    FAutosaveTimer: TTimer;
 
     FHeaderProdLabel: TLabel;
     FHeaderRevLabel: TLabel;
@@ -53,10 +56,10 @@ type
 
     // Sinopse
     FTitleEdit: TEdit;
-    FGenreEdit: TEdit;
-    FTargetMinEdit: TEdit;
+    FGenreCombo: TComboBox;
+    FTargetDurEdit: TEdit;
     FSynopsisMemo: TMemo;
-    FAiPromptEdit: TEdit;
+    FAiPromptMemo: TMemo;
 
     // Cenas
     FScenesGrid: TStringGrid;
@@ -81,7 +84,10 @@ type
     procedure BuildUI;
     procedure LogMsg(const Msg: string);
     procedure LoadProductionAndRevision(const ProdRoot, ProjId, RevId: string);
+    procedure LoadScriptFromFile(const ScriptPath: string);
     procedure LoadScriptFromRevision(const RevId: string);
+    function WorkDraftFilePath: string;
+    function SaveWorkDraft(Silent: Boolean): Boolean;
     procedure RefreshUI;
     procedure RefreshScenesGrid;
     procedure LoadSceneToEditor(Idx: Integer);
@@ -93,7 +99,14 @@ type
     function BuildScriptJsonText: string;
     function BuildScriptMarkdownText: string;
     procedure SaveRevision(const NewState: string);
+    procedure SetGenreValue(const AGenre: string);
+    function ValidateTargetDuration(out DurSec: Integer; out DurHms: string): Boolean;
 
+    procedure OnFieldChange(Sender: TObject);
+    procedure OnAutosaveTimer(Sender: TObject);
+    procedure OnFormCloseQuery(Sender: TObject; var CanClose: Boolean);
+    procedure OnSaveSynopsisClick(Sender: TObject);
+    procedure OnTargetDurExit(Sender: TObject);
     procedure OnOpenProdClick(Sender: TObject);
     procedure OnAiConfigClick(Sender: TObject);
     procedure OnGenerateAiClick(Sender: TObject);
@@ -133,6 +146,12 @@ begin
   FAi := TMmpAiBridge.Create('MScript');
   FSelectedScene := -1;
   BuildUI;
+  OnCloseQuery := @OnFormCloseQuery;
+
+  FAutosaveTimer := TTimer.Create(Self);
+  FAutosaveTimer.Interval := 2000;
+  FAutosaveTimer.OnTimer := @OnAutosaveTimer;
+  FAutosaveTimer.Enabled := True;
 
   ParseAppLaunchContext(ProdRoot, ProjId, RevId, MMenuVer, ProdId);
   LogMsg('MScript v' + MMP_EXECUTABLE_VERSION + ' iniciado | Contexto MMenu v' +
@@ -154,7 +173,7 @@ var
   Head, Sidebar, Bottom, DetailPanel: TPanel;
   TabSinopse, TabScenes, TabChars, TabLog: TTabSheet;
   BtnOpen, BtnAiCfg, BtnSaveDraft, BtnApprove: TButton;
-  BtnGenAi, BtnAddScene, BtnSaveScene, BtnRewriteScene, BtnExtract: TButton;
+  BtnGenAi, BtnSaveSynopsis, BtnAddScene, BtnSaveScene, BtnRewriteScene, BtnExtract: TButton;
   L: TLabel;
 begin
   Head := TPanel.Create(Self);
@@ -278,24 +297,31 @@ begin
   FTitleEdit := TEdit.Create(Self);
   FTitleEdit.Parent := TabSinopse;
   FTitleEdit.SetBounds(16, 36, 420, 26);
+  FTitleEdit.OnChange := @OnFieldChange;
 
   L := TLabel.Create(Self);
   L.Parent := TabSinopse;
   L.Caption := 'Genero:';
   L.SetBounds(454, 16, 100, 18);
-  FGenreEdit := TEdit.Create(Self);
-  FGenreEdit.Parent := TabSinopse;
-  FGenreEdit.SetBounds(454, 36, 220, 26);
-  FGenreEdit.Text := 'Drama / Ficao';
+  FGenreCombo := TComboBox.Create(Self);
+  FGenreCombo.Parent := TabSinopse;
+  FGenreCombo.Style := csDropDownList;
+  FGenreCombo.SetBounds(454, 36, 220, 26);
+  MmpPopulateGenreCombo(FGenreCombo.Items);
+  FGenreCombo.ItemIndex := 0;
+  FGenreCombo.OnChange := @OnFieldChange;
 
   L := TLabel.Create(Self);
   L.Parent := TabSinopse;
-  L.Caption := 'Duracao-alvo (min):';
-  L.SetBounds(692, 16, 140, 18);
-  FTargetMinEdit := TEdit.Create(Self);
-  FTargetMinEdit.Parent := TabSinopse;
-  FTargetMinEdit.SetBounds(692, 36, 110, 26);
-  FTargetMinEdit.Text := '10';
+  L.Caption := 'Duracao-alvo (HH:MM:SS):';
+  L.SetBounds(692, 16, 180, 18);
+  FTargetDurEdit := TEdit.Create(Self);
+  FTargetDurEdit.Parent := TabSinopse;
+  FTargetDurEdit.SetBounds(692, 36, 110, 26);
+  FTargetDurEdit.MaxLength := 8;
+  FTargetDurEdit.Text := '00:10:00';
+  FTargetDurEdit.OnChange := @OnFieldChange;
+  FTargetDurEdit.OnExit := @OnTargetDurExit;
 
   L := TLabel.Create(Self);
   L.Parent := TabSinopse;
@@ -304,18 +330,30 @@ begin
   FSynopsisMemo := TMemo.Create(Self);
   FSynopsisMemo.Parent := TabSinopse;
   FSynopsisMemo.ScrollBars := ssVertical;
+  FSynopsisMemo.WordWrap := True;
   FSynopsisMemo.Anchors := [akLeft, akTop, akRight, akBottom];
-  FSynopsisMemo.SetBounds(16, 94, 886, 430);
+  FSynopsisMemo.SetBounds(16, 94, 886, 350);
+  FSynopsisMemo.OnChange := @OnFieldChange;
 
   L := TLabel.Create(Self);
   L.Parent := TabSinopse;
   L.Caption := 'Instrucoes adicionais para IA (opcional):';
   L.Anchors := [akLeft, akBottom];
-  L.SetBounds(16, 534, 300, 18);
-  FAiPromptEdit := TEdit.Create(Self);
-  FAiPromptEdit.Parent := TabSinopse;
-  FAiPromptEdit.Anchors := [akLeft, akRight, akBottom];
-  FAiPromptEdit.SetBounds(16, 554, 650, 26);
+  L.SetBounds(16, 454, 300, 18);
+  FAiPromptMemo := TMemo.Create(Self);
+  FAiPromptMemo.Parent := TabSinopse;
+  FAiPromptMemo.ScrollBars := ssVertical;
+  FAiPromptMemo.WordWrap := True;
+  FAiPromptMemo.Anchors := [akLeft, akRight, akBottom];
+  FAiPromptMemo.SetBounds(16, 474, 650, 110);
+  FAiPromptMemo.OnChange := @OnFieldChange;
+
+  BtnSaveSynopsis := TButton.Create(Self);
+  BtnSaveSynopsis.Parent := TabSinopse;
+  BtnSaveSynopsis.Caption := 'Salvar Sinopse';
+  BtnSaveSynopsis.Anchors := [akRight, akBottom];
+  BtnSaveSynopsis.SetBounds(678, 508, 224, 34);
+  BtnSaveSynopsis.OnClick := @OnSaveSynopsisClick;
 
   BtnGenAi := TButton.Create(Self);
   BtnGenAi.Parent := TabSinopse;
@@ -434,11 +472,13 @@ begin
     FLogMemo.Lines.Add('[' + FormatDateTime('hh:nn:ss', Now) + '] ' + Msg);
   if FStatusLabel <> nil then
     FStatusLabel.Caption := Msg;
+  if FProd.Loaded then
+    MmpLogAppOperation(FProd.RootDir, FProd.ProductionId, 'MScript', Msg, FCurrentRevId);
 end;
 
 procedure TMscriptMainForm.LoadProductionAndRevision(const ProdRoot, ProjId, RevId: string);
 var
-  ErrMsg: string;
+  ErrMsg, WorkFile: string;
 begin
   if not ResolveAppProject(ProdRoot, 1, ProjId, RevId, FProd, FProj,
     FProjectDir, FCurrentRevId, ErrMsg) then
@@ -448,44 +488,196 @@ begin
   end;
 
   FAi.LoadForProduction(FProd.RootDir);
-  FTitleEdit.Text := FProd.Title;
-  LoadScriptFromRevision(FCurrentRevId);
+  FLoadingFields := True;
+  try
+    FTitleEdit.Text := FProd.Title;
+    LoadScriptFromRevision(FCurrentRevId);
+    WorkFile := WorkDraftFilePath;
+    if FileExists(WorkFile) then
+    begin
+      LoadScriptFromFile(WorkFile);
+      LogMsg('Rascunho local restaurado de work/roteiro.json.');
+    end;
+    FWorkDirty := False;
+  finally
+    FLoadingFields := False;
+  end;
   RefreshUI;
-  LogMsg('Producao aberta: ' + FProd.Title + ' | Revisao: ' + FCurrentRevId);
+  LogMsg('Producao aberta: ' + FProd.Title + ' | Revisao: ' + FCurrentRevId +
+    ' | IA: ' + FAi.ProviderDisplayName);
 end;
 
-procedure TMscriptMainForm.LoadScriptFromRevision(const RevId: string);
+procedure TMscriptMainForm.SetGenreValue(const AGenre: string);
 var
-  ScriptPath, Content: string;
+  Clean: string;
+  I, FoundIdx: Integer;
+begin
+  Clean := Trim(AGenre);
+  if Clean = '' then
+  begin
+    if FGenreCombo.Items.Count > 0 then
+      FGenreCombo.ItemIndex := 0;
+    Exit;
+  end;
+
+  FoundIdx := -1;
+  for I := 0 to FGenreCombo.Items.Count - 1 do
+    if SameText(FGenreCombo.Items[I], Clean) then
+    begin
+      FoundIdx := I;
+      Break;
+    end;
+
+  if FoundIdx < 0 then
+    FoundIdx := FGenreCombo.Items.Add(Clean);
+  FGenreCombo.ItemIndex := FoundIdx;
+end;
+
+function TMscriptMainForm.ValidateTargetDuration(out DurSec: Integer; out DurHms: string): Boolean;
+var
+  Sec64: Int64;
+begin
+  Result := MmpTryParseDurationHms(FTargetDurEdit.Text, Sec64) and
+    (Sec64 >= 0) and (Sec64 <= High(Integer));
+  if Result then
+  begin
+    DurSec := Integer(Sec64);
+    DurHms := MmpFormatDurationHms(Sec64);
+    FTargetDurEdit.Text := DurHms;
+  end
+  else
+  begin
+    DurSec := 0;
+    DurHms := '';
+    MessageDlg('Informe a duracao-alvo no formato HH:MM:SS (ex.: 00:00:30 ou 00:10:00).',
+      mtWarning, [mbOK], 0);
+    if FPageControl.ActivePageIndex <> 0 then
+      FPageControl.ActivePageIndex := 0;
+    if FTargetDurEdit.CanFocus then
+      FTargetDurEdit.SetFocus;
+  end;
+end;
+
+procedure TMscriptMainForm.OnTargetDurExit(Sender: TObject);
+var
+  Sec64: Int64;
+begin
+  if MmpTryParseDurationHms(FTargetDurEdit.Text, Sec64) then
+    FTargetDurEdit.Text := MmpFormatDurationHms(Sec64);
+end;
+
+function TMscriptMainForm.WorkDraftFilePath: string;
+begin
+  if FProjectDir = '' then
+    Result := ''
+  else
+    Result := IncludeTrailingPathDelimiter(FProjectDir) + 'work' + PathDelim + 'roteiro.json';
+end;
+
+function TMscriptMainForm.SaveWorkDraft(Silent: Boolean): Boolean;
+var
+  WorkFile: string;
+begin
+  Result := False;
+  if (not FProd.Loaded) or (FProjectDir = '') then
+  begin
+    if not Silent then
+      MessageDlg('Abra uma producao primeiro.', mtWarning, [mbOK], 0);
+    Exit;
+  end;
+  WorkFile := WorkDraftFilePath;
+  if WorkFile = '' then Exit;
+  Result := AtomicWriteTextFile(WorkFile, BuildScriptJsonText, False);
+  if Result then
+    FWorkDirty := False
+  else if not Silent then
+    MessageDlg('Falha ao gravar rascunho em: ' + WorkFile, mtError, [mbOK], 0);
+end;
+
+procedure TMscriptMainForm.OnFieldChange(Sender: TObject);
+begin
+  if FLoadingFields or (not FProd.Loaded) then Exit;
+  FWorkDirty := True;
+  if Sender <> nil then;
+end;
+
+procedure TMscriptMainForm.OnAutosaveTimer(Sender: TObject);
+begin
+  if FProd.Loaded and FWorkDirty and (not FLoadingFields) then
+    SaveWorkDraft(True);
+  if Sender <> nil then;
+end;
+
+procedure TMscriptMainForm.OnFormCloseQuery(Sender: TObject; var CanClose: Boolean);
+begin
+  CanClose := True;
+  if FProd.Loaded and FWorkDirty then
+    SaveWorkDraft(True);
+  if Sender <> nil then;
+end;
+
+procedure TMscriptMainForm.OnSaveSynopsisClick(Sender: TObject);
+var
+  DurSec: Integer;
+  DurHms: string;
+begin
+  if not FProd.Loaded then
+  begin
+    MessageDlg('Abra uma producao primeiro.', mtWarning, [mbOK], 0);
+    Exit;
+  end;
+  if not ValidateTargetDuration(DurSec, DurHms) then Exit;
+  if SaveWorkDraft(False) then
+  begin
+    AppendJsonLogLine(FProd.RootDir, 'MScript', 'info',
+      'Sinopse salva em rascunho local (titulo="' + Trim(FTitleEdit.Text) + '")');
+    LogMsg('Sinopse e parametros salvos em rascunho local (work/roteiro.json).');
+  end;
+  if Sender <> nil then;
+end;
+
+procedure TMscriptMainForm.LoadScriptFromFile(const ScriptPath: string);
+var
+  Content, HmsStr: string;
   Data: TJSONData;
   Obj: TJSONObject;
   Arr: TJSONArray;
   Item: TJSONObject;
   I: Integer;
-  RevInfo: TMmpRevisionInfo;
+  DurSec64, DurMs64: Int64;
 begin
-  SetLength(FScenes, 0);
-  SetLength(FChars, 0);
-  FValidated := False;
-  FCurrentRevId := RevId;
-
-  if FindRevisionInProject(FProj, RevId, RevInfo) then
-    FValidated := SameText(RevInfo.State, 'approved');
-
-  ScriptPath := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' +
-    PathDelim + RevId + PathDelim + 'scripts' + PathDelim + 'roteiro.json';
-
   if not FileExists(ScriptPath) then Exit;
   if not ReadTextFileUtf8(ScriptPath, Content) then Exit;
+  FLoadingFields := True;
   try
     Data := GetJSON(Content);
     if not (Data is TJSONObject) then begin Data.Free; Exit; end;
     Obj := TJSONObject(Data);
     try
       if Obj.Get('title', '') <> '' then FTitleEdit.Text := Obj.Get('title', '');
-      if Obj.Get('genre', '') <> '' then FGenreEdit.Text := Obj.Get('genre', '');
-      FTargetMinEdit.Text := IntToStr(Obj.Get('target_minutes', 10));
+      if Obj.Get('genre', '') <> '' then SetGenreValue(Obj.Get('genre', ''));
+
+      HmsStr := Obj.Get('target_duration_hms', '');
+      if (HmsStr <> '') and MmpTryParseDurationHms(HmsStr, DurSec64) then
+        FTargetDurEdit.Text := MmpFormatDurationHms(DurSec64)
+      else
+      begin
+        DurSec64 := Obj.Get('target_duration_sec', Int64(-1));
+        if DurSec64 >= 0 then
+          FTargetDurEdit.Text := MmpFormatDurationHms(DurSec64)
+        else
+        begin
+          DurMs64 := Obj.Get('target_duration_ms', Int64(-1));
+          if DurMs64 >= 0 then
+            FTargetDurEdit.Text := MmpFormatDurationHms(DurMs64 div 1000)
+          else
+            FTargetDurEdit.Text := MmpFormatDurationHms(Int64(Obj.Get('target_minutes', 10)) * 60);
+        end;
+      end;
+
       FSynopsisMemo.Text := Obj.Get('synopsis', '');
+      if Obj.Find('ai_instructions') <> nil then
+        FAiPromptMemo.Text := Obj.Get('ai_instructions', '');
       FValidated := Obj.Get('validated', FValidated);
 
       if Obj.Find('scenes') is TJSONArray then
@@ -537,25 +729,50 @@ begin
     on E: Exception do
       LogMsg('Erro ao carregar roteiro.json: ' + E.Message);
   end;
+  FLoadingFields := False;
+end;
+
+procedure TMscriptMainForm.LoadScriptFromRevision(const RevId: string);
+var
+  ScriptPath: string;
+  RevInfo: TMmpRevisionInfo;
+begin
+  SetLength(FScenes, 0);
+  SetLength(FChars, 0);
+  FValidated := False;
+  FCurrentRevId := RevId;
+
+  if FindRevisionInProject(FProj, RevId, RevInfo) then
+    FValidated := SameText(RevInfo.State, 'approved');
+
+  ScriptPath := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' +
+    PathDelim + RevId + PathDelim + 'scripts' + PathDelim + 'roteiro.json';
+  LoadScriptFromFile(ScriptPath);
 end;
 
 procedure TMscriptMainForm.RefreshUI;
 var
-  I: Integer;
+  I, CurVer, ActVer, ItemVer: Integer;
 begin
   if FProd.Loaded then
   begin
     FHeaderProdLabel.Caption := FProd.Title + '  (' + FProd.ProductionId + ')';
+    CurVer := RevisionVersionNumber(FCurrentRevId);
+    ActVer := RevisionVersionNumber(FProj.ActiveRevision);
     if FValidated then
-      FHeaderRevLabel.Caption := 'Revisao: ' + FCurrentRevId + '  |  APROVADO'
+      FHeaderRevLabel.Caption := 'Versao ' + IntToStr(CurVer) + ' (' + FCurrentRevId + ')  |  APROVADO'
     else
-      FHeaderRevLabel.Caption := 'Revisao: ' + FCurrentRevId + '  |  Rascunho (nao aprovado)';
+      FHeaderRevLabel.Caption := 'Versao ' + IntToStr(CurVer) + ' (' + FCurrentRevId + ')  |  Rascunho (nao aprovado)';
     FSideInfoLabel.Caption := 'Project ID: ' + FProj.ProjectId + LineEnding +
-      'Ativa: ' + FProj.ActiveRevision + LineEnding +
+      'Versao ativa: ' + IntToStr(ActVer) + ' (' + FProj.ActiveRevision + ')' + LineEnding +
       'Cenas: ' + IntToStr(Length(FScenes));
     FRevList.Items.Clear;
     for I := 0 to High(FProj.Revisions) do
-      FRevList.Items.Add(FProj.Revisions[I].RevisionId + ' [' + FProj.Revisions[I].State + ']');
+    begin
+      ItemVer := RevisionVersionNumber(FProj.Revisions[I].RevisionId);
+      FRevList.Items.Add('Versao ' + IntToStr(ItemVer) + ' (' +
+        FProj.Revisions[I].RevisionId + ') [' + FProj.Revisions[I].State + ']');
+    end;
   end;
   RefreshScenesGrid;
   RefreshCharsGrid;
@@ -784,15 +1001,22 @@ function TMscriptMainForm.BuildScriptJsonText: string;
 var
   Root, SObj, CObj: TJSONObject;
   SArr, CArr: TJSONArray;
-  I: Integer;
+  I, DurSec: Integer;
+  DurHms: string;
 begin
+  DurSec := MmpParseDurationSecHms(FTargetDurEdit.Text, 600);
+  DurHms := MmpFormatDurationHms(DurSec);
   Root := TJSONObject.Create;
   try
     Root.Add('schema', 'mmp.mscript.script/1');
     Root.Add('title', FTitleEdit.Text);
-    Root.Add('genre', FGenreEdit.Text);
-    Root.Add('target_minutes', StrToIntDef(FTargetMinEdit.Text, 10));
+    Root.Add('genre', FGenreCombo.Text);
+    Root.Add('target_duration_hms', DurHms);
+    Root.Add('target_duration_sec', DurSec);
+    Root.Add('target_duration_ms', Int64(DurSec) * 1000);
+    Root.Add('target_minutes', DurSec div 60);
     Root.Add('synopsis', FSynopsisMemo.Text);
+    Root.Add('ai_instructions', FAiPromptMemo.Text);
     Root.Add('validated', FValidated);
     Root.Add('updated_at', CurrentIsoUtc);
 
@@ -838,12 +1062,13 @@ end;
 function TMscriptMainForm.BuildScriptMarkdownText: string;
 var
   SL: TStringList;
-  I: Integer;
+  I, DurSec: Integer;
 begin
+  DurSec := MmpParseDurationSecHms(FTargetDurEdit.Text, 600);
   SL := TStringList.Create;
   try
     SL.Add('# ' + FTitleEdit.Text);
-    SL.Add('Genero: ' + FGenreEdit.Text);
+    SL.Add('Genero: ' + FGenreCombo.Text + ' | Duracao-alvo: ' + MmpFormatDurationHms(DurSec));
     SL.Add('');
     SL.Add('## Sinopse');
     SL.Add(FSynopsisMemo.Text);
@@ -890,12 +1115,36 @@ end;
 
 procedure TMscriptMainForm.OnGenerateAiClick(Sender: TObject);
 var
-  SysPrompt, UserPrompt, Resp, Err: string;
+  SysPrompt, UserPrompt, Resp, Err, DurHms: string;
+  DurSec, Choice: Integer;
+  IsMockMode: Boolean;
 begin
   if Trim(FSynopsisMemo.Text) = '' then
   begin
     MessageDlg('Escreva uma sinopse antes de gerar o roteiro.', mtWarning, [mbOK], 0);
     Exit;
+  end;
+  if not ValidateTargetDuration(DurSec, DurHms) then Exit;
+  SaveWorkDraft(True);
+
+  FAi.ReloadIfChanged;
+  IsMockMode := SameText(FAi.ActiveAdapter, 'mock');
+  if IsMockMode and (not FAi.Settings.OfflineMode) then
+  begin
+    Choice := MessageDlg(
+      'O provedor de texto desta producao ainda esta em modo SIMULADO (' +
+      FAi.ProviderDisplayName + ').' + LineEnding + LineEnding +
+      'No modo simulado a IA real nao e chamada e apenas 3 cenas de exemplo genericas sao criadas.' + LineEnding + LineEnding +
+      'Deseja abrir as Configuracoes no MMenu para selecionar um provedor real?' + LineEnding +
+      '(Clique em Nao para gerar um esboco local de exemplo mesmo assim.)',
+      mtConfirmation, [mbYes, mbNo, mbCancel], 0);
+    if Choice = mrYes then
+    begin
+      FAi.OpenMMenuSettings(Self);
+      Exit;
+    end
+    else if Choice <> mrNo then
+      Exit;
   end;
 
   SysPrompt := 'Voce e um roteirista profissional. Responda APENAS com JSON valido no formato: ' +
@@ -903,10 +1152,10 @@ begin
     '"estimated_duration":45,"characters":"Nome1, Nome2","objects":"...","costumes":"...",' +
     '"action":"...","dialogue":"Nome1: fala"}]}.';
   UserPrompt := 'Titulo: ' + FTitleEdit.Text + LineEnding +
-    'Genero: ' + FGenreEdit.Text + LineEnding +
-    'Duracao alvo (min): ' + FTargetMinEdit.Text + LineEnding +
+    'Genero: ' + FGenreCombo.Text + LineEnding +
+    'Duracao alvo (HH:MM:SS): ' + DurHms + ' (' + IntToStr(DurSec) + ' segundos)' + LineEnding +
     'Sinopse: ' + FSynopsisMemo.Text + LineEnding +
-    'Instrucoes extras: ' + FAiPromptEdit.Text;
+    'Instrucoes extras: ' + FAiPromptMemo.Text;
 
   if FAi.IsConfigured then
   begin
@@ -919,8 +1168,15 @@ begin
         FValidated := False;
         ExtractCharacterMap;
         RefreshUI;
+        SaveRevision('draft');
         FPageControl.ActivePageIndex := 1;
-        LogMsg('Roteiro gerado pela IA (rascunho, aguardando validacao humana).');
+        if IsMockMode or FAi.Settings.OfflineMode then
+          LogMsg('[MODO SIMULADO] Cenas de exemplo geradas localmente na versao ' +
+            IntToStr(RevisionVersionNumber(FCurrentRevId)) + '.')
+        else
+          LogMsg('Roteiro gerado pela IA (' + IntToStr(Length(FScenes)) +
+            ' cenas) e salvo na versao ' + IntToStr(RevisionVersionNumber(FCurrentRevId)) +
+            ' (' + FCurrentRevId + ').');
         Exit;
       except
         on E: Exception do
@@ -928,7 +1184,10 @@ begin
       end;
     end
     else
+    begin
       LogMsg('Falha na IA: ' + Err);
+      MessageDlg('Falha ao consultar a IA:' + LineEnding + LineEnding + Err, mtWarning, [mbOK], 0);
+    end;
   end;
 
   if MessageDlg('IA nao configurada ou indisponivel. Deseja gerar um esboco estruturado local a partir da sinopse?',
@@ -938,8 +1197,10 @@ begin
     FValidated := False;
     ExtractCharacterMap;
     RefreshUI;
+    SaveRevision('draft');
     FPageControl.ActivePageIndex := 1;
-    LogMsg('Esboco estruturado local criado (rascunho).');
+    LogMsg('Esboco estruturado local criado e salvo na versao ' +
+      IntToStr(RevisionVersionNumber(FCurrentRevId)) + ' (' + FCurrentRevId + ').');
   end;
 end;
 
@@ -966,6 +1227,7 @@ begin
     FSceneActionMemo.Text := Resp;
     SaveEditorToScene;
     RefreshScenesGrid;
+    SaveWorkDraft(True);
     LogMsg('Cena ' + FScenes[FSelectedScene].SceneId + ' reescrita via IA.');
   end
   else
@@ -988,12 +1250,14 @@ begin
   FSelectedScene := N;
   FValidated := False;
   RefreshScenesGrid;
+  SaveWorkDraft(True);
 end;
 
 procedure TMscriptMainForm.OnSaveSceneEditClick(Sender: TObject);
 begin
   SaveEditorToScene;
   RefreshScenesGrid;
+  SaveWorkDraft(True);
   LogMsg('Alteracoes manuais aplicadas na cena.');
 end;
 
@@ -1015,7 +1279,9 @@ end;
 
 procedure TMscriptMainForm.SaveRevision(const NewState: string);
 var
-  PrepRev, RevDir, NewRev, ErrMsg: string;
+  PrepRev, RevDir, NewRev, ErrMsg, DurHms, ParentRev: string;
+  DurSec: Integer;
+  IsInitialEmptyR0001: Boolean;
   Arts: array of TMmpArtifactInput;
   Srcs: array of TMmpSourceRef;
 begin
@@ -1024,20 +1290,50 @@ begin
     MessageDlg('Abra uma producao primeiro.', mtWarning, [mbOK], 0);
     Exit;
   end;
+  if not ValidateTargetDuration(DurSec, DurHms) then Exit;
   SaveEditorToScene;
   ExtractCharacterMap;
   FValidated := (NewState = 'approved');
 
-  if not PrepareNextRevisionDir(FProj.ProjectFilePath, PrepRev, RevDir) then
+  IsInitialEmptyR0001 := (Length(FProj.Revisions) = 1) and
+    SameText(FProj.Revisions[0].RevisionId, 'r0001') and
+    SameText(FProj.Status, 'initialized') and
+    (not FileExists(IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' +
+      PathDelim + 'r0001' + PathDelim + 'scripts' + PathDelim + 'roteiro.json'));
+
+  if IsInitialEmptyR0001 then
   begin
-    MessageDlg('Falha ao preparar diretorio de revisao.', mtError, [mbOK], 0);
-    Exit;
+    PrepRev := 'r0001';
+    RevDir := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim + 'r0001';
+    ParentRev := '';
+    if not ForceDirectories(RevDir) then
+    begin
+      MessageDlg('Falha ao preparar diretorio da versao 1 (r0001).', mtError, [mbOK], 0);
+      Exit;
+    end;
+  end
+  else
+  begin
+    ParentRev := FCurrentRevId;
+    if not PrepareNextRevisionDir(FProj.ProjectFilePath, PrepRev, RevDir) then
+    begin
+      MessageDlg('Falha ao preparar diretorio de revisao.', mtError, [mbOK], 0);
+      Exit;
+    end;
   end;
 
-  AtomicWriteTextFile(RevDir + PathDelim + 'scripts' + PathDelim + 'roteiro.json',
-    BuildScriptJsonText, False);
-  AtomicWriteTextFile(RevDir + PathDelim + 'scripts' + PathDelim + 'roteiro.md',
-    BuildScriptMarkdownText, False);
+  if not AtomicWriteTextFile(RevDir + PathDelim + 'scripts' + PathDelim + 'roteiro.json',
+    BuildScriptJsonText, False) then
+  begin
+    MessageDlg('Falha ao gravar scripts/roteiro.json.', mtError, [mbOK], 0);
+    Exit;
+  end;
+  if not AtomicWriteTextFile(RevDir + PathDelim + 'scripts' + PathDelim + 'roteiro.md',
+    BuildScriptMarkdownText, False) then
+  begin
+    MessageDlg('Falha ao gravar scripts/roteiro.md.', mtError, [mbOK], 0);
+    Exit;
+  end;
 
   SetLength(Srcs, 0);
   SetLength(Arts, 2);
@@ -1054,9 +1350,13 @@ begin
   Arts[1].Status := NewState;
 
   if PublishProjectRevision(FProd.ProductionId, FProj.ProjectFilePath, 'MScript',
-    FCurrentRevId, NewState, '', Srcs, Arts, NewRev, ErrMsg, PrepRev) then
+    ParentRev, NewState, '', Srcs, Arts, NewRev, ErrMsg, PrepRev) then
   begin
-    LogMsg('Revisao publicada (' + NewState + '): ' + NewRev);
+    if (WorkDraftFilePath <> '') and FileExists(WorkDraftFilePath) then
+      DeleteFile(WorkDraftFilePath);
+    FWorkDirty := False;
+    LogMsg('Versao ' + IntToStr(RevisionVersionNumber(NewRev)) + ' (' + NewRev +
+      ') salva [' + NewState + '].');
     LoadProductionAndRevision(FProd.RootDir, FProj.ProjectId, NewRev);
   end
   else
@@ -1082,16 +1382,26 @@ end;
 
 procedure TMscriptMainForm.OnRevListDblClick(Sender: TObject);
 var
-  S: string;
-  P: SizeInt;
+  S, RevId: string;
+  P1, P2: SizeInt;
 begin
   if FRevList.ItemIndex < 0 then Exit;
-  S := FRevList.Items[FRevList.ItemIndex];
-  P := Pos(' ', S);
-  if P > 1 then S := Copy(S, 1, P - 1);
-  LoadScriptFromRevision(S);
+  if FRevList.ItemIndex <= High(FProj.Revisions) then
+    RevId := FProj.Revisions[FRevList.ItemIndex].RevisionId
+  else
+  begin
+    S := FRevList.Items[FRevList.ItemIndex];
+    P1 := Pos('(', S);
+    P2 := Pos(')', S);
+    if (P1 > 0) and (P2 > P1) then
+      RevId := Copy(S, P1 + 1, P2 - P1 - 1)
+    else
+      RevId := S;
+  end;
+  LoadScriptFromRevision(RevId);
   RefreshUI;
-  LogMsg('Revisao carregada para leitura/edicao: ' + S);
+  LogMsg('Versao ' + IntToStr(RevisionVersionNumber(RevId)) + ' (' + RevId +
+    ') carregada para leitura/edicao.');
 end;
 
 function RunMScriptHeadlessEvent(const Args: TMMLaunchArgs): Integer;

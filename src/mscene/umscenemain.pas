@@ -209,6 +209,8 @@ begin
     FLogMemo.Lines.Add('[' + FormatDateTime('hh:nn:ss', Now) + '] ' + Msg);
   if FStatusLabel <> nil then
     FStatusLabel.Caption := Msg;
+  if FProd.Loaded then
+    MmpLogAppOperation(FProd.RootDir, FProd.ProductionId, 'MScene', Msg, FSceneRevId);
 end;
 
 procedure TMsceneMainForm.OnDecoderFrame(Sender: TObject; ABitmap: TBitmap);

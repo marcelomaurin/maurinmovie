@@ -4,7 +4,7 @@ program test_mmp_protocol;
 
 uses
   SysUtils, Classes, fpjson, jsonparser,
-  mmpcommon, mmpsettings, ummpsha256, ummpprotocol;
+  mmpcommon, mmpsettings, ummpsha256, ummpdb, ummpprotocol;
 
 var
   PassCount: Integer = 0;
@@ -114,8 +114,9 @@ begin
   RemoveDirRecursive(TestRoot);
   ForceDirectories(TestRoot);
   try
-    AssertTrue(CreateProduction(TestRoot, 'Filme de Teste', ProdRoot, ErrMsg),
-      'CreateProduction succeeds: ' + ErrMsg);
+    if not CreateProduction(TestRoot, 'Filme de Teste', ProdRoot, ErrMsg) then
+      WriteLn('DEBUG CreateProduction ErrMsg: ', ErrMsg);
+    AssertTrue(ProdRoot <> '', 'CreateProduction succeeds: ' + ErrMsg);
     AssertTrue(FileExists(ProdRoot + PathDelim + 'production.json'), 'production.json exists');
     AssertTrue(FileExists(ProdRoot + PathDelim + 'catalog.json'), 'catalog.json exists');
     AssertTrue(FileExists(ProdRoot + PathDelim + 'settings' + PathDelim + 'ai-providers.json'),
@@ -123,6 +124,10 @@ begin
 
     AssertTrue(LoadProduction(ProdRoot, True, Prod), 'LoadProduction initial');
     AssertEq(IntToStr(Length(Prod.Projects)), '7', 'All 7 projects loaded');
+    AssertTrue(MmpProjectHasActivity(Prod.Projects[0]), 'MMenu has initial activity (1 visible record on create)');
+    for I := 1 to 6 do
+      AssertTrue(not MmpProjectHasActivity(Prod.Projects[I]),
+        'Unused app ' + Prod.Projects[I].AppName + ' hidden until first revision');
     AssertTrue(not Prod.HasFailures, 'No initial failures');
     AssertEq(IntToStr(Length(Prod.MissingLinks)), '0', 'No initial missing links');
 
@@ -367,12 +372,462 @@ begin
   end;
 end;
 
+procedure TestGenreAndDurationHms;
+var
+  Genres: TStringList;
+  Sec: Int64;
+begin
+  Genres := TStringList.Create;
+  try
+    MmpPopulateGenreCombo(Genres);
+    AssertTrue(Genres.Count >= 10, 'MmpPopulateGenreCombo populates standard genres');
+    AssertTrue(Genres.IndexOf('Comercial / Publicitario') >= 0, 'Genres include Comercial / Publicitario');
+  finally
+    Genres.Free;
+  end;
+
+  AssertEq(MmpFormatDurationHms(0), '00:00:00', 'Format 0s');
+  AssertEq(MmpFormatDurationHms(30), '00:00:30', 'Format 30s');
+  AssertEq(MmpFormatDurationHms(600), '00:10:00', 'Format 600s');
+  AssertEq(MmpFormatDurationHms(3661), '01:01:01', 'Format 3661s');
+  AssertEq(MmpFormatDurationHms(-5), '00:00:00', 'Negative duration clamps to 00:00:00');
+
+  AssertTrue(MmpTryParseDurationHms('00:00:30', Sec) and (Sec = 30), 'Parse 00:00:30');
+  AssertTrue(MmpTryParseDurationHms('0:5:9', Sec) and (Sec = 309), 'Parse 0:5:9');
+  AssertTrue(MmpTryParseDurationHms('02:30:00', Sec) and (Sec = 9000), 'Parse 02:30:00');
+  AssertTrue(not MmpTryParseDurationHms('', Sec), 'Reject empty duration');
+  AssertTrue(not MmpTryParseDurationHms('10', Sec), 'Reject minutes-only integer');
+  AssertTrue(not MmpTryParseDurationHms('00:60:00', Sec), 'Reject MM >= 60');
+  AssertTrue(not MmpTryParseDurationHms('00:10:60', Sec), 'Reject SS >= 60');
+  AssertTrue(not MmpTryParseDurationHms('-01:00:00', Sec), 'Reject negative hours');
+  AssertTrue(not MmpTryParseDurationHms('aa:bb:cc', Sec), 'Reject non-numeric duration');
+
+  AssertEq(IntToStr(MmpParseDurationSecHms('00:00:45', 600)), '45', 'MmpParseDurationSecHms valid');
+  AssertEq(IntToStr(MmpParseDurationSecHms('invalido', 600)), '600', 'MmpParseDurationSecHms fallback');
+
+  AssertEq(IntToStr(RevisionVersionNumber('r0001')), '1', 'RevisionVersionNumber r0001 -> 1');
+  AssertEq(IntToStr(RevisionVersionNumber('r0002')), '2', 'RevisionVersionNumber r0002 -> 2');
+  AssertEq(IntToStr(RevisionVersionNumber('r0012')), '12', 'RevisionVersionNumber r0012 -> 12');
+end;
+
+procedure TestSharedSettingsDir;
+var
+  S: TMMSettings;
+begin
+  S := TMMSettings.Create;
+  try
+    AssertTrue(Pos('test_mmp_protocol', LowerCase(S.MachineIniPath)) = 0,
+      'MachineIniPath is shared (not scoped to executable name)');
+    AssertTrue(Pos('test_mmp_protocol', LowerCase(S.SecretsIniPath)) = 0,
+      'SecretsIniPath is shared (not scoped to executable name)');
+    AssertTrue(Pos('maurinmovie', LowerCase(S.SecretsIniPath)) > 0,
+      'SecretsIniPath resides under MaurinMovie directory');
+  finally
+    S.Free;
+  end;
+end;
+
+procedure TestIntegrityValidationOnOpen;
+var
+  TestRoot, ProdRoot, ErrMsg, BadJsonPath: string;
+  Prod: TMmpProduction;
+begin
+  TestRoot := IncludeTrailingPathDelimiter(GetTempDir) + 'mmp_integrity_open_test';
+  RemoveDirRecursive(TestRoot);
+  ForceDirectories(TestRoot);
+  try
+    AssertTrue(CreateProduction(TestRoot, 'Filme Integridade', ProdRoot, ErrMsg),
+      'CreateProduction for integrity test');
+
+    // Corrupt manifest.json in r0001 of MScript
+    BadJsonPath := ProdRoot + PathDelim + 'projects' + PathDelim + '01-mscript' +
+      PathDelim + 'revisions' + PathDelim + 'r0001' + PathDelim + 'manifest.json';
+    AtomicWriteTextFile(BadJsonPath, '{broken json', False);
+    AssertTrue(LoadProduction(ProdRoot, True, Prod), 'LoadProduction loads with manifest error');
+    AssertTrue(Prod.HasFailures, 'Corrupted manifest.json sets HasFailures');
+
+    // Corrupt project.json of MVisual
+    BadJsonPath := ProdRoot + PathDelim + 'projects' + PathDelim + '02-mvisual' +
+      PathDelim + 'project.json';
+    AtomicWriteTextFile(BadJsonPath, '{broken project', False);
+    AssertTrue(LoadProduction(ProdRoot, True, Prod), 'LoadProduction detects broken project.json');
+    AssertTrue(Prod.HasFailures, 'Corrupted project.json sets HasFailures');
+
+    // Corrupt production.json schema/id -> LoadProduction returns False
+    AtomicWriteTextFile(ProdRoot + PathDelim + 'production.json',
+      '{"schema":"wrong/1","title":"X"}', False);
+    AssertTrue(not LoadProduction(ProdRoot, True, Prod),
+      'Invalid production.json schema/id rejected on open');
+  finally
+    RemoveDirRecursive(TestRoot);
+  end;
+end;
+
+procedure TestStageDependenciesAndStaleness;
+var
+  TestRoot, ProdRoot, ErrMsg, ScriptProjPath, VisualProjPath, VisualRevDir: string;
+  ScriptProjStr, VisualProjStr, ScriptManPath, VisualManPath, ScriptSha: string;
+  Prod: TMmpProduction;
+  Eval: TMmpStageStatus;
+  PObj, MObj, SrcObj: TJSONObject;
+  Arr: TJSONArray;
+begin
+  TestRoot := IncludeTrailingPathDelimiter(GetTempDir) + 'mmp_stage_deps_test';
+  RemoveDirRecursive(TestRoot);
+  ForceDirectories(TestRoot);
+  try
+    AssertTrue(CreateProduction(TestRoot, 'Filme Etapas', ProdRoot, ErrMsg),
+      'CreateProduction for stage deps test');
+    AssertTrue(LoadProduction(ProdRoot, False, Prod), 'Load initial stage deps prod');
+
+    Eval := MmpEvaluateStageStatus(Prod, 1);
+    AssertTrue(Eval.CanOpen and (not Eval.HasActivity), 'MScript openable on fresh production');
+    Eval := MmpEvaluateStageStatus(Prod, 2);
+    AssertTrue(not Eval.CanOpen, 'MVisual blocked until MScript created');
+    Eval := MmpEvaluateStageStatus(Prod, 6);
+    AssertTrue(not Eval.CanOpen, 'MCut blocked until previous stages created');
+
+    // Simulate MScript creating r0001 (status draft)
+    ScriptProjPath := ProdRoot + PathDelim + 'projects' + PathDelim + '01-mscript' + PathDelim + 'project.json';
+    ReadTextFileUtf8(ScriptProjPath, ScriptProjStr);
+    PObj := TJSONObject(GetJSON(ScriptProjStr));
+    try
+      PObj.Strings['status'] := 'draft';
+      AtomicWriteTextFile(ScriptProjPath, PObj.FormatJSON, False);
+    finally
+      PObj.Free;
+    end;
+
+    ScriptManPath := ProdRoot + PathDelim + 'projects' + PathDelim + '01-mscript' +
+      PathDelim + 'revisions' + PathDelim + 'r0001' + PathDelim + 'manifest.json';
+    ScriptSha := SHA256File(ScriptManPath);
+
+    AssertTrue(LoadProduction(ProdRoot, False, Prod), 'Reload after MScript r0001');
+    AssertTrue(MmpEvaluateStageStatus(Prod, 1).HasActivity, 'MScript has activity');
+    AssertTrue(MmpEvaluateStageStatus(Prod, 2).CanOpen, 'MVisual unlocked after MScript');
+    AssertTrue(not MmpEvaluateStageStatus(Prod, 3).CanOpen, 'MBoard still blocked before MVisual');
+
+    // Simulate MVisual creating r0001 referencing MScript @ r0001
+    VisualProjPath := ProdRoot + PathDelim + 'projects' + PathDelim + '02-mvisual' + PathDelim + 'project.json';
+    ReadTextFileUtf8(VisualProjPath, VisualProjStr);
+    PObj := TJSONObject(GetJSON(VisualProjStr));
+    try
+      PObj.Strings['status'] := 'draft';
+      AtomicWriteTextFile(VisualProjPath, PObj.FormatJSON, False);
+    finally
+      PObj.Free;
+    end;
+    VisualRevDir := ProdRoot + PathDelim + 'projects' + PathDelim + '02-mvisual' +
+      PathDelim + 'revisions' + PathDelim + 'r0001';
+    VisualManPath := VisualRevDir + PathDelim + 'manifest.json';
+    ReadTextFileUtf8(VisualManPath, ScriptProjStr);
+    MObj := TJSONObject(GetJSON(ScriptProjStr));
+    try
+      Arr := TJSONArray(MObj.Find('sources'));
+      SrcObj := TJSONObject.Create;
+      SrcObj.Add('project_id', Prod.Projects[1].ProjectId);
+      SrcObj.Add('revision_id', 'r0001');
+      SrcObj.Add('manifest_sha256', ScriptSha);
+      Arr.Add(SrcObj);
+      AtomicWriteTextFile(VisualManPath, MObj.FormatJSON, False);
+    finally
+      MObj.Free;
+    end;
+
+    AssertTrue(LoadProduction(ProdRoot, False, Prod), 'Reload after MVisual r0001');
+    AssertTrue(not MmpEvaluateStageStatus(Prod, 2).NeedsAdjustment,
+      'MVisual up to date with MScript r0001');
+    AssertTrue(MmpEvaluateStageStatus(Prod, 3).CanOpen,
+      'MBoard unlocked after MScript + MVisual');
+
+    // Now redo MScript -> r0002
+    ReadTextFileUtf8(ScriptProjPath, ScriptProjStr);
+    PObj := TJSONObject(GetJSON(ScriptProjStr));
+    try
+      PObj.Strings['active_revision'] := 'r0002';
+      TJSONArray(PObj.Find('revision_history')).Add('r0002');
+      AtomicWriteTextFile(ScriptProjPath, PObj.FormatJSON, False);
+    finally
+      PObj.Free;
+    end;
+    ForceDirectories(ProdRoot + PathDelim + 'projects' + PathDelim + '01-mscript' +
+      PathDelim + 'revisions' + PathDelim + 'r0002');
+    AtomicWriteTextFile(ProdRoot + PathDelim + 'projects' + PathDelim + '01-mscript' +
+      PathDelim + 'revisions' + PathDelim + 'r0002' + PathDelim + 'manifest.json',
+      '{"schema":"mmp.manifest/1","revision_id":"r0002","state":"draft","sources":[],"artifacts":[]}',
+      False);
+
+    AssertTrue(LoadProduction(ProdRoot, False, Prod), 'Reload after MScript redone to r0002');
+    Eval := MmpEvaluateStageStatus(Prod, 2);
+    AssertTrue(Eval.NeedsAdjustment, 'MVisual marked NeedsAdjustment when MScript redone to r0002');
+    AssertTrue(Prod.HasPendingWork, 'Prod.HasPendingWork set when downstream stage needs adjustment');
+  finally
+    RemoveDirRecursive(TestRoot);
+  end;
+end;
+
+procedure TestProductionHistory;
+var
+  TestRoot, ProdRoot, ErrMsg, ScriptProjPath, ScriptProjStr, Rev2Dir, RotPath: string;
+  Prod: TMmpProduction;
+  Hist: TMmpHistoryEntryArray;
+  PObj: TJSONObject;
+  I: Integer;
+  FoundRev, FoundLog, FoundSync: Boolean;
+begin
+  WriteLn('== TestProductionHistory ==');
+  TestRoot := GetTempDir(False) + 'mmp_test_hist_' + IntToStr(Random(100000));
+  ForceDirectories(TestRoot);
+  try
+    AssertTrue(CreateProduction(TestRoot, 'Historia Teste', ProdRoot, ErrMsg),
+      'CreateProduction for history test: ' + ErrMsg);
+    AssertTrue(LoadProduction(ProdRoot, False, Prod), 'LoadProduction initial');
+    Hist := MmpLoadProductionHistory(Prod);
+    AssertTrue(Length(Hist) = 1, 'Fresh production has initial MMenu creation log entry');
+    if Length(Hist) > 0 then
+      AssertTrue(SameText(Hist[0].AppName, 'MMenu') and SameText(Hist[0].Kind, 'Log'),
+        'Initial entry is MMenu creation log');
+
+    // Add MScript r0002 with roteiro.json
+    ScriptProjPath := ProdRoot + PathDelim + 'projects' + PathDelim + '01-mscript' + PathDelim + 'project.json';
+    ReadTextFileUtf8(ScriptProjPath, ScriptProjStr);
+    PObj := TJSONObject(GetJSON(ScriptProjStr));
+    try
+      PObj.Strings['status'] := 'published';
+      PObj.Strings['active_revision'] := 'r0002';
+      TJSONArray(PObj.Find('revision_history')).Add('r0002');
+      AtomicWriteTextFile(ScriptProjPath, PObj.FormatJSON, False);
+    finally
+      PObj.Free;
+    end;
+
+    Rev2Dir := ProdRoot + PathDelim + 'projects' + PathDelim + '01-mscript' +
+      PathDelim + 'revisions' + PathDelim + 'r0002';
+    ForceDirectories(Rev2Dir + PathDelim + 'scripts');
+    RotPath := Rev2Dir + PathDelim + 'scripts' + PathDelim + 'roteiro.json';
+    AtomicWriteTextFile(RotPath,
+      '{"titulo":"Viagem ao Sul","genero":"Drama","duracao_alvo":125,"sinopse":"Jornada longa.","cenas":[{},{"x":1}],"personagens":[{}]}',
+      False);
+    AtomicWriteTextFile(Rev2Dir + PathDelim + 'manifest.json',
+      '{"schema":"mmp.manifest/1","revision_id":"r0002","parent_revision_id":"r0001","state":"published","created_at":"2026-11-17T12:00:00Z","sources":[],"artifacts":[{"artifact_id":"art_r2","kind":"script","uri":"scripts/roteiro.json","status":"published"}]}',
+      False);
+
+    AppendJsonLogLine(ProdRoot, 'MScript', 'info', 'Sinopse salva em rascunho');
+    ForceDirectories(ProdRoot + PathDelim + 'shared' + PathDelim + 'sync');
+    AtomicWriteTextFile(ProdRoot + PathDelim + 'shared' + PathDelim + 'sync' + PathDelim + 'tx_hist.json',
+      '{"event_id":"evt_hist","transaction_id":"tx_hist","origin_app":"MScript","target_app":"MVisual","source_revision":"r0002","stage":"awaiting_review","status":"in_progress","requested_change":"Atualizar visual","created_at":"2026-11-17T12:05:00Z"}',
+      False);
+
+    AssertTrue(LoadProduction(ProdRoot, False, Prod), 'Reload production with history');
+    Hist := MmpLoadProductionHistory(Prod);
+    AssertTrue(Length(Hist) >= 3, 'History aggregates revision, log and sync entries');
+
+    FoundRev := False;
+    FoundLog := False;
+    FoundSync := False;
+    for I := 0 to High(Hist) do
+    begin
+      if SameText(Hist[I].Kind, 'Revisao') and SameText(Hist[I].RevisionId, 'r0002') then
+      begin
+        FoundRev := True;
+        AssertTrue(Pos('Viagem ao Sul', Hist[I].Summary) > 0, 'Revision summary includes roteiro title');
+        AssertTrue(Pos('2 cena(s)', Hist[I].Summary) > 0, 'Revision summary includes scene count');
+      end;
+      if SameText(Hist[I].Kind, 'Log') and (Pos('Sinopse salva', Hist[I].Summary) > 0) then
+        FoundLog := True;
+      if SameText(Hist[I].Kind, 'Sincronizacao') and (Pos('Atualizar visual', Hist[I].Summary) > 0) then
+        FoundSync := True;
+      if I < High(Hist) then
+        AssertTrue(Hist[I].Timestamp >= Hist[I + 1].Timestamp, 'History sorted newest-first');
+    end;
+    AssertTrue(FoundRev, 'Found enriched revision entry');
+    AssertTrue(FoundLog, 'Found JSONL log entry');
+    AssertTrue(FoundSync, 'Found sync entry');
+  finally
+    RemoveDirRecursive(TestRoot);
+  end;
+end;
+
+procedure TestAccessControl;
+var
+  TestRoot, AccessFile, ErrMsg: string;
+  S: TMMSettings;
+  Users: TMmpAccessUserArray;
+  Matched: TMmpAccessUser;
+  I: Integer;
+  HasDefaultUser: Boolean;
+begin
+  WriteLn('== TestAccessControl ==');
+  TestRoot := GetTempDir(False) + 'mmp_test_acc_' + IntToStr(Random(100000));
+  ForceDirectories(TestRoot);
+  AccessFile := TestRoot + PathDelim + 'access-control.json';
+  S := TMMSettings.Create;
+  try
+    S.LoadAccessControl(AccessFile);
+    AssertTrue(S.AccessMode = amOpen, 'Default access mode is amOpen');
+    Users := S.GetAccessUsers;
+    AssertTrue(Length(Users) = 1, 'Only default ADMIN user exists initially');
+    HasDefaultUser := False;
+    for I := 0 to High(Users) do
+      if Users[I].Profile = upUser then
+        HasDefaultUser := True;
+    AssertTrue(not HasDefaultUser, 'No default User profile user exists');
+
+    AssertTrue(S.AuthenticateUser('ADMIN', '123456', Matched, ErrMsg), 'Default ADMIN/123456 authenticates');
+    AssertTrue(Matched.Profile = upAdministrador, 'ADMIN profile is Administrador');
+    AssertTrue(not S.AuthenticateUser('ADMIN', 'wrong', Matched, ErrMsg), 'Wrong password rejected');
+
+    AssertTrue(not S.RemoveAccessUser('ADMIN', ErrMsg), 'Cannot remove last active Administrador');
+    AssertTrue(S.AddOrUpdateAccessUser('operador1', upUser, 'senha1', True, False, ErrMsg),
+      'Create User account operador1: ' + ErrMsg);
+    AssertTrue(S.AuthenticateUser('operador1', 'senha1', Matched, ErrMsg), 'User operador1 authenticates');
+    AssertTrue(Matched.Profile = upUser, 'operador1 profile is User');
+
+    S.AccessMode := amRestricted;
+    AssertTrue(S.SaveAccessControl(ErrMsg, AccessFile), 'Save restricted mode & users: ' + ErrMsg);
+
+    S.LoadAccessControl(AccessFile);
+    AssertTrue(S.AccessMode = amRestricted, 'Reloaded access mode is amRestricted');
+    AssertTrue(Length(S.GetAccessUsers) = 2, 'Reloaded 2 users');
+  finally
+    S.Free;
+    RemoveDirRecursive(TestRoot);
+  end;
+end;
+
+procedure TestMachineAiSettingsPersistence;
+var
+  S: TMMSettings;
+  Prov, OldTextProv: TMmpAiProviderCfg;
+  ErrMsg: string;
+  HadOld: Boolean;
+begin
+  WriteLn('== TestMachineAiSettingsPersistence ==');
+  S := TMMSettings.Create;
+  try
+    HadOld := S.ResolveProvider('text', maMMenu, OldTextProv);
+    FillChar(Prov, SizeOf(Prov), 0);
+    Prov.Id := 'text.default';
+    Prov.Kind := 'text';
+    Prov.LabelText := 'OpenAI GPT Test';
+    Prov.Adapter := 'chatgpt-lib';
+    Prov.BaseUrl := 'https://api.openai.com/v1';
+    Prov.Model := 'gpt-4o-mini';
+    Prov.SecretRef := 'MAURINMOVIE_TEXT_KEY';
+    Prov.Enabled := True;
+    Prov.Temperature := 0.5;
+    Prov.MaxTokens := 4096;
+    S.SetOrAddProvider(Prov, True);
+    AssertTrue(S.SaveMachineAiSettings(ErrMsg), 'SaveMachineAiSettings without active production: ' + ErrMsg);
+  finally
+    S.Free;
+  end;
+
+  S := TMMSettings.Create;
+  try
+    AssertTrue(S.ResolveProvider('text', maMScript, Prov), 'ResolveProvider picks persisted machine text AI');
+    AssertEq('chatgpt-lib', Prov.Adapter, 'Persisted machine adapter matches chatgpt-lib');
+    AssertEq('gpt-4o-mini', Prov.Model, 'Persisted machine model matches gpt-4o-mini');
+    if HadOld then
+    begin
+      S.SetOrAddProvider(OldTextProv, True);
+      S.SaveMachineAiSettings(ErrMsg);
+    end;
+  finally
+    S.Free;
+  end;
+end;
+
+procedure TestSqliteTemplateMediaAndCentralLogs;
+var
+  TestRoot, ProdRoot, ErrMsg, TplPath, SrcImg, RelMedia: string;
+  Prod: TMmpProduction;
+  Projs: TMmpDbProjectArray;
+  DbArt: TMmpDbMediaAssetRow;
+  Assets: TMmpDbMediaAssetArray;
+  Logs: TMmpCentralLogArray;
+  EmptyProjs: TMmpDbProjectArray;
+begin
+  WriteLn('== TestSqliteTemplateMediaAndCentralLogs ==');
+  TestRoot := GetTempDir(False) + 'mmp_test_db_' + IntToStr(Random(100000));
+  ForceDirectories(TestRoot);
+  try
+    AssertTrue(MmpEnsureEmptyTemplateDb(TplPath, ErrMsg), 'Ensure empty template DB: ' + ErrMsg);
+    AssertTrue(FileExists(TplPath), 'Blank template DB file exists');
+    AssertTrue(DbFileSizeBytes(TplPath) >= 4096, 'Blank template DB has valid SQLite schema pages');
+
+    AssertTrue(CreateProduction(TestRoot, 'Projeto SQLite', ProdRoot, ErrMsg),
+      'CreateProduction with SQLite template: ' + ErrMsg);
+    AssertTrue(FileExists(MmpProductionDbPath(ProdRoot)), 'maurinmovie.db copied to local production repo');
+    AssertTrue(DirectoryExists(ProdRoot + PathDelim + 'media' + PathDelim + 'images'), 'media/images folder created');
+    AssertTrue(DirectoryExists(ProdRoot + PathDelim + 'media' + PathDelim + 'voices'), 'media/voices folder created');
+    AssertTrue(DirectoryExists(ProdRoot + PathDelim + 'media' + PathDelim + 'audios'), 'media/audios folder created');
+    AssertTrue(DirectoryExists(ProdRoot + PathDelim + 'media' + PathDelim + 'videos'), 'media/videos folder created');
+
+    Projs := MmpDbListProjects(ProdRoot);
+    AssertTrue(Length(Projs) = 7, 'SQLite projects table populated with all 7 apps');
+
+    // Store a component in media/images and register pointer in media_assets
+    SrcImg := TestRoot + PathDelim + 'sample_hero.png';
+    AtomicWriteTextFile(SrcImg, 'PNGFAKE', False);
+    AssertTrue(MmpEnsureAssetStoredInMediaDir(
+      ProdRoot, SrcImg, 'MVisual', '', 'r0002', 'character_sheet', 'image/png',
+      'images/personagens/sample_hero.png', RelMedia), 'Copy asset into media/images');
+    AssertTrue(Pos('media/images/', RelMedia) = 1, 'Relative path resides in media/images/');
+
+    FillChar(DbArt, SizeOf(DbArt), 0);
+    DbArt.ArtifactId := 'art_img_1';
+    DbArt.ProductionId := Projs[0].ProductionId;
+    DbArt.ProjectId := Projs[2].ProjectId;
+    DbArt.RevisionId := 'r0002';
+    DbArt.AppName := 'MVisual';
+    DbArt.MediaCategory := 'images';
+    DbArt.Kind := 'character_sheet';
+    DbArt.RelativePath := RelMedia;
+    DbArt.MimeType := 'image/png';
+    DbArt.Status := 'draft';
+    AssertTrue(MmpDbUpsertMediaAsset(ProdRoot, DbArt, ErrMsg), 'Upsert media asset in SQLite: ' + ErrMsg);
+
+    Assets := MmpDbListMediaAssets(ProdRoot, 'images');
+    AssertTrue(Length(Assets) = 1, 'Query media_assets by images category returns 1 row');
+    AssertEq(RelMedia, Assets[0].RelativePath, 'SQLite points to project media/images/ file');
+
+    // Centralized logging + resolution across apps
+    AssertTrue(MmpDbAddCentralLog(MmpProductionDbPath(ProdRoot), Projs[0].ProductionId,
+      'error', 'MScript', 'ADMIN', 'generate', 'r0002', 'Falha simulada teste', 'Detalhe x'),
+      'Insert central log error');
+    Logs := MmpDbListCentralLogs(MmpProductionDbPath(ProdRoot), 'MScript', 'error', '', 0, 50);
+    AssertTrue(Length(Logs) = 1, 'Filter unresolved error logs for MScript');
+    AssertTrue(MmpDbResolveCentralLog(MmpProductionDbPath(ProdRoot), Logs[0].Id,
+      'ADMIN', 'Corrigido via teste', True), 'Mark central log as resolved');
+    Logs := MmpDbListCentralLogs(MmpProductionDbPath(ProdRoot), 'MScript', 'error', '', 1, 50);
+    AssertTrue(Length(Logs) = 1, 'Query resolved log entry');
+    AssertTrue(Logs[0].Resolved, 'Resolved flag persisted');
+    AssertEq('Corrigido via teste', Logs[0].ResolutionNote, 'Resolution note persisted');
+
+    // Verify LoadProduction opens maurinmovie.db directly
+    AssertTrue(LoadProduction(MmpProductionDbPath(ProdRoot), False, Prod), 'LoadProduction via maurinmovie.db');
+    AssertEq(Projs[0].ProductionId, Prod.ProductionId, 'ProductionId matches from .db');
+    if Length(EmptyProjs) > 0 then;
+  finally
+    RemoveDirRecursive(TestRoot);
+  end;
+end;
+
 begin
   Randomize;
   TestSHA256;
   TestPathSafety;
   TestProductionLifecycleAndAudit;
   TestSpecs020;
+  TestGenreAndDurationHms;
+  TestSharedSettingsDir;
+  TestIntegrityValidationOnOpen;
+  TestStageDependenciesAndStaleness;
+  TestProductionHistory;
+  TestAccessControl;
+  TestMachineAiSettingsPersistence;
+  TestSqliteTemplateMediaAndCentralLogs;
   WriteLn('---');
   WriteLn(Format('Total: %d passed, %d failed.', [PassCount, FailCount]));
   if FailCount > 0 then

@@ -87,12 +87,35 @@ const
     (Code: '8k';      LabelText: '8K (7680x4320 - 16:9)';    Width: 7680; Height: 4320; Aspect: '16:9')
   );
 
+  MMP_GENRES: array[0..14] of string = (
+    'Drama / Ficcao',
+    'Comercial / Publicitario',
+    'Comedia',
+    'Acao / Aventura',
+    'Suspense / Thriller',
+    'Terror',
+    'Romance',
+    'Ficcao Cientifica',
+    'Fantasia',
+    'Animacao',
+    'Documentario',
+    'Musical',
+    'Institucional / Educativo',
+    'Videoclipe',
+    'Outro'
+  );
+
 procedure MmpPopulateResolutionCombo(Items: TStrings);
 function MmpFindResolutionPresetIndex(W, H: Integer): Integer;
 function MmpGetResolutionPreset(Idx: Integer; out W, H: Integer; out Aspect: string): Boolean;
+procedure MmpPopulateGenreCombo(Items: TStrings);
+function MmpFormatDurationHms(TotalSeconds: Int64): string;
+function MmpTryParseDurationHms(const RawText: string; out TotalSeconds: Int64): Boolean;
+function MmpParseDurationSecHms(const RawText: string; DefaultSec: Integer = 600): Integer;
 
 function ParseLaunchArgs: TMMLaunchArgs;
 function IsValidRevisionId(const ARev: string): Boolean;
+function RevisionVersionNumber(const ARevId: string): Integer;
 function RevisionDirName(ANumber: Integer): string;
 function FormatRevisionLabel(const ANameBase: string; AApp: TMMApp;
   const ARevId: string; const ASceneId: string = ''): string;
@@ -227,6 +250,18 @@ begin
   Result := 'r' + Format('%.4d', [ANumber]);
 end;
 
+function RevisionVersionNumber(const ARevId: string): Integer;
+var
+  Clean: string;
+begin
+  Clean := Trim(ARevId);
+  if (Length(Clean) >= 2) and ((Clean[1] = 'r') or (Clean[1] = 'R')) then
+    Result := StrToIntDef(Copy(Clean, 2, Length(Clean) - 1), 1)
+  else
+    Result := StrToIntDef(Clean, 1);
+  if Result < 1 then Result := 1;
+end;
+
 function FormatRevisionLabel(const ANameBase: string; AApp: TMMApp;
   const ARevId: string; const ASceneId: string): string;
 var
@@ -334,6 +369,71 @@ begin
   W := MMP_RESOLUTION_PRESETS[Idx].Width;
   H := MMP_RESOLUTION_PRESETS[Idx].Height;
   Aspect := MMP_RESOLUTION_PRESETS[Idx].Aspect;
+end;
+
+procedure MmpPopulateGenreCombo(Items: TStrings);
+var
+  I: Integer;
+begin
+  if Items = nil then Exit;
+  Items.Clear;
+  for I := Low(MMP_GENRES) to High(MMP_GENRES) do
+    Items.Add(MMP_GENRES[I]);
+end;
+
+function MmpFormatDurationHms(TotalSeconds: Int64): string;
+var
+  Sec, H, M, S: Int64;
+begin
+  Sec := TotalSeconds;
+  if Sec < 0 then Sec := 0;
+  H := Sec div 3600;
+  M := (Sec mod 3600) div 60;
+  S := Sec mod 60;
+  Result := Format('%.2d:%.2d:%.2d', [H, M, S]);
+end;
+
+function IsDigitsOnly(const S: string): Boolean;
+var
+  I: Integer;
+begin
+  if S = '' then Exit(False);
+  for I := 1 to Length(S) do
+    if not (S[I] in ['0'..'9']) then
+      Exit(False);
+  Result := True;
+end;
+
+function MmpTryParseDurationHms(const RawText: string; out TotalSeconds: Int64): Boolean;
+var
+  Parts: TStringArray;
+  H, M, S: Int64;
+  Clean: string;
+begin
+  Result := False;
+  TotalSeconds := 0;
+  Clean := Trim(RawText);
+  if Clean = '' then Exit;
+  Parts := Clean.Split([':']);
+  if Length(Parts) <> 3 then Exit;
+  if (not IsDigitsOnly(Parts[0])) or (not IsDigitsOnly(Parts[1])) or (not IsDigitsOnly(Parts[2])) then
+    Exit;
+  if (not TryStrToInt64(Parts[0], H)) or (not TryStrToInt64(Parts[1], M)) or (not TryStrToInt64(Parts[2], S)) then
+    Exit;
+  if (H < 0) or (M < 0) or (M > 59) or (S < 0) or (S > 59) then
+    Exit;
+  TotalSeconds := (H * 3600) + (M * 60) + S;
+  Result := True;
+end;
+
+function MmpParseDurationSecHms(const RawText: string; DefaultSec: Integer): Integer;
+var
+  Sec64: Int64;
+begin
+  if MmpTryParseDurationHms(RawText, Sec64) and (Sec64 <= High(Integer)) then
+    Result := Integer(Sec64)
+  else
+    Result := DefaultSec;
 end;
 
 end.

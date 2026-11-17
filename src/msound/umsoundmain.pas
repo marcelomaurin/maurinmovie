@@ -235,6 +235,8 @@ begin
     FLogMemo.Lines.Add('[' + FormatDateTime('hh:nn:ss', Now) + '] ' + Msg);
   if FStatusLabel <> nil then
     FStatusLabel.Caption := Msg;
+  if FProd.Loaded then
+    MmpLogAppOperation(FProd.RootDir, FProd.ProductionId, 'MSound', Msg, FCurrentRevId);
 end;
 
 procedure TMsoundMainForm.WriteToneWav(const FilePath: string; FreqHz, DurationMs: Integer);

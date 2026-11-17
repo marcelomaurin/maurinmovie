@@ -54,6 +54,20 @@ type
     FragmentContextSec: Integer;
   end;
 
+  TMmpAccessMode = (amOpen, amRestricted);
+  TMmpUserProfile = (upAdministrador, upUser);
+
+  TMmpAccessUser = record
+    Username: string;
+    Profile: TMmpUserProfile;
+    PasswordSalt: string;
+    PasswordHash: string;
+    Active: Boolean;
+    CreatedAt: string;
+    UpdatedAt: string;
+  end;
+  TMmpAccessUserArray = array of TMmpAccessUser;
+
   TMMSettings = class
   private
     FProductionRoot: string;
@@ -117,9 +131,19 @@ type
     FMonitorIntervalSec: Integer;
     FMinFreeDiskGb: Integer;
 
+    // Access Control (Machine-level, stored in access-control.json)
+    FAccessControlOverridePath: string;
+    FAccessMode: TMmpAccessMode;
+    FAccessUsers: TMmpAccessUserArray;
+
     procedure LoadMachineIni;
+    procedure EnsureDefaultProvidersInMemory;
+    procedure LoadAiAndAppsFromDir(const SetDir: string; ResetIfMissing: Boolean);
+    function SaveAiAndAppsToDir(const SetDir: string; out ErrorMsg: string): Boolean;
     procedure LoadProductionJsonFiles;
     function ComputeCurrentStamp: string;
+    procedure EnsureDefaultAdminUser;
+    function CountActiveAdmins(const SkipUsername: string = ''): Integer;
   public
     constructor Create;
     procedure Load(const ProductionRoot: string; App: TMMApp = maMMenu);
@@ -140,6 +164,7 @@ type
 
     // Exclusive MMenu writers
     function SaveMachineIni: Boolean;
+    function SaveMachineAiSettings(out ErrorMsg: string): Boolean;
     function SaveSecret(const SecretRef, SecretValue: string): Boolean;
     function SaveProductionSettings(out ErrorMsg: string): Boolean;
 
@@ -206,11 +231,33 @@ type
     function GetProvider(Index: Integer): TMmpAiProviderCfg;
     function GetAppConfig(App: TMMApp): TMmpAppSettingsCfg;
     procedure SetAppConfig(App: TMMApp; const Cfg: TMmpAppSettingsCfg);
+
+    // Access Control API
+    property AccessMode: TMmpAccessMode read FAccessMode write FAccessMode;
+    property AccessControlOverridePath: string read FAccessControlOverridePath write FAccessControlOverridePath;
+    function AccessControlFilePath: string;
+    procedure LoadAccessControl(const OverridePath: string = '');
+    function SaveAccessControl(out ErrorMsg: string; const OverridePath: string = ''): Boolean;
+    function GetAccessUsers: TMmpAccessUserArray;
+    function FindAccessUser(const AUsername: string; out Idx: Integer): Boolean;
+    function AuthenticateUser(const AUsername, PlainPassword: string;
+      out MatchedUser: TMmpAccessUser; out ErrorMsg: string): Boolean;
+    function AddOrUpdateAccessUser(const AUsername: string; Profile: TMmpUserProfile;
+      const PlainPassword: string; Active, KeepExistingPasswordIfEmpty: Boolean;
+      out ErrorMsg: string): Boolean;
+    function RemoveAccessUser(const AUsername: string; out ErrorMsg: string): Boolean;
+    function ResetDefaultAdminUser(out ErrorMsg: string): Boolean;
   end;
 
+function MmpAccessModeToStr(Mode: TMmpAccessMode): string;
+function StrToMmpAccessMode(const S: string): TMmpAccessMode;
+function MmpUserProfileToStr(Profile: TMmpUserProfile): string;
+function StrToMmpUserProfile(const S: string): TMmpUserProfile;
+function MmpHashUserPassword(const Salt, PlainPassword: string): string;
 function SafeReadFileUtf8(const FilePath: string; out Content: string): Boolean;
 function SafeWriteFileAtomic(const TargetPath, Content: string; KeepBackup: Boolean = True): Boolean;
 function CurrentUtcIso: string;
+function GetSharedMaurinMovieConfigDir(out LegacyMMenuDir: string): string;
 
 implementation
 
@@ -347,15 +394,37 @@ begin
   Result.SampleRate := 48000;
 end;
 
+function GetSharedMaurinMovieConfigDir(out LegacyMMenuDir: string): string;
+var
+  BaseRoot: string;
+begin
+  BaseRoot := ExtractFileDir(ExcludeTrailingPathDelimiter(GetAppConfigDir(False)));
+  if BaseRoot = '' then
+    BaseRoot := ExcludeTrailingPathDelimiter(GetTempDir(False));
+  Result := IncludeTrailingPathDelimiter(BaseRoot) + 'MaurinMovie' + PathDelim;
+  LegacyMMenuDir := IncludeTrailingPathDelimiter(BaseRoot) + 'mmenu' + PathDelim + 'MaurinMovie' + PathDelim;
+end;
+
+procedure CopyFileIfMissing(const SrcFile, DstFile: string);
+var
+  S: string;
+begin
+  if FileExists(DstFile) or (not FileExists(SrcFile)) then Exit;
+  if SafeReadFileUtf8(SrcFile, S) then
+    SafeWriteFileAtomic(DstFile, S, False);
+end;
+
 constructor TMMSettings.Create;
 var
-  CfgDir: string;
+  CfgDir, LegacyDir: string;
   A: TMMApp;
 begin
   inherited Create;
-  CfgDir := IncludeTrailingPathDelimiter(GetAppConfigDir(False)) + 'MaurinMovie' + PathDelim;
+  CfgDir := GetSharedMaurinMovieConfigDir(LegacyDir);
   FMachineIniPath := CfgDir + 'mmenu.ini';
   FSecretsIniPath := CfgDir + 'secrets.ini';
+  CopyFileIfMissing(LegacyDir + 'mmenu.ini', FMachineIniPath);
+  CopyFileIfMissing(LegacyDir + 'secrets.ini', FSecretsIniPath);
 
   FUserName := GetEnvironmentVariable('USERNAME');
   if FUserName = '' then FUserName := GetEnvironmentVariable('USER');
@@ -402,7 +471,11 @@ begin
     FAppConfigs[A].FragmentContextSec := 5;
   end;
 
+  FAccessMode := amOpen;
+  SetLength(FAccessUsers, 0);
+
   LoadMachineIni;
+  LoadAccessControl;
 end;
 
 procedure TMMSettings.LoadMachineIni;
@@ -446,14 +519,21 @@ begin
   finally
     Ini.Free;
   end;
+  LoadAiAndAppsFromDir(IncludeTrailingPathDelimiter(ExtractFileDir(FMachineIniPath)), True);
+  EnsureDefaultProvidersInMemory;
 end;
 
 function TMMSettings.ComputeCurrentStamp: string;
 var
-  SetDir: string;
+  SetDir, MachDir: string;
   SR: TSearchRec;
 begin
   Result := '';
+  MachDir := IncludeTrailingPathDelimiter(ExtractFileDir(FMachineIniPath));
+  if FileExists(FMachineIniPath) then Result := Result + 'ini:' + IntToStr(FileAge(FMachineIniPath)) + ';';
+  if FileExists(MachDir + 'ai-providers.json') then Result := Result + 'mai:' + IntToStr(FileAge(MachDir + 'ai-providers.json')) + ';';
+  if FileExists(MachDir + 'apps.json') then Result := Result + 'mapps:' + IntToStr(FileAge(MachDir + 'apps.json')) + ';';
+
   if FProductionRoot = '' then Exit;
   SetDir := IncludeTrailingPathDelimiter(FProductionRoot) + 'settings';
   if not DirectoryExists(SetDir) then Exit;
@@ -469,56 +549,36 @@ begin
   end;
 end;
 
-procedure TMMSettings.LoadProductionJsonFiles;
+procedure TMMSettings.EnsureDefaultProvidersInMemory;
 var
-  SetDir, AiStr, AppsStr: string;
+  I: Integer;
+begin
+  if Length(FProviders) > 0 then Exit;
+  SetLength(FProviders, 5);
+  FProviders[0] := DefaultProvider('text.default', 'text', 'Texto (Simulado)', 'mock', 'mock-script-v1');
+  FProviders[1] := DefaultProvider('image.default', 'image', 'Imagem (Simulado)', 'mock', 'mock-image-v1');
+  FProviders[2] := DefaultProvider('voice.default', 'voice', 'Voz (Simulado)', 'mock', 'mock-voice-v1');
+  FProviders[3] := DefaultProvider('sfx.default', 'sfx', 'Efeitos (Simulado)', 'mock', 'mock-sfx-v1');
+  FProviders[4] := DefaultProvider('video.default', 'video', 'Video (Simulado)', 'mock', 'mock-video-v1');
+  SetLength(FDefaultProviders, 5);
+  for I := 0 to 4 do
+  begin
+    FDefaultProviders[I].Kind := FProviders[I].Kind;
+    FDefaultProviders[I].ProviderId := FProviders[I].Id;
+  end;
+end;
+
+procedure TMMSettings.LoadAiAndAppsFromDir(const SetDir: string; ResetIfMissing: Boolean);
+var
   Obj, SubObj, ParamsObj, DefObj: TJSONObject;
   Arr: TJSONArray;
-  I, J, N: Integer;
+  I, J: Integer;
   A: TMMApp;
-  KeyName: string;
 begin
-  FLoadedProductionSettings := False;
-  if FProductionRoot = '' then Exit;
-  SetDir := IncludeTrailingPathDelimiter(FProductionRoot) + 'settings' + PathDelim;
-
-  // settings/production.json
-  if ParseJsonObj(SetDir + 'production.json', Obj) then
-  begin
-    try
-      FProdLanguage := Obj.Get('language', FProdLanguage);
-      FProdFps := Obj.Get('fps', FProdFps);
-      FProdAspect := Obj.Get('aspect', FProdAspect);
-      FProdTargetDurationMs := Obj.Get('target_duration_ms', FProdTargetDurationMs);
-      FProdVisualStyle := Obj.Get('visual_style', FProdVisualStyle);
-      FProdNameBase := Obj.Get('name_base', Obj.Get('title', FProdNameBase));
-      FProdFormat := Obj.Get('format', FProdFormat);
-      FProdRating := Obj.Get('rating', FProdRating);
-      if Obj.Find('frame_size') is TJSONArray then
-      begin
-        Arr := TJSONArray(Obj.Find('frame_size'));
-        if Arr.Count >= 2 then
-        begin
-          FProdWidth := Arr.Integers[0];
-          FProdHeight := Arr.Integers[1];
-        end;
-      end;
-      if Obj.Find('audio') is TJSONObject then
-      begin
-        SubObj := TJSONObject(Obj.Find('audio'));
-        FProdAudioRate := SubObj.Get('sample_rate', 48000);
-        FProdAudioChannels := SubObj.Get('channels', 2);
-      end;
-    finally
-      Obj.Free;
-    end;
-  end;
-
-  // settings/ai-providers.json
-  SetLength(FProviders, 0);
-  SetLength(FDefaultProviders, 0);
   if ParseJsonObj(SetDir + 'ai-providers.json', Obj) then
   begin
+    SetLength(FProviders, 0);
+    SetLength(FDefaultProviders, 0);
     try
       if Obj.Find('providers') is TJSONArray then
       begin
@@ -575,26 +635,13 @@ begin
     finally
       Obj.Free;
     end;
-  end;
-
-  // Ensure default mock providers exist in memory if none present
-  if Length(FProviders) = 0 then
+  end
+  else if ResetIfMissing then
   begin
-    SetLength(FProviders, 5);
-    FProviders[0] := DefaultProvider('text.default', 'text', 'Texto (Simulado)', 'mock', 'mock-script-v1');
-    FProviders[1] := DefaultProvider('image.default', 'image', 'Imagem (Simulado)', 'mock', 'mock-image-v1');
-    FProviders[2] := DefaultProvider('voice.default', 'voice', 'Voz (Simulado)', 'mock', 'mock-voice-v1');
-    FProviders[3] := DefaultProvider('sfx.default', 'sfx', 'Efeitos (Simulado)', 'mock', 'mock-sfx-v1');
-    FProviders[4] := DefaultProvider('video.default', 'video', 'Video (Simulado)', 'mock', 'mock-video-v1');
-    SetLength(FDefaultProviders, 5);
-    for I := 0 to 4 do
-    begin
-      FDefaultProviders[I].Kind := FProviders[I].Kind;
-      FDefaultProviders[I].ProviderId := FProviders[I].Id;
-    end;
+    SetLength(FProviders, 0);
+    SetLength(FDefaultProviders, 0);
   end;
 
-  // settings/apps.json
   if ParseJsonObj(SetDir + 'apps.json', Obj) then
   begin
     try
@@ -631,6 +678,55 @@ begin
       Obj.Free;
     end;
   end;
+end;
+
+procedure TMMSettings.LoadProductionJsonFiles;
+var
+  SetDir, AiStr, AppsStr: string;
+  Obj, SubObj: TJSONObject;
+  Arr: TJSONArray;
+  N: Integer;
+  KeyName: string;
+begin
+  FLoadedProductionSettings := False;
+  if FProductionRoot = '' then Exit;
+  SetDir := IncludeTrailingPathDelimiter(FProductionRoot) + 'settings' + PathDelim;
+
+  // settings/production.json
+  if ParseJsonObj(SetDir + 'production.json', Obj) then
+  begin
+    try
+      FProdLanguage := Obj.Get('language', FProdLanguage);
+      FProdFps := Obj.Get('fps', FProdFps);
+      FProdAspect := Obj.Get('aspect', FProdAspect);
+      FProdTargetDurationMs := Obj.Get('target_duration_ms', FProdTargetDurationMs);
+      FProdVisualStyle := Obj.Get('visual_style', FProdVisualStyle);
+      FProdNameBase := Obj.Get('name_base', Obj.Get('title', FProdNameBase));
+      FProdFormat := Obj.Get('format', FProdFormat);
+      FProdRating := Obj.Get('rating', FProdRating);
+      if Obj.Find('frame_size') is TJSONArray then
+      begin
+        Arr := TJSONArray(Obj.Find('frame_size'));
+        if Arr.Count >= 2 then
+        begin
+          FProdWidth := Arr.Integers[0];
+          FProdHeight := Arr.Integers[1];
+        end;
+      end;
+      if Obj.Find('audio') is TJSONObject then
+      begin
+        SubObj := TJSONObject(Obj.Find('audio'));
+        FProdAudioRate := SubObj.Get('sample_rate', 48000);
+        FProdAudioChannels := SubObj.Get('channels', 2);
+      end;
+    finally
+      Obj.Free;
+    end;
+  end;
+
+  // Overlay production-specific ai-providers.json & apps.json onto machine defaults
+  LoadAiAndAppsFromDir(SetDir, False);
+  EnsureDefaultProvidersInMemory;
 
   // settings/policies.json
   if ParseJsonObj(SetDir + 'policies.json', Obj) then
@@ -662,6 +758,7 @@ procedure TMMSettings.Load(const ProductionRoot: string; App: TMMApp);
 begin
   FProductionRoot := ExcludeTrailingPathDelimiter(ProductionRoot);
   LoadMachineIni;
+  LoadAccessControl;
   LoadProductionJsonFiles;
 end;
 
@@ -673,9 +770,12 @@ begin
   NewStamp := ComputeCurrentStamp;
   if NewStamp <> FUpdatedAtStamp then
   begin
+    LoadMachineIni;
     LoadProductionJsonFiles;
+    FUpdatedAtStamp := ComputeCurrentStamp;
     Result := True;
   end;
+  if App <> maMMenu then;
 end;
 
 function TMMSettings.FindProviderById(const Id: string; out Prov: TMmpAiProviderCfg): Boolean;
@@ -801,6 +901,7 @@ end;
 function TMMSettings.ResolveSecret(const SecretRef: string): string;
 var
   Ini: TIniFile;
+  DummyCfg, LegacyDir, LegacySecrets: string;
 begin
   Result := '';
   if Trim(SecretRef) = '' then Exit;
@@ -813,6 +914,21 @@ begin
       Result := Ini.ReadString('Secrets', SecretRef, '');
     finally
       Ini.Free;
+    end;
+  end;
+  if Result = '' then
+  begin
+    DummyCfg := GetSharedMaurinMovieConfigDir(LegacyDir);
+    if DummyCfg <> '' then;
+    LegacySecrets := LegacyDir + 'secrets.ini';
+    if FileExists(LegacySecrets) then
+    begin
+      Ini := TIniFile.Create(LegacySecrets);
+      try
+        Result := Ini.ReadString('Secrets', SecretRef, '');
+      finally
+        Ini.Free;
+      end;
     end;
   end;
 end;
@@ -995,22 +1111,16 @@ begin
   end;
 end;
 
-function TMMSettings.SaveProductionSettings(out ErrorMsg: string): Boolean;
+function TMMSettings.SaveAiAndAppsToDir(const SetDir: string; out ErrorMsg: string): Boolean;
 var
-  SetDir, NowIso: string;
+  NowIso: string;
   Root, Sub, ParamsObj, DefObj: TJSONObject;
-  Arr, FSize: TJSONArray;
+  Arr: TJSONArray;
   I, J: Integer;
   A: TMMApp;
 begin
   Result := False;
   ErrorMsg := '';
-  if FProductionRoot = '' then
-  begin
-    ErrorMsg := 'Nenhuma producao ativa para salvar configuracoes de producao.';
-    Exit;
-  end;
-  SetDir := IncludeTrailingPathDelimiter(FProductionRoot) + 'settings' + PathDelim;
   ForceDirectories(SetDir);
   NowIso := CurrentUtcIso;
 
@@ -1029,35 +1139,7 @@ begin
     end;
   end;
 
-  // 1. settings/production.json
-  Root := TJSONObject.Create;
-  try
-    Root.Add('schema', 'mmp.production-settings/1');
-    Root.Add('updated_at', NowIso);
-    Root.Add('language', FProdLanguage);
-    Root.Add('fps', FProdFps);
-    FSize := TJSONArray.Create; FSize.Add(FProdWidth); FSize.Add(FProdHeight);
-    Root.Add('frame_size', FSize);
-    Root.Add('aspect', FProdAspect);
-    Sub := TJSONObject.Create;
-    Sub.Add('sample_rate', FProdAudioRate);
-    Sub.Add('channels', FProdAudioChannels);
-    Root.Add('audio', Sub);
-    Root.Add('target_duration_ms', FProdTargetDurationMs);
-    Root.Add('visual_style', FProdVisualStyle);
-    Root.Add('name_base', FProdNameBase);
-    Root.Add('format', FProdFormat);
-    Root.Add('rating', FProdRating);
-    if not SafeWriteFileAtomic(SetDir + 'production.json', Root.FormatJSON, True) then
-    begin
-      ErrorMsg := 'Falha ao gravar settings/production.json.';
-      Exit;
-    end;
-  finally
-    Root.Free;
-  end;
-
-  // 2. settings/ai-providers.json
+  // ai-providers.json
   Root := TJSONObject.Create;
   try
     Root.Add('schema', 'mmp.ai-providers/1');
@@ -1100,14 +1182,14 @@ begin
     Root.Add('defaults', DefObj);
     if not SafeWriteFileAtomic(SetDir + 'ai-providers.json', Root.FormatJSON, True) then
     begin
-      ErrorMsg := 'Falha ao gravar settings/ai-providers.json.';
+      ErrorMsg := 'Falha ao gravar ' + SetDir + 'ai-providers.json.';
       Exit;
     end;
   finally
     Root.Free;
   end;
 
-  // 3. settings/apps.json
+  // apps.json
   Root := TJSONObject.Create;
   try
     Root.Add('schema', 'mmp.apps-settings/1');
@@ -1134,12 +1216,71 @@ begin
     end;
     if not SafeWriteFileAtomic(SetDir + 'apps.json', Root.FormatJSON, True) then
     begin
-      ErrorMsg := 'Falha ao gravar settings/apps.json.';
+      ErrorMsg := 'Falha ao gravar ' + SetDir + 'apps.json.';
       Exit;
     end;
   finally
     Root.Free;
   end;
+
+  Result := True;
+end;
+
+function TMMSettings.SaveMachineAiSettings(out ErrorMsg: string): Boolean;
+begin
+  Result := SaveAiAndAppsToDir(
+    IncludeTrailingPathDelimiter(ExtractFileDir(FMachineIniPath)), ErrorMsg);
+  if Result then
+    FUpdatedAtStamp := ComputeCurrentStamp;
+end;
+
+function TMMSettings.SaveProductionSettings(out ErrorMsg: string): Boolean;
+var
+  SetDir, NowIso: string;
+  Root, Sub: TJSONObject;
+  FSize: TJSONArray;
+begin
+  Result := False;
+  ErrorMsg := '';
+  if FProductionRoot = '' then
+  begin
+    ErrorMsg := 'Nenhuma producao ativa para salvar configuracoes de producao.';
+    Exit;
+  end;
+  SetDir := IncludeTrailingPathDelimiter(FProductionRoot) + 'settings' + PathDelim;
+  ForceDirectories(SetDir);
+  NowIso := CurrentUtcIso;
+
+  // 1. settings/production.json
+  Root := TJSONObject.Create;
+  try
+    Root.Add('schema', 'mmp.production-settings/1');
+    Root.Add('updated_at', NowIso);
+    Root.Add('language', FProdLanguage);
+    Root.Add('fps', FProdFps);
+    FSize := TJSONArray.Create; FSize.Add(FProdWidth); FSize.Add(FProdHeight);
+    Root.Add('frame_size', FSize);
+    Root.Add('aspect', FProdAspect);
+    Sub := TJSONObject.Create;
+    Sub.Add('sample_rate', FProdAudioRate);
+    Sub.Add('channels', FProdAudioChannels);
+    Root.Add('audio', Sub);
+    Root.Add('target_duration_ms', FProdTargetDurationMs);
+    Root.Add('visual_style', FProdVisualStyle);
+    Root.Add('name_base', FProdNameBase);
+    Root.Add('format', FProdFormat);
+    Root.Add('rating', FProdRating);
+    if not SafeWriteFileAtomic(SetDir + 'production.json', Root.FormatJSON, True) then
+    begin
+      ErrorMsg := 'Falha ao gravar settings/production.json.';
+      Exit;
+    end;
+  finally
+    Root.Free;
+  end;
+
+  // 2 & 3. settings/ai-providers.json & settings/apps.json
+  if not SaveAiAndAppsToDir(SetDir, ErrorMsg) then Exit;
 
   // 4. settings/policies.json
   Root := TJSONObject.Create;
@@ -1184,31 +1325,43 @@ begin
     if Trim(S.FProdNameBase) = '' then S.FProdNameBase := Title;
     if Trim(Language) <> '' then S.FProdLanguage := Language;
 
-    SetLength(S.FProviders, 5);
-    S.FProviders[0] := DefaultProvider('text.default', 'text', 'Texto (Simulado)', 'mock', 'mock-script-v1');
-    S.FProviders[1] := DefaultProvider('image.default', 'image', 'Imagem (Simulado)', 'mock', 'mock-image-v1');
-    S.FProviders[2] := DefaultProvider('voice.default', 'voice', 'Parakeet TTS (Runtime CPU)', 'parakeet', 'parakeet');
-    S.FProviders[2].BaseUrl := 'local://parakeet';
-    S.FProviders[3] := DefaultProvider('sfx.default', 'sfx', 'Efeitos (Simulado)', 'mock', 'mock-sfx-v1');
-    S.FProviders[4] := DefaultProvider('video.default', 'video', 'Video (Simulado)', 'mock', 'mock-video-v1');
+    // Preserve configured machine AI providers if saved; seed defaults only if absent
+    if not FileExists(IncludeTrailingPathDelimiter(ExtractFileDir(S.FMachineIniPath)) + 'ai-providers.json') then
+    begin
+      SetLength(S.FProviders, 5);
+      S.FProviders[0] := DefaultProvider('text.default', 'text', 'Texto (Simulado)', 'mock', 'mock-script-v1');
+      S.FProviders[1] := DefaultProvider('image.default', 'image', 'Imagem (Simulado)', 'mock', 'mock-image-v1');
+      S.FProviders[2] := DefaultProvider('voice.default', 'voice', 'Parakeet TTS (Runtime CPU)', 'parakeet', 'parakeet');
+      S.FProviders[2].BaseUrl := 'local://parakeet';
+      S.FProviders[3] := DefaultProvider('sfx.default', 'sfx', 'Efeitos (Simulado)', 'mock', 'mock-sfx-v1');
+      S.FProviders[4] := DefaultProvider('video.default', 'video', 'Video (Simulado)', 'mock', 'mock-video-v1');
 
-    SetLength(S.FDefaultProviders, 5);
-    S.FDefaultProviders[0].Kind := 'text';  S.FDefaultProviders[0].ProviderId := 'text.default';
-    S.FDefaultProviders[1].Kind := 'image'; S.FDefaultProviders[1].ProviderId := 'image.default';
-    S.FDefaultProviders[2].Kind := 'voice'; S.FDefaultProviders[2].ProviderId := 'voice.default';
-    S.FDefaultProviders[3].Kind := 'sfx';   S.FDefaultProviders[3].ProviderId := 'sfx.default';
-    S.FDefaultProviders[4].Kind := 'video'; S.FDefaultProviders[4].ProviderId := 'video.default';
+      SetLength(S.FDefaultProviders, 5);
+      S.FDefaultProviders[0].Kind := 'text';  S.FDefaultProviders[0].ProviderId := 'text.default';
+      S.FDefaultProviders[1].Kind := 'image'; S.FDefaultProviders[1].ProviderId := 'image.default';
+      S.FDefaultProviders[2].Kind := 'voice'; S.FDefaultProviders[2].ProviderId := 'voice.default';
+      S.FDefaultProviders[3].Kind := 'sfx';   S.FDefaultProviders[3].ProviderId := 'sfx.default';
+      S.FDefaultProviders[4].Kind := 'video'; S.FDefaultProviders[4].ProviderId := 'video.default';
 
-    S.SetAppProvider(maMScript, 'text', 'text.default');
-    S.SetAppProvider(maMVisual, 'text', 'text.default');
-    S.SetAppProvider(maMVisual, 'image', 'image.default');
-    S.SetAppProvider(maMBoard, 'text', 'text.default');
-    S.SetAppProvider(maMBoard, 'image', 'image.default');
-    S.SetAppProvider(maMSound, 'text', 'text.default');
-    S.SetAppProvider(maMSound, 'voice', 'voice.default');
-    S.SetAppProvider(maMSound, 'sfx', 'sfx.default');
-    S.SetAppProvider(maMScene, 'video', 'video.default');
-    S.SetAppProvider(maMCut, 'text', 'text.default');
+      S.SetAppProvider(maMScript, 'text', 'text.default');
+      S.SetAppProvider(maMVisual, 'text', 'text.default');
+      S.SetAppProvider(maMVisual, 'image', 'image.default');
+      S.SetAppProvider(maMBoard, 'text', 'text.default');
+      S.SetAppProvider(maMBoard, 'image', 'image.default');
+      S.SetAppProvider(maMSound, 'text', 'text.default');
+      S.SetAppProvider(maMSound, 'voice', 'voice.default');
+      S.SetAppProvider(maMSound, 'sfx', 'sfx.default');
+      S.SetAppProvider(maMScene, 'video', 'video.default');
+      S.SetAppProvider(maMCut, 'text', 'text.default');
+    end
+    else if Length(S.GetAppConfig(maMScript).Providers) = 0 then
+    begin
+      S.SetAppProvider(maMScript, 'text', S.GetDefaultProviderId('text'));
+      S.SetAppProvider(maMVisual, 'image', S.GetDefaultProviderId('image'));
+      S.SetAppProvider(maMSound, 'voice', S.GetDefaultProviderId('voice'));
+      S.SetAppProvider(maMSound, 'sfx', S.GetDefaultProviderId('sfx'));
+      S.SetAppProvider(maMScene, 'video', S.GetDefaultProviderId('video'));
+    end;
 
     Result := S.SaveProductionSettings(ErrorMsg);
     if not Result then Exit;
@@ -1283,6 +1436,353 @@ end;
 procedure TMMSettings.SetAppConfig(App: TMMApp; const Cfg: TMmpAppSettingsCfg);
 begin
   FAppConfigs[App] := Cfg;
+end;
+
+function MmpAccessModeToStr(Mode: TMmpAccessMode): string;
+begin
+  if Mode = amRestricted then Result := 'restrito'
+  else Result := 'aberto';
+end;
+
+function StrToMmpAccessMode(const S: string): TMmpAccessMode;
+begin
+  if SameText(Trim(S), 'restrito') or SameText(Trim(S), 'restricted') then
+    Result := amRestricted
+  else
+    Result := amOpen;
+end;
+
+function MmpUserProfileToStr(Profile: TMmpUserProfile): string;
+begin
+  if Profile = upAdministrador then Result := 'Administrador'
+  else Result := 'User';
+end;
+
+function StrToMmpUserProfile(const S: string): TMmpUserProfile;
+begin
+  if SameText(Trim(S), 'Administrador') or SameText(Trim(S), 'admin') then
+    Result := upAdministrador
+  else
+    Result := upUser;
+end;
+
+function MmpHashUserPassword(const Salt, PlainPassword: string): string;
+begin
+  Result := SHA256String(Salt + ':' + PlainPassword);
+end;
+
+function GenerateAccessSalt: string;
+begin
+  Result := SHA256String(
+    FormatDateTime('yyyymmddhhnnsszzz', Now) + '_' +
+    IntToStr(GetTickCount64) + '_' + IntToStr(Random(1000000)));
+  Result := Copy(Result, 1, 16);
+end;
+
+function TMMSettings.AccessControlFilePath: string;
+begin
+  if Trim(FAccessControlOverridePath) <> '' then
+    Result := FAccessControlOverridePath
+  else
+    Result := IncludeTrailingPathDelimiter(ExtractFileDir(FMachineIniPath)) + 'access-control.json';
+end;
+
+function TMMSettings.CountActiveAdmins(const SkipUsername: string): Integer;
+var
+  I: Integer;
+begin
+  Result := 0;
+  for I := 0 to High(FAccessUsers) do
+  begin
+    if SameText(FAccessUsers[I].Username, SkipUsername) then Continue;
+    if (FAccessUsers[I].Profile = upAdministrador) and FAccessUsers[I].Active then
+      Inc(Result);
+  end;
+end;
+
+procedure TMMSettings.EnsureDefaultAdminUser;
+var
+  I: Integer;
+  NowIso: string;
+begin
+  for I := 0 to High(FAccessUsers) do
+    if (FAccessUsers[I].Profile = upAdministrador) and FAccessUsers[I].Active then
+      Exit;
+
+  // Sem Administrador ativo: garante perfil padrao ADMIN / 123456 (nenhum User padrao e criado)
+  if FindAccessUser('ADMIN', I) then
+  begin
+    FAccessUsers[I].Profile := upAdministrador;
+    FAccessUsers[I].Active := True;
+    if FAccessUsers[I].PasswordHash = '' then
+    begin
+      FAccessUsers[I].PasswordSalt := GenerateAccessSalt;
+      FAccessUsers[I].PasswordHash := MmpHashUserPassword(FAccessUsers[I].PasswordSalt, '123456');
+    end;
+    FAccessUsers[I].UpdatedAt := CurrentUtcIso;
+    Exit;
+  end;
+
+  NowIso := CurrentUtcIso;
+  I := Length(FAccessUsers);
+  SetLength(FAccessUsers, I + 1);
+  FAccessUsers[I].Username := 'ADMIN';
+  FAccessUsers[I].Profile := upAdministrador;
+  FAccessUsers[I].PasswordSalt := GenerateAccessSalt;
+  FAccessUsers[I].PasswordHash := MmpHashUserPassword(FAccessUsers[I].PasswordSalt, '123456');
+  FAccessUsers[I].Active := True;
+  FAccessUsers[I].CreatedAt := NowIso;
+  FAccessUsers[I].UpdatedAt := NowIso;
+end;
+
+procedure TMMSettings.LoadAccessControl(const OverridePath: string);
+var
+  TargetPath, Content: string;
+  Data: TJSONData;
+  Obj, UObj: TJSONObject;
+  Arr: TJSONArray;
+  I: Integer;
+begin
+  if Trim(OverridePath) <> '' then
+    FAccessControlOverridePath := OverridePath;
+  TargetPath := AccessControlFilePath;
+
+  FAccessMode := amOpen;
+  SetLength(FAccessUsers, 0);
+
+  if FileExists(TargetPath) and SafeReadFileUtf8(TargetPath, Content) and (Trim(Content) <> '') then
+  begin
+    try
+      Data := GetJSON(Content);
+      if Data is TJSONObject then
+      begin
+        Obj := TJSONObject(Data);
+        try
+          FAccessMode := StrToMmpAccessMode(Obj.Get('mode', 'aberto'));
+          if Obj.Find('users') is TJSONArray then
+          begin
+            Arr := TJSONArray(Obj.Find('users'));
+            SetLength(FAccessUsers, Arr.Count);
+            for I := 0 to Arr.Count - 1 do
+            begin
+              if Arr.Items[I] is TJSONObject then
+              begin
+                UObj := TJSONObject(Arr.Items[I]);
+                FAccessUsers[I].Username := Trim(UObj.Get('username', ''));
+                FAccessUsers[I].Profile := StrToMmpUserProfile(UObj.Get('profile', 'User'));
+                FAccessUsers[I].PasswordSalt := UObj.Get('salt', '');
+                FAccessUsers[I].PasswordHash := UObj.Get('password_hash', '');
+                FAccessUsers[I].Active := UObj.Get('active', True);
+                FAccessUsers[I].CreatedAt := UObj.Get('created_at', '');
+                FAccessUsers[I].UpdatedAt := UObj.Get('updated_at', '');
+              end;
+            end;
+          end;
+        finally
+          Obj.Free;
+        end;
+      end
+      else
+        Data.Free;
+    except
+      FAccessMode := amOpen;
+      SetLength(FAccessUsers, 0);
+    end;
+  end;
+
+  EnsureDefaultAdminUser;
+end;
+
+function TMMSettings.SaveAccessControl(out ErrorMsg: string; const OverridePath: string): Boolean;
+var
+  TargetPath: string;
+  Root, UObj: TJSONObject;
+  Arr: TJSONArray;
+  I: Integer;
+begin
+  Result := False;
+  ErrorMsg := '';
+  if Trim(OverridePath) <> '' then
+    FAccessControlOverridePath := OverridePath;
+  TargetPath := AccessControlFilePath;
+
+  EnsureDefaultAdminUser;
+  Root := TJSONObject.Create;
+  try
+    Root.Add('schema', 'mmp.access/1');
+    Root.Add('mode', MmpAccessModeToStr(FAccessMode));
+    Root.Add('updated_at', CurrentUtcIso);
+    Arr := TJSONArray.Create;
+    for I := 0 to High(FAccessUsers) do
+    begin
+      if Trim(FAccessUsers[I].Username) = '' then Continue;
+      UObj := TJSONObject.Create;
+      UObj.Add('username', FAccessUsers[I].Username);
+      UObj.Add('profile', MmpUserProfileToStr(FAccessUsers[I].Profile));
+      UObj.Add('salt', FAccessUsers[I].PasswordSalt);
+      UObj.Add('password_hash', FAccessUsers[I].PasswordHash);
+      UObj.Add('active', FAccessUsers[I].Active);
+      UObj.Add('created_at', FAccessUsers[I].CreatedAt);
+      UObj.Add('updated_at', FAccessUsers[I].UpdatedAt);
+      Arr.Add(UObj);
+    end;
+    Root.Add('users', Arr);
+    Result := SafeWriteFileAtomic(TargetPath, Root.FormatJSON, True);
+    if not Result then
+      ErrorMsg := 'Falha ao gravar ' + TargetPath;
+  finally
+    Root.Free;
+  end;
+end;
+
+function TMMSettings.GetAccessUsers: TMmpAccessUserArray;
+var
+  I: Integer;
+begin
+  SetLength(Result, Length(FAccessUsers));
+  for I := 0 to High(FAccessUsers) do
+    Result[I] := FAccessUsers[I];
+end;
+
+function TMMSettings.FindAccessUser(const AUsername: string; out Idx: Integer): Boolean;
+var
+  I: Integer;
+  Target: string;
+begin
+  Result := False;
+  Idx := -1;
+  Target := Trim(AUsername);
+  if Target = '' then Exit;
+  for I := 0 to High(FAccessUsers) do
+  begin
+    if SameText(FAccessUsers[I].Username, Target) then
+    begin
+      Idx := I;
+      Exit(True);
+    end;
+  end;
+end;
+
+function TMMSettings.AuthenticateUser(const AUsername, PlainPassword: string;
+  out MatchedUser: TMmpAccessUser; out ErrorMsg: string): Boolean;
+var
+  Idx: Integer;
+  CandidateHash: string;
+begin
+  Result := False;
+  ErrorMsg := '';
+  FillChar(MatchedUser, SizeOf(MatchedUser), 0);
+
+  if not FindAccessUser(AUsername, Idx) then
+  begin
+    ErrorMsg := 'Usuario ou senha invalidos.';
+    Exit;
+  end;
+  if not FAccessUsers[Idx].Active then
+  begin
+    ErrorMsg := 'Usuario inativo. Contate o Administrador.';
+    Exit;
+  end;
+
+  CandidateHash := MmpHashUserPassword(FAccessUsers[Idx].PasswordSalt, PlainPassword);
+  if not SameText(CandidateHash, FAccessUsers[Idx].PasswordHash) then
+  begin
+    ErrorMsg := 'Usuario ou senha invalidos.';
+    Exit;
+  end;
+
+  MatchedUser := FAccessUsers[Idx];
+  Result := True;
+end;
+
+function TMMSettings.AddOrUpdateAccessUser(const AUsername: string;
+  Profile: TMmpUserProfile; const PlainPassword: string;
+  Active, KeepExistingPasswordIfEmpty: Boolean; out ErrorMsg: string): Boolean;
+var
+  CleanUser, NowIso: string;
+  Idx, N: Integer;
+begin
+  Result := False;
+  ErrorMsg := '';
+  CleanUser := Trim(AUsername);
+  if CleanUser = '' then
+  begin
+    ErrorMsg := 'Informe um nome de usuario valido.';
+    Exit;
+  end;
+
+  NowIso := CurrentUtcIso;
+  if FindAccessUser(CleanUser, Idx) then
+  begin
+    if ((Profile <> upAdministrador) or (not Active)) and
+       (FAccessUsers[Idx].Profile = upAdministrador) and
+       (CountActiveAdmins(FAccessUsers[Idx].Username) = 0) then
+    begin
+      ErrorMsg := 'Deve permanecer pelo menos um usuario Administrador ativo.';
+      Exit;
+    end;
+    if (PlainPassword = '') and (not KeepExistingPasswordIfEmpty) then
+    begin
+      ErrorMsg := 'Informe uma senha para o usuario.';
+      Exit;
+    end;
+    FAccessUsers[Idx].Username := CleanUser;
+    FAccessUsers[Idx].Profile := Profile;
+    FAccessUsers[Idx].Active := Active;
+    if PlainPassword <> '' then
+    begin
+      FAccessUsers[Idx].PasswordSalt := GenerateAccessSalt;
+      FAccessUsers[Idx].PasswordHash := MmpHashUserPassword(FAccessUsers[Idx].PasswordSalt, PlainPassword);
+    end;
+    FAccessUsers[Idx].UpdatedAt := NowIso;
+    Result := SaveAccessControl(ErrorMsg);
+  end
+  else
+  begin
+    if PlainPassword = '' then
+    begin
+      ErrorMsg := 'Informe uma senha inicial para o novo usuario.';
+      Exit;
+    end;
+    N := Length(FAccessUsers);
+    SetLength(FAccessUsers, N + 1);
+    FAccessUsers[N].Username := CleanUser;
+    FAccessUsers[N].Profile := Profile;
+    FAccessUsers[N].PasswordSalt := GenerateAccessSalt;
+    FAccessUsers[N].PasswordHash := MmpHashUserPassword(FAccessUsers[N].PasswordSalt, PlainPassword);
+    FAccessUsers[N].Active := Active;
+    FAccessUsers[N].CreatedAt := NowIso;
+    FAccessUsers[N].UpdatedAt := NowIso;
+    Result := SaveAccessControl(ErrorMsg);
+  end;
+end;
+
+function TMMSettings.RemoveAccessUser(const AUsername: string; out ErrorMsg: string): Boolean;
+var
+  Idx, I: Integer;
+begin
+  Result := False;
+  ErrorMsg := '';
+  if not FindAccessUser(AUsername, Idx) then
+  begin
+    ErrorMsg := 'Usuario nao encontrado.';
+    Exit;
+  end;
+  if (FAccessUsers[Idx].Profile = upAdministrador) and FAccessUsers[Idx].Active and
+     (CountActiveAdmins(FAccessUsers[Idx].Username) = 0) then
+  begin
+    ErrorMsg := 'Nao e possivel remover o ultimo Administrador ativo.';
+    Exit;
+  end;
+  for I := Idx to High(FAccessUsers) - 1 do
+    FAccessUsers[I] := FAccessUsers[I + 1];
+  SetLength(FAccessUsers, Length(FAccessUsers) - 1);
+  Result := SaveAccessControl(ErrorMsg);
+end;
+
+function TMMSettings.ResetDefaultAdminUser(out ErrorMsg: string): Boolean;
+begin
+  Result := AddOrUpdateAccessUser('ADMIN', upAdministrador, '123456', True, False, ErrorMsg);
 end;
 
 end.

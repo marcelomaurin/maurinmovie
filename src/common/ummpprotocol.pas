@@ -6,7 +6,7 @@ interface
 
 uses
   Classes, SysUtils, DateUtils, fpjson, jsonparser,
-  mmpcommon, mmpsettings, ummpsha256;
+  mmpcommon, mmpsettings, ummpsha256, ummpdb;
 
 const
   MMP_EXECUTABLE_VERSION = MAURINMOVIE_VERSION;
@@ -125,6 +125,7 @@ type
   TMmpProduction = record
     RootDir: string;
     ProductionJsonPath: string;
+    DbPath: string;
     Schema: string;
     ProductionId: string;
     Title: string;
@@ -177,6 +178,35 @@ function FindProductionByIdInDir(const SearchDir, ExpectedProductionId: string;
 
 procedure BuildLaunchArgs(const RootDir, ProjectId, RevisionId: string;
   Args: TStrings; const ProductionId: string = '');
+
+type
+  TMmpStageStatus = record
+    AppIndex: Integer;
+    HasActivity: Boolean;
+    CanOpen: Boolean;
+    NeedsAdjustment: Boolean;
+    ActiveRevision: string;
+    StatusText: string;
+    MissingPrereqs: string;
+    StaleReason: string;
+  end;
+
+  TMmpHistoryEntry = record
+    Timestamp: string;
+    AppName: string;
+    Kind: string; // 'Revisao', 'Log', 'Sincronizacao'
+    RevisionId: string;
+    State: string;
+    Summary: string;
+    Details: string;
+  end;
+
+  TMmpHistoryEntryArray = array of TMmpHistoryEntry;
+
+function MmpProjectHasActivity(const Proj: TMmpProjectRef): Boolean;
+function MmpEvaluateStageStatus(const Prod: TMmpProduction; AppIdx: Integer): TMmpStageStatus;
+function MmpLoadProductionHistory(const Prod: TMmpProduction): TMmpHistoryEntryArray;
+procedure MmpSyncProductionToSqlite(const Prod: TMmpProduction);
 
 implementation
 
@@ -411,12 +441,14 @@ end;
 function CreateProduction(const ParentDir, Title: string;
   out CreatedRoot, ErrorMsg: string): Boolean;
 var
-  ProdId, Slug, NowIso, FolderPath, AppDir, RevDir: string;
+  ProdId, Slug, NowIso, FolderPath, AppDir, RevDir, FoundRootDir: string;
   ProjectIds: array[0..6] of string;
   I: Integer;
   ProdJson, ActiveObj, AppEntry, ProjJson, ManifestJson, CatalogJson: TJSONObject;
   SettingsProd, RevHist, EmptyArr: TJSONArray;
   SettingsObj: TJSONObject;
+  DbProjRow: TMmpDbProjectRow;
+  DbRevRow: TMmpDbRevisionRow;
 begin
   Result := False;
   CreatedRoot := '';
@@ -620,6 +652,47 @@ begin
   finally
     CatalogJson.Free;
   end;
+
+  // SQLite: copiar banco zerado template (maurinmovie_empty.db -> maurinmovie.db) e popular registros iniciais
+  MmpEnsureProductionMediaDirs(FolderPath);
+  if not MmpInitProductionDbFromTemplate(FolderPath, '', FoundRootDir, ErrorMsg) then
+    Exit;
+  if not MmpDbUpsertProduction(FolderPath, ProdId, Trim(Title), Slug, Trim(Title),
+    'pt-BR', 'initialized', NowIso, NowIso, '', ErrorMsg) then
+    Exit;
+
+  for I := 0 to 6 do
+  begin
+    FillChar(DbProjRow, SizeOf(DbProjRow), 0);
+    DbProjRow.ProjectId := ProjectIds[I];
+    DbProjRow.ProductionId := ProdId;
+    DbProjRow.SoftwareIndex := I;
+    DbProjRow.AppName := MmpAppNames[I];
+    DbProjRow.SceneId := '';
+    DbProjRow.NameBase := Trim(Title);
+    DbProjRow.ActiveRevision := 'r0001';
+    DbProjRow.Status := 'initialized';
+    DbProjRow.CreatedAt := NowIso;
+    DbProjRow.UpdatedAt := NowIso;
+    DbProjRow.ProjectFilePath := 'projects/' + MmpAppFolders[I] + '/project.json';
+    if not MmpDbUpsertProject(FolderPath, DbProjRow, ErrorMsg) then Exit;
+
+    FillChar(DbRevRow, SizeOf(DbRevRow), 0);
+    DbRevRow.ProjectId := ProjectIds[I];
+    DbRevRow.RevisionId := 'r0001';
+    DbRevRow.ParentRevisionId := '';
+    DbRevRow.State := 'draft';
+    DbRevRow.RevLabel := FormatRevisionLabel(Trim(Title), AppIndexToEnum(I), 'r0001');
+    DbRevRow.ManifestPath := 'projects/' + MmpAppFolders[I] + '/revisions/r0001/manifest.json';
+    DbRevRow.ManifestSha256 := '';
+    DbRevRow.CreatedAt := NowIso;
+    if not MmpDbUpsertRevision(FolderPath, ProdId, DbRevRow, ErrorMsg) then Exit;
+  end;
+
+  MmpDbAddCentralLog(MmpProductionDbPath(FolderPath), ProdId, 'info', 'MMenu', '',
+    'create_production', 'r0001',
+    'Producao criada com banco SQLite inicializado a partir do template zerado: ' + Trim(Title),
+    'Pasta: ' + FolderPath + LineEnding + 'Banco: ' + MmpProductionDbPath(FolderPath));
 
   CreatedRoot := FolderPath;
   Result := True;
@@ -1137,8 +1210,39 @@ begin
   // Audit manifest sources[] against loaded projects/revisions
   for I := 0 to High(Prod.Projects) do
   begin
+    if Prod.Projects[I].ExistsOnDisk and
+       (SameText(Prod.Projects[I].Status, 'erro_json') or
+        ((Prod.Projects[I].Schema <> '') and (Prod.Projects[I].Schema <> MMP_PROJECT_SCHEMA))) then
+    begin
+      FillChar(Link, SizeOf(Link), 0);
+      Link.Kind := 'project';
+      Link.AppName := Prod.Projects[I].AppName;
+      Link.ProjectId := Prod.Projects[I].ProjectId;
+      Link.ExpectedPath := Prod.Projects[I].ProjectFilePath;
+      Link.Status := 'invalid_json';
+      Link.Detail := Prod.Projects[I].IntegrityMessage;
+      AddMissingLink(Prod, Link);
+    end;
+
     for J := 0 to High(Prod.Projects[I].Revisions) do
     begin
+      if (not Prod.Projects[I].Revisions[J].HasManifest) or
+         SameText(Prod.Projects[I].Revisions[J].State, 'manifest_invalido') then
+      begin
+        FillChar(Link, SizeOf(Link), 0);
+        Link.Kind := 'manifest';
+        Link.AppName := Prod.Projects[I].AppName;
+        Link.ProjectId := Prod.Projects[I].ProjectId;
+        Link.RevisionId := Prod.Projects[I].Revisions[J].RevisionId;
+        Link.ExpectedPath := Prod.Projects[I].Revisions[J].ManifestPath;
+        Link.Status := 'invalid_manifest';
+        if not Prod.Projects[I].Revisions[J].HasManifest then
+          Link.Detail := 'manifest.json ausente na revisao ' + Prod.Projects[I].Revisions[J].RevisionId
+        else
+          Link.Detail := 'manifest.json corrompido na revisao ' + Prod.Projects[I].Revisions[J].RevisionId;
+        AddMissingLink(Prod, Link);
+      end;
+
       for K := 0 to High(Prod.Projects[I].Revisions[J].Sources) do
       begin
         FoundSource := False;
@@ -1337,6 +1441,11 @@ begin
     RootDir := ExcludeTrailingPathDelimiter(ExpandFileName(RootOrJsonPath));
     JsonPath := RootDir + PathDelim + 'production.json';
   end
+  else if SameText(ExtractFileName(RootOrJsonPath), MMP_DB_FILENAME) then
+  begin
+    RootDir := ExtractFileDir(ExpandFileName(RootOrJsonPath));
+    JsonPath := RootDir + PathDelim + 'production.json';
+  end
   else
   begin
     JsonPath := ExpandFileName(RootOrJsonPath);
@@ -1345,6 +1454,7 @@ begin
 
   Prod.RootDir := RootDir;
   Prod.ProductionJsonPath := JsonPath;
+  Prod.DbPath := MmpProductionDbPath(RootDir);
 
   if not FileExists(JsonPath) then
   begin
@@ -1367,6 +1477,15 @@ begin
     Prod.CreatedAt := ProdObj.Get('created_at', '');
     if Prod.Title = '' then
       Prod.Title := ExtractFileName(RootDir);
+
+    if (Prod.ProductionId = '') or
+       ((Prod.Schema <> '') and (Prod.Schema <> MMP_PRODUCTION_SCHEMA)) then
+    begin
+      Prod.ErrorMessage := 'production.json invalido: schema "' + Prod.Schema +
+        '" ou production_id ausente.';
+      Prod.OverallStatusText := 'Producao corrompida/invalida';
+      Exit;
+    end;
 
     for I := 0 to 6 do
       ExpectedIds[I] := '';
@@ -1500,7 +1619,9 @@ begin
   begin
     if (Prod.MissingLinks[I].Status = 'missing') or
        (Prod.MissingLinks[I].Status = 'hash_mismatch') or
-       (Prod.MissingLinks[I].Status = 'invalid_path') then
+       (Prod.MissingLinks[I].Status = 'invalid_path') or
+       (Prod.MissingLinks[I].Status = 'invalid_json') or
+       (Prod.MissingLinks[I].Status = 'invalid_manifest') then
       Prod.HasFailures := True
     else
       Prod.HasPendingWork := True;
@@ -1513,7 +1634,24 @@ begin
   else
     Prod.OverallStatusText := 'Integro (sem falhas de vinculacao)';
 
+  // Garante banco SQLite local (copia do template zerado caso seja projeto legado sem .db) e sincroniza estado
+  MmpEnsureProductionMediaDirs(RootDir);
+  if not FileExists(Prod.DbPath) then
+    MmpInitProductionDbFromTemplate(RootDir, '', SceneProjPath, ScenesDir);
+  MmpSyncProductionToSqlite(Prod);
   Prod.Loaded := True;
+
+  for I := 1 to 6 do
+  begin
+    if MmpEvaluateStageStatus(Prod, I).NeedsAdjustment then
+    begin
+      Prod.HasPendingWork := True;
+      if not Prod.HasFailures then
+        Prod.OverallStatusText := 'Etapa(s) posterior(es) precisa(m) reajuste';
+      Break;
+    end;
+  end;
+
   Result := True;
 end;
 
@@ -1816,10 +1954,20 @@ end;
 
 procedure AppendJsonLogLine(const ProdRoot, AppName, Level, Msg: string);
 var
-  LogDir, LogFile, Line: string;
+  LogDir, LogFile, Line, DbTarget: string;
   Obj: TJSONObject;
   FS: TFileStream;
 begin
+  // Grava sempre no banco SQLite centralizado (da producao ou global do MMenu)
+  if Trim(ProdRoot) <> '' then
+  begin
+    DbTarget := MmpProductionDbPath(ProdRoot);
+    if FileExists(DbTarget) then
+      MmpDbAddCentralLog(DbTarget, '', Level, AppName, '', '', '', Msg, '');
+  end
+  else
+    MmpDbAddCentralLog(MmpGlobalCentralLogDbPath, '', Level, AppName, '', '', '', Msg, '');
+
   if (ProdRoot = '') or not DirectoryExists(ProdRoot) then Exit;
   LogDir := IncludeTrailingPathDelimiter(ProdRoot) + 'shared' + PathDelim +
     'logs' + PathDelim + LowerCase(AppName);
@@ -1852,6 +2000,562 @@ begin
     end;
   except
     // Logging must never crash caller
+  end;
+end;
+
+function MmpProjectHasActivity(const Proj: TMmpProjectRef): Boolean;
+var
+  I: Integer;
+begin
+  if Proj.SoftwareIndex = 0 then
+    Exit(True); // Registro principal da producao (MMenu): sempre 1 registro ao criar
+  if (Proj.Status <> '') and (not SameText(Proj.Status, 'initialized')) then
+    Exit(True);
+  if Length(Proj.Revisions) > 1 then
+    Exit(True);
+  for I := 0 to High(Proj.Revisions) do
+    if Length(Proj.Revisions[I].Artifacts) > 0 then
+      Exit(True);
+  Result := False;
+end;
+
+procedure MmpSyncProductionToSqlite(const Prod: TMmpProduction);
+var
+  I, J, K: Integer;
+  ErrMsg, RelMedia: string;
+  DbProj: TMmpDbProjectRow;
+  DbRev: TMmpDbRevisionRow;
+  DbSrcs: array of TMmpDbSourceRow;
+  DbArt: TMmpDbMediaAssetRow;
+  DbSync: TMmpDbSyncJobRow;
+begin
+  if (Trim(Prod.RootDir) = '') or (Trim(Prod.ProductionId) = '') then Exit;
+  if not FileExists(MmpProductionDbPath(Prod.RootDir)) then Exit;
+
+  MmpDbUpsertProduction(Prod.RootDir, Prod.ProductionId, Prod.Title,
+    SlugifyTitle(Prod.Title), Prod.Title, 'pt-BR',
+    Prod.OverallStatusText, Prod.CreatedAt, CurrentIsoUtc, '', ErrMsg);
+
+  for I := 0 to High(Prod.Projects) do
+  begin
+    FillChar(DbProj, SizeOf(DbProj), 0);
+    DbProj.ProjectId := Prod.Projects[I].ProjectId;
+    DbProj.ProductionId := Prod.ProductionId;
+    DbProj.SoftwareIndex := Prod.Projects[I].SoftwareIndex;
+    DbProj.AppName := Prod.Projects[I].AppName;
+    DbProj.SceneId := Prod.Projects[I].SceneId;
+    DbProj.NameBase := Prod.Title;
+    DbProj.ActiveRevision := Prod.Projects[I].ActiveRevision;
+    DbProj.Status := Prod.Projects[I].Status;
+    DbProj.CreatedAt := Prod.Projects[I].CreatedAt;
+    DbProj.UpdatedAt := Prod.Projects[I].UpdatedAt;
+    if Prod.Projects[I].ProjectFilePath <> '' then
+      DbProj.ProjectFilePath := NormalizeRelPath(ExtractRelativepath(
+        IncludeTrailingPathDelimiter(Prod.RootDir), Prod.Projects[I].ProjectFilePath));
+    if DbProj.ProjectId <> '' then
+      MmpDbUpsertProject(Prod.RootDir, DbProj, ErrMsg);
+
+    for J := 0 to High(Prod.Projects[I].Revisions) do
+    begin
+      FillChar(DbRev, SizeOf(DbRev), 0);
+      DbRev.ProjectId := DbProj.ProjectId;
+      DbRev.RevisionId := Prod.Projects[I].Revisions[J].RevisionId;
+      DbRev.ParentRevisionId := Prod.Projects[I].Revisions[J].ParentRevisionId;
+      DbRev.State := Prod.Projects[I].Revisions[J].State;
+      DbRev.RevLabel := FormatRevisionLabel(Prod.Title, AppIndexToEnum(DbProj.SoftwareIndex), DbRev.RevisionId);
+      if Prod.Projects[I].Revisions[J].ManifestPath <> '' then
+        DbRev.ManifestPath := NormalizeRelPath(ExtractRelativepath(
+          IncludeTrailingPathDelimiter(Prod.RootDir), Prod.Projects[I].Revisions[J].ManifestPath));
+      DbRev.ManifestSha256 := Prod.Projects[I].Revisions[J].ManifestSha256;
+      DbRev.CreatedAt := Prod.Projects[I].Revisions[J].CreatedAt;
+      MmpDbUpsertRevision(Prod.RootDir, Prod.ProductionId, DbRev, ErrMsg);
+
+      SetLength(DbSrcs, Length(Prod.Projects[I].Revisions[J].Sources));
+      for K := 0 to High(Prod.Projects[I].Revisions[J].Sources) do
+      begin
+        DbSrcs[K].ProjectId := DbProj.ProjectId;
+        DbSrcs[K].RevisionId := DbRev.RevisionId;
+        DbSrcs[K].SourceProjectId := Prod.Projects[I].Revisions[J].Sources[K].ProjectId;
+        DbSrcs[K].SourceRevisionId := Prod.Projects[I].Revisions[J].Sources[K].RevisionId;
+        DbSrcs[K].SourceManifestSha256 := Prod.Projects[I].Revisions[J].Sources[K].ManifestSha256;
+      end;
+      MmpDbReplaceRevisionSources(Prod.RootDir, DbProj.ProjectId, DbRev.RevisionId, DbSrcs, ErrMsg);
+
+      for K := 0 to High(Prod.Projects[I].Revisions[J].Artifacts) do
+      begin
+        FillChar(DbArt, SizeOf(DbArt), 0);
+        DbArt.ArtifactId := Prod.Projects[I].Revisions[J].Artifacts[K].ArtifactId;
+        DbArt.ProductionId := Prod.ProductionId;
+        DbArt.ProjectId := DbProj.ProjectId;
+        DbArt.RevisionId := DbRev.RevisionId;
+        DbArt.AppName := DbProj.AppName;
+        DbArt.Kind := Prod.Projects[I].Revisions[J].Artifacts[K].Kind;
+        DbArt.MimeType := Prod.Projects[I].Revisions[J].Artifacts[K].MimeType;
+        DbArt.LegacyUri := Prod.Projects[I].Revisions[J].Artifacts[K].Uri;
+        DbArt.MediaCategory := MmpDetectMediaCategory(DbArt.Kind, DbArt.MimeType, DbArt.LegacyUri);
+        DbArt.SceneId := Prod.Projects[I].Revisions[J].Artifacts[K].SceneId;
+        DbArt.SegmentId := Prod.Projects[I].Revisions[J].Artifacts[K].SegmentId;
+        DbArt.Sha256 := Prod.Projects[I].Revisions[J].Artifacts[K].Sha256;
+        DbArt.Bytes := Prod.Projects[I].Revisions[J].Artifacts[K].Bytes;
+        DbArt.Status := Prod.Projects[I].Revisions[J].Artifacts[K].Status;
+        DbArt.CreatedAt := DbRev.CreatedAt;
+
+        RelMedia := DbArt.LegacyUri;
+        if (DbArt.MediaCategory <> 'other') and
+           (Prod.Projects[I].Revisions[J].Artifacts[K].ResolvedPath <> '') and
+           FileExists(Prod.Projects[I].Revisions[J].Artifacts[K].ResolvedPath) then
+        begin
+          MmpEnsureAssetStoredInMediaDir(
+            Prod.RootDir,
+            Prod.Projects[I].Revisions[J].Artifacts[K].ResolvedPath,
+            DbArt.AppName, DbArt.SceneId, DbRev.RevisionId,
+            DbArt.Kind, DbArt.MimeType, DbArt.LegacyUri, RelMedia);
+        end;
+        DbArt.RelativePath := RelMedia;
+        if DbArt.ArtifactId <> '' then
+          MmpDbUpsertMediaAsset(Prod.RootDir, DbArt, ErrMsg);
+      end;
+    end;
+  end;
+
+  for I := 0 to High(Prod.SyncJobs) do
+  begin
+    FillChar(DbSync, SizeOf(DbSync), 0);
+    DbSync.EventId := Prod.SyncJobs[I].EventId;
+    DbSync.TransactionId := Prod.SyncJobs[I].TransactionId;
+    DbSync.ProductionId := Prod.ProductionId;
+    DbSync.OriginApp := Prod.SyncJobs[I].OriginApp;
+    DbSync.TargetApp := Prod.SyncJobs[I].TargetApp;
+    DbSync.ProjectId := Prod.SyncJobs[I].ProjectId;
+    DbSync.SourceRevision := Prod.SyncJobs[I].SourceRevision;
+    DbSync.RequestedChange := Prod.SyncJobs[I].RequestedChange;
+    DbSync.Stage := Prod.SyncJobs[I].Stage;
+    DbSync.Status := Prod.SyncJobs[I].Status;
+    DbSync.ErrorText := Prod.SyncJobs[I].ErrorText;
+    DbSync.CreatedAt := Prod.SyncJobs[I].CreatedAt;
+    DbSync.UpdatedAt := CurrentIsoUtc;
+    DbSync.SourceFile := Prod.SyncJobs[I].SourceFile;
+    if DbSync.EventId <> '' then
+      MmpDbUpsertSyncJob(Prod.RootDir, DbSync, ErrMsg);
+  end;
+end;
+
+function FindProjByAppIdx(const Prod: TMmpProduction; AppIdx: Integer;
+  out Proj: TMmpProjectRef): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  FillChar(Proj, SizeOf(Proj), 0);
+  for I := 0 to High(Prod.Projects) do
+    if (Prod.Projects[I].SoftwareIndex = AppIdx) and (Prod.Projects[I].SceneId = '') then
+    begin
+      Proj := Prod.Projects[I];
+      Exit(True);
+    end;
+  for I := 0 to High(Prod.Projects) do
+    if Prod.Projects[I].SoftwareIndex = AppIdx then
+    begin
+      Proj := Prod.Projects[I];
+      Exit(True);
+    end;
+end;
+
+function FindRevShaInProj(const Proj: TMmpProjectRef; const RevId: string): string;
+var
+  R: Integer;
+begin
+  Result := '';
+  for R := 0 to High(Proj.Revisions) do
+    if SameText(Proj.Revisions[R].RevisionId, RevId) then
+      Exit(Proj.Revisions[R].ManifestSha256);
+end;
+
+function MmpEvaluateStageStatus(const Prod: TMmpProduction; AppIdx: Integer): TMmpStageStatus;
+var
+  Proj, UpProj: TMmpProjectRef;
+  K, R, S: Integer;
+  ActiveRevInfo: TMmpRevisionInfo;
+  HasAppRev, FoundInSources: Boolean;
+  UpSha: string;
+begin
+  FillChar(Result, SizeOf(Result), 0);
+  Result.AppIndex := AppIdx;
+  if (not Prod.Loaded) or (AppIdx < 1) or (AppIdx > 6) then
+  begin
+    Result.CanOpen := False;
+    Result.StatusText := 'sem producao';
+    Exit;
+  end;
+
+  if not FindProjByAppIdx(Prod, AppIdx, Proj) then
+  begin
+    Result.CanOpen := False;
+    Result.StatusText := 'projeto ausente';
+    Result.MissingPrereqs := 'Projeto nao encontrado na producao';
+    Exit;
+  end;
+
+  Result.HasActivity := MmpProjectHasActivity(Proj);
+  Result.ActiveRevision := Proj.ActiveRevision;
+  Result.StatusText := Proj.Status;
+
+  for K := 1 to AppIdx - 1 do
+  begin
+    if not FindProjByAppIdx(Prod, K, UpProj) or (not MmpProjectHasActivity(UpProj)) then
+    begin
+      if Result.MissingPrereqs <> '' then
+        Result.MissingPrereqs := Result.MissingPrereqs + ', ';
+      Result.MissingPrereqs := Result.MissingPrereqs + IntToStr(K) + ' - ' + MmpAppNames[K];
+    end;
+  end;
+
+  Result.CanOpen := (Result.MissingPrereqs = '');
+  if not Result.CanOpen then Exit;
+
+  if not Result.HasActivity then Exit;
+
+  HasAppRev := False;
+  FillChar(ActiveRevInfo, SizeOf(ActiveRevInfo), 0);
+  for R := 0 to High(Proj.Revisions) do
+    if SameText(Proj.Revisions[R].RevisionId, Proj.ActiveRevision) then
+    begin
+      ActiveRevInfo := Proj.Revisions[R];
+      HasAppRev := True;
+      Break;
+    end;
+
+  for K := 1 to AppIdx - 1 do
+  begin
+    if not FindProjByAppIdx(Prod, K, UpProj) then Continue;
+    FoundInSources := False;
+    if HasAppRev then
+    begin
+      for S := 0 to High(ActiveRevInfo.Sources) do
+      begin
+        if SameText(ActiveRevInfo.Sources[S].ProjectId, UpProj.ProjectId) then
+        begin
+          FoundInSources := True;
+          if (UpProj.ActiveRevision <> '') and
+             (not SameText(ActiveRevInfo.Sources[S].RevisionId, UpProj.ActiveRevision)) then
+          begin
+            Result.NeedsAdjustment := True;
+            Result.StaleReason := MmpAppNames[K] + ' refeito (' +
+              ActiveRevInfo.Sources[S].RevisionId + ' -> ' + UpProj.ActiveRevision + ')';
+            Exit;
+          end;
+          UpSha := FindRevShaInProj(UpProj, UpProj.ActiveRevision);
+          if (UpSha <> '') and (ActiveRevInfo.Sources[S].ManifestSha256 <> '') and
+             (not SameText(ActiveRevInfo.Sources[S].ManifestSha256, UpSha)) then
+          begin
+            Result.NeedsAdjustment := True;
+            Result.StaleReason := MmpAppNames[K] + ' alterado em ' + UpProj.ActiveRevision;
+            Exit;
+          end;
+        end;
+      end;
+    end;
+
+    if (not FoundInSources) and (UpProj.UpdatedAt <> '') and (Proj.UpdatedAt <> '') and
+       (UpProj.UpdatedAt > Proj.UpdatedAt) then
+    begin
+      Result.NeedsAdjustment := True;
+      Result.StaleReason := MmpAppNames[K] + ' atualizado apos ' + MmpAppNames[AppIdx];
+      Exit;
+    end;
+  end;
+end;
+
+procedure AppendHistoryEntry(var Arr: TMmpHistoryEntryArray;
+  const Timestamp, AppName, Kind, RevisionId, State, Summary, Details: string);
+var
+  N: Integer;
+begin
+  N := Length(Arr);
+  SetLength(Arr, N + 1);
+  Arr[N].Timestamp := Timestamp;
+  Arr[N].AppName := AppName;
+  Arr[N].Kind := Kind;
+  Arr[N].RevisionId := RevisionId;
+  Arr[N].State := State;
+  Arr[N].Summary := Summary;
+  Arr[N].Details := Details;
+end;
+
+function FindRoteiroPathInRev(const Proj: TMmpProjectRef;
+  const Rev: TMmpRevisionInfo): string;
+var
+  A: Integer;
+  RevDir, Candidate: string;
+begin
+  Result := '';
+  for A := 0 to High(Rev.Artifacts) do
+    if Pos('roteiro.json', LowerCase(Rev.Artifacts[A].Uri)) > 0 then
+      if (Rev.Artifacts[A].ResolvedPath <> '') and FileExists(Rev.Artifacts[A].ResolvedPath) then
+        Exit(Rev.Artifacts[A].ResolvedPath);
+  if Rev.ManifestPath <> '' then
+  begin
+    RevDir := ExtractFilePath(Rev.ManifestPath);
+    Candidate := RevDir + 'scripts' + PathDelim + 'roteiro.json';
+    if FileExists(Candidate) then Exit(Candidate);
+    Candidate := RevDir + 'roteiro.json';
+    if FileExists(Candidate) then Exit(Candidate);
+  end;
+  if Proj.ProjectFilePath <> '' then
+  begin
+    RevDir := IncludeTrailingPathDelimiter(ExtractFilePath(Proj.ProjectFilePath)) +
+      'revisions' + PathDelim + Rev.RevisionId + PathDelim;
+    Candidate := RevDir + 'scripts' + PathDelim + 'roteiro.json';
+    if FileExists(Candidate) then Exit(Candidate);
+  end;
+end;
+
+procedure BuildRevisionHistoryEntry(const Proj: TMmpProjectRef;
+  const Rev: TMmpRevisionInfo; out Entry: TMmpHistoryEntry);
+var
+  VerNum, A, ScenesCnt, CharsCnt, DurSec: Integer;
+  RotPath, RotTitle, RotGenre, RotSynopsis, DurStr, ArtNames: string;
+  RotObj: TJSONObject;
+  ArrData: TJSONData;
+  Dtl: TStringList;
+begin
+  Entry.Timestamp := Rev.CreatedAt;
+  if Entry.Timestamp = '' then Entry.Timestamp := Proj.UpdatedAt;
+  Entry.AppName := Proj.AppName;
+  Entry.Kind := 'Revisao';
+  Entry.RevisionId := Rev.RevisionId;
+  Entry.State := Rev.State;
+  VerNum := RevisionVersionNumber(Rev.RevisionId);
+
+  ArtNames := '';
+  for A := 0 to High(Rev.Artifacts) do
+  begin
+    if ArtNames <> '' then ArtNames := ArtNames + ', ';
+    ArtNames := ArtNames + Rev.Artifacts[A].Kind + ' (' + ExtractFileName(Rev.Artifacts[A].Uri) + ')';
+  end;
+
+  Dtl := TStringList.Create;
+  try
+    Dtl.Add('Etapa: ' + Proj.AppName + ' (' + Proj.ProjectId + ')');
+    Dtl.Add('Revisao: ' + Rev.RevisionId + ' (Versao ' + IntToStr(VerNum) + ') | Estado: ' + Rev.State);
+    if Rev.ParentRevisionId <> '' then Dtl.Add('Revisao anterior: ' + Rev.ParentRevisionId);
+    if Rev.CreatedAt <> '' then Dtl.Add('Data/Hora: ' + Rev.CreatedAt);
+    Dtl.Add('Artefatos: ' + IntToStr(Length(Rev.Artifacts)));
+    if ArtNames <> '' then Dtl.Add('Lista: ' + ArtNames);
+
+    if SameText(Proj.AppName, 'MScript') then
+    begin
+      RotPath := FindRoteiroPathInRev(Proj, Rev);
+      if (RotPath <> '') and ParseJsonFile(RotPath, RotObj) then
+      try
+        RotTitle := RotObj.Get('titulo', RotObj.Get('title', ''));
+        RotGenre := RotObj.Get('genero', RotObj.Get('genre', ''));
+        DurSec := RotObj.Get('duracao_alvo', RotObj.Get('duration_sec', 0));
+        RotSynopsis := RotObj.Get('sinopse', RotObj.Get('synopsis', ''));
+        ScenesCnt := 0;
+        ArrData := RotObj.Find('cenas');
+        if ArrData = nil then ArrData := RotObj.Find('scenes');
+        if ArrData is TJSONArray then ScenesCnt := TJSONArray(ArrData).Count;
+        CharsCnt := 0;
+        ArrData := RotObj.Find('personagens');
+        if ArrData = nil then ArrData := RotObj.Find('characters');
+        if ArrData is TJSONArray then CharsCnt := TJSONArray(ArrData).Count;
+
+        DurStr := MmpFormatDurationHms(DurSec);
+        Entry.Summary := 'Versao ' + IntToStr(VerNum) + ': "' + RotTitle + '"';
+        if RotGenre <> '' then Entry.Summary := Entry.Summary + ' [' + RotGenre + ']';
+        Entry.Summary := Entry.Summary + ' - ' + IntToStr(ScenesCnt) + ' cena(s), ' +
+          IntToStr(CharsCnt) + ' personagem(ns), duracao ' + DurStr;
+
+        Dtl.Add('');
+        Dtl.Add('--- Dados do Roteiro ---');
+        if RotTitle <> '' then Dtl.Add('Titulo: ' + RotTitle);
+        if RotGenre <> '' then Dtl.Add('Genero: ' + RotGenre);
+        Dtl.Add('Duracao-alvo: ' + DurStr);
+        Dtl.Add('Cenas: ' + IntToStr(ScenesCnt) + ' | Personagens: ' + IntToStr(CharsCnt));
+        if Trim(RotSynopsis) <> '' then
+        begin
+          Dtl.Add('Sinopse:');
+          Dtl.Add(Trim(RotSynopsis));
+        end;
+      finally
+        RotObj.Free;
+      end
+      else
+        Entry.Summary := 'Versao ' + IntToStr(VerNum) + ' publicada (' +
+          IntToStr(Length(Rev.Artifacts)) + ' artefato(s))';
+    end
+    else
+    begin
+      Entry.Summary := 'Versao ' + IntToStr(VerNum) + ' (' + Rev.RevisionId + ') - ' +
+        IntToStr(Length(Rev.Artifacts)) + ' artefato(s)';
+      if ArtNames <> '' then Entry.Summary := Entry.Summary + ': ' + ArtNames;
+    end;
+
+    Entry.Details := TrimRight(Dtl.Text);
+  finally
+    Dtl.Free;
+  end;
+end;
+
+procedure LoadLogFilesFromDir(const LogAppDir: string;
+  var Entries: TMmpHistoryEntryArray);
+var
+  SR: TSearchRec;
+  Lines: TStringList;
+  I: Integer;
+  FilePath, LineStr, Ts, Lvl, AppN, Pid, Msg: string;
+  Data: TJSONData;
+  Obj: TJSONObject;
+begin
+  if FindFirst(IncludeTrailingPathDelimiter(LogAppDir) + '*.jsonl', faAnyFile, SR) = 0 then
+  try
+    repeat
+      if (SR.Attr and faDirectory) = 0 then
+      begin
+        FilePath := IncludeTrailingPathDelimiter(LogAppDir) + SR.Name;
+        Lines := TStringList.Create;
+        try
+          try
+            Lines.LoadFromFile(FilePath);
+          except
+            Lines.Clear;
+          end;
+          for I := 0 to Lines.Count - 1 do
+          begin
+            LineStr := Trim(Lines[I]);
+            if LineStr = '' then Continue;
+            Data := nil;
+            try
+              Data := GetJSON(LineStr);
+              if Data is TJSONObject then
+              begin
+                Obj := TJSONObject(Data);
+                Ts := Obj.Get('ts', '');
+                Lvl := Obj.Get('level', 'info');
+                AppN := Obj.Get('app', ExtractFileName(ExcludeTrailingPathDelimiter(LogAppDir)));
+                Pid := Obj.Get('pid', '');
+                Msg := Obj.Get('msg', '');
+                AppendHistoryEntry(Entries, Ts, AppN, 'Log', '-', Lvl, Msg,
+                  'Timestamp: ' + Ts + LineEnding +
+                  'Aplicativo: ' + AppN + ' (PID: ' + Pid + ')' + LineEnding +
+                  'Nivel: ' + Lvl + LineEnding +
+                  'Arquivo: ' + FilePath + LineEnding +
+                  'Mensagem: ' + Msg);
+              end;
+            except
+            end;
+            Data.Free;
+          end;
+        finally
+          Lines.Free;
+        end;
+      end;
+    until FindNext(SR) <> 0;
+  finally
+    FindClose(SR);
+  end;
+end;
+
+function MmpLoadProductionHistory(const Prod: TMmpProduction): TMmpHistoryEntryArray;
+var
+  I, R: Integer;
+  Entry, Tmp: TMmpHistoryEntry;
+  LogsRoot, SyncSummary, SyncDtl, DbPath: string;
+  SR: TSearchRec;
+  Swapped: Boolean;
+  DbLogs: TMmpCentralLogArray;
+begin
+  SetLength(Result, 0);
+  if Trim(Prod.RootDir) = '' then Exit;
+
+  for I := 0 to High(Prod.Projects) do
+  begin
+    if not MmpProjectHasActivity(Prod.Projects[I]) then Continue;
+    for R := 0 to High(Prod.Projects[I].Revisions) do
+    begin
+      if (Prod.Projects[I].Revisions[R].ParentRevisionId = '') and
+         (Length(Prod.Projects[I].Revisions[R].Artifacts) = 0) and
+         SameText(Prod.Projects[I].Revisions[R].RevisionId, 'r0001') and
+         SameText(Prod.Projects[I].Revisions[R].State, 'draft') then
+        Continue;
+      BuildRevisionHistoryEntry(Prod.Projects[I], Prod.Projects[I].Revisions[R], Entry);
+      AppendHistoryEntry(Result, Entry.Timestamp, Entry.AppName, Entry.Kind,
+        Entry.RevisionId, Entry.State, Entry.Summary, Entry.Details);
+    end;
+  end;
+
+  DbPath := MmpProductionDbPath(Prod.RootDir);
+  if FileExists(DbPath) then
+  begin
+    DbLogs := MmpDbListCentralLogs(DbPath, '', '', '', -1, 500);
+    for I := 0 to High(DbLogs) do
+    begin
+      SyncDtl := 'Timestamp: ' + DbLogs[I].Timestamp + LineEnding +
+        'Aplicativo: ' + DbLogs[I].AppName + LineEnding +
+        'Nivel: ' + DbLogs[I].Level + LineEnding +
+        'Usuario: ' + DbLogs[I].UserName + LineEnding +
+        'Revisao: ' + DbLogs[I].RevisionId + LineEnding +
+        'Mensagem: ' + DbLogs[I].Message;
+      if DbLogs[I].Details <> '' then
+        SyncDtl := SyncDtl + LineEnding + 'Detalhes: ' + DbLogs[I].Details;
+      if DbLogs[I].Resolved then
+        SyncDtl := SyncDtl + LineEnding + 'Corrigido por ' + DbLogs[I].ResolvedBy +
+          ' em ' + DbLogs[I].ResolvedAt + ': ' + DbLogs[I].ResolutionNote;
+      AppendHistoryEntry(Result, DbLogs[I].Timestamp, DbLogs[I].AppName, 'Log',
+        DbLogs[I].RevisionId, DbLogs[I].Level, DbLogs[I].Message, SyncDtl);
+    end;
+  end;
+
+  if Length(DbLogs) = 0 then
+  begin
+    LogsRoot := IncludeTrailingPathDelimiter(Prod.RootDir) + 'shared' + PathDelim + 'logs';
+    if DirectoryExists(LogsRoot) then
+    begin
+      if FindFirst(IncludeTrailingPathDelimiter(LogsRoot) + '*', faDirectory, SR) = 0 then
+      try
+        repeat
+          if ((SR.Attr and faDirectory) <> 0) and (SR.Name <> '.') and (SR.Name <> '..') then
+            LoadLogFilesFromDir(IncludeTrailingPathDelimiter(LogsRoot) + SR.Name, Result);
+        until FindNext(SR) <> 0;
+      finally
+        FindClose(SR);
+      end;
+    end;
+  end;
+
+  for I := 0 to High(Prod.SyncJobs) do
+  begin
+    SyncSummary := Prod.SyncJobs[I].OriginApp + ' -> ' + Prod.SyncJobs[I].TargetApp +
+      ': ' + Prod.SyncJobs[I].RequestedChange;
+    SyncDtl := 'Evento: ' + Prod.SyncJobs[I].EventId + LineEnding +
+      'Origem -> Alvo: ' + Prod.SyncJobs[I].OriginApp + ' -> ' + Prod.SyncJobs[I].TargetApp + LineEnding +
+      'Revisao origem: ' + Prod.SyncJobs[I].SourceRevision + LineEnding +
+      'Etapa/Estado: ' + Prod.SyncJobs[I].Stage + ' / ' + Prod.SyncJobs[I].Status + LineEnding +
+      'Solicitacao: ' + Prod.SyncJobs[I].RequestedChange;
+    if Prod.SyncJobs[I].ErrorText <> '' then
+      SyncDtl := SyncDtl + LineEnding + 'Erro: ' + Prod.SyncJobs[I].ErrorText;
+    AppendHistoryEntry(Result, Prod.SyncJobs[I].CreatedAt,
+      Prod.SyncJobs[I].OriginApp, 'Sincronizacao',
+      Prod.SyncJobs[I].SourceRevision, Prod.SyncJobs[I].Status,
+      SyncSummary, SyncDtl);
+  end;
+
+  if Length(Result) > 1 then
+  begin
+    repeat
+      Swapped := False;
+      for I := 0 to High(Result) - 1 do
+      begin
+        if Result[I].Timestamp < Result[I + 1].Timestamp then
+        begin
+          Tmp := Result[I];
+          Result[I] := Result[I + 1];
+          Result[I + 1] := Tmp;
+          Swapped := True;
+        end;
+      end;
+    until not Swapped;
   end;
 end;
 

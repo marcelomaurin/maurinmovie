@@ -17,6 +17,9 @@ begin
   if not RequireMMenuLaunch(maMScript, Args) then
     Halt(EXIT_INVALID_ARGS);
 
+  if not RequireSingleAppInstance(maMScript, Args.Headless) then
+    Halt(EXIT_LOCKED);
+
   if Args.Headless then
   begin
     ExitCode := RunMScriptHeadlessEvent(Args);

@@ -6,7 +6,7 @@ interface
 
 uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
-  ComCtrls, fpjson, jsonparser,
+  ComCtrls, Grids, fpjson, jsonparser,
   aillmmodelcatalog, aiimagemodelcatalog, aisoundmodelcatalog, aivideomodelcatalog,
   aisoundruntime,
   mmpcommon, mmpsettings, ummpaibridge;
@@ -121,8 +121,19 @@ type
     FSoundLibDirEdit: TEdit;
     FMusicLibDirEdit: TEdit;
 
+    // Controle de Acesso (Perfis e Usuarios)
+    FAccessModeCombo: TComboBox;
+    FAccessInfoLabel: TLabel;
+    FAccessUsersGrid: TStringGrid;
+    FAccessUserEdit: TEdit;
+    FAccessProfileCombo: TComboBox;
+    FAccessPassEdit: TEdit;
+    FAccessActiveChk: TCheckBox;
+
     procedure BuildUI(const InitialTab: string);
     procedure LoadFieldsFromSettings;
+    procedure RefreshAccessUsersGrid;
+    procedure LoadAccessControlFields;
     procedure PopulateCatalogProvidersForKind(const Kind: string);
     procedure PopulateCatalogModelsForSelectedProvider;
     procedure LoadProviderKindFields(const Kind: string);
@@ -155,11 +166,20 @@ type
     procedure OnBrowseAppClick(Sender: TObject);
     procedure OnBrowseToolClick(Sender: TObject);
     procedure OnDetectAllClick(Sender: TObject);
+    procedure OnAccessModeChanged(Sender: TObject);
+    procedure OnAccessGridSelection(Sender: TObject; aCol, aRow: Integer);
+    procedure OnAccessSaveUserClick(Sender: TObject);
+    procedure OnAccessRemoveUserClick(Sender: TObject);
+    procedure OnAccessClearUserClick(Sender: TObject);
+    procedure OnAccessResetAdminClick(Sender: TObject);
     procedure OnSaveClick(Sender: TObject);
   public
     constructor CreateForSettings(TheOwner: TComponent;
       Settings: TMMSettings; HasProduction: Boolean; const InitialTab: string = '');
   end;
+
+function PromptMMenuLogin(Settings: TMMSettings;
+  out LoggedUser: TMmpAccessUser): Boolean;
 
 implementation
 
@@ -193,9 +213,10 @@ end;
 procedure TMmenuSettingsForm.BuildUI(const InitialTab: string);
 var
   Head, Footer, LeftPanel: TPanel;
-  TabGeral, TabProd, TabIA, TabApps, TabPrompts, TabMidia, TabPresets, TabPol, TabTools, TabNet: TTabSheet;
+  TabGeral, TabProd, TabIA, TabApps, TabPrompts, TabMidia, TabPresets, TabPol, TabTools, TabNet, TabAcesso: TTabSheet;
   L: TLabel;
   BtnSave, BtnCancel, BtnEnv, BtnTest, BtnDetect, BtnPreset, BtnSavePrompt, BtnRestorePrompt, B: TButton;
+  BtnAccSave, BtnAccRem, BtnAccClear, BtnAccReset: TButton;
   I, Y, SelIdx: Integer;
   Node, RootIA, TargetNode: TTreeNode;
   TargetTabLower: string;
@@ -240,8 +261,9 @@ begin
   TabPol := TTabSheet.Create(FPageControl); TabPol.PageControl := FPageControl; TabPol.Caption := 'Politicas';
   TabTools := TTabSheet.Create(FPageControl); TabTools.PageControl := FPageControl; TabTools.Caption := 'Ferramentas';
   TabNet := TTabSheet.Create(FPageControl); TabNet.PageControl := FPageControl; TabNet.Caption := 'Rede e Interface';
+  TabAcesso := TTabSheet.Create(FPageControl); TabAcesso.PageControl := FPageControl; TabAcesso.Caption := 'Controle de Acesso';
 
-  // Tree nodes with Data = tab marker (PageIndex ou 10..16 para tipos IA)
+  // Tree nodes with Data = tab marker (PageIndex ou 10..16 para tipos IA, 20 para Controle de Acesso)
   TargetNode := FNavTree.Items.AddObject(nil, 'Geral e Ambiente', Pointer(0));
   FNavTree.Items.AddObject(nil, 'Producao', Pointer(1));
   RootIA := FNavTree.Items.AddObject(nil, 'IA: Texto', Pointer(10));
@@ -259,6 +281,7 @@ begin
   FNavTree.Items.AddObject(nil, 'Politicas', Pointer(7));
   FNavTree.Items.AddObject(nil, 'Ferramentas e Executaveis', Pointer(8));
   FNavTree.Items.AddObject(nil, 'Rede, Interface e Log', Pointer(9));
+  FNavTree.Items.AddObject(nil, 'Controle de Acesso (Perfis)', Pointer(20));
 
   // Tab 0: Geral
   L := TLabel.Create(Self); L.Parent := TabGeral; L.Caption := 'Usuario autor/revisor (obrigatorio para aprovacoes):'; L.SetBounds(16, 16, 360, 18);
@@ -594,6 +617,87 @@ begin
   L := TLabel.Create(Self); L.Parent := TabNet; L.Caption := 'Retencao de log (dias):'; L.SetBounds(330, 276, 160, 18);
   FLogRetentionEdit := TEdit.Create(Self); FLogRetentionEdit.Parent := TabNet; FLogRetentionEdit.SetBounds(498, 272, 70, 26);
 
+  // Tab 10: Controle de Acesso (Perfis)
+  L := TLabel.Create(Self); L.Parent := TabAcesso; L.Caption := 'Modo de Controle de Acesso do MMenu:';
+  L.Font.Style := [fsBold]; L.SetBounds(16, 16, 300, 18);
+  FAccessModeCombo := TComboBox.Create(Self); FAccessModeCombo.Parent := TabAcesso;
+  FAccessModeCombo.Style := csDropDownList;
+  FAccessModeCombo.Items.Add('Aberto (sem autenticacao - padrao)');
+  FAccessModeCombo.Items.Add('Restrito por usuarios (Administrador / User)');
+  FAccessModeCombo.SetBounds(16, 38, 360, 26);
+  FAccessModeCombo.OnChange := @OnAccessModeChanged;
+
+  FAccessInfoLabel := TLabel.Create(Self); FAccessInfoLabel.Parent := TabAcesso;
+  FAccessInfoLabel.WordWrap := True;
+  FAccessInfoLabel.Font.Color := $007D3F12;
+  FAccessInfoLabel.SetBounds(16, 72, 660, 36);
+  FAccessInfoLabel.Caption :=
+    'Perfis no modo Restrito: Administrador (padrao: usuario ADMIN / senha 123456) ' +
+    'e User (sem usuario padrao - crie usuarios abaixo conforme necessario).';
+
+  L := TLabel.Create(Self); L.Parent := TabAcesso; L.Caption := 'Usuarios cadastrados:';
+  L.Font.Style := [fsBold]; L.SetBounds(16, 114, 240, 18);
+
+  FAccessUsersGrid := TStringGrid.Create(Self); FAccessUsersGrid.Parent := TabAcesso;
+  FAccessUsersGrid.SetBounds(16, 136, 660, 170);
+  FAccessUsersGrid.Anchors := [akLeft, akTop, akRight];
+  FAccessUsersGrid.ColCount := 4;
+  FAccessUsersGrid.RowCount := 2;
+  FAccessUsersGrid.FixedRows := 1;
+  FAccessUsersGrid.Options := [goFixedVertLine, goFixedHorzLine, goVertLine, goHorzLine, goRowSelect, goColSizing];
+  FAccessUsersGrid.Cells[0, 0] := 'Usuario';
+  FAccessUsersGrid.Cells[1, 0] := 'Perfil';
+  FAccessUsersGrid.Cells[2, 0] := 'Ativo';
+  FAccessUsersGrid.Cells[3, 0] := 'Atualizado em';
+  FAccessUsersGrid.ColWidths[0] := 180;
+  FAccessUsersGrid.ColWidths[1] := 140;
+  FAccessUsersGrid.ColWidths[2] := 80;
+  FAccessUsersGrid.ColWidths[3] := 210;
+  FAccessUsersGrid.OnSelection := @OnAccessGridSelection;
+
+  L := TLabel.Create(Self); L.Parent := TabAcesso; L.Caption := 'Usuario:'; L.SetBounds(16, 320, 140, 18);
+  FAccessUserEdit := TEdit.Create(Self); FAccessUserEdit.Parent := TabAcesso;
+  FAccessUserEdit.SetBounds(16, 340, 190, 26);
+
+  L := TLabel.Create(Self); L.Parent := TabAcesso; L.Caption := 'Perfil:'; L.SetBounds(220, 320, 140, 18);
+  FAccessProfileCombo := TComboBox.Create(Self); FAccessProfileCombo.Parent := TabAcesso;
+  FAccessProfileCombo.Style := csDropDownList;
+  FAccessProfileCombo.Items.Add('Administrador');
+  FAccessProfileCombo.Items.Add('User');
+  FAccessProfileCombo.ItemIndex := 1;
+  FAccessProfileCombo.SetBounds(220, 340, 150, 26);
+
+  L := TLabel.Create(Self); L.Parent := TabAcesso;
+  L.Caption := 'Senha (em edicao deixe vazio p/ manter):'; L.SetBounds(384, 320, 260, 18);
+  FAccessPassEdit := TEdit.Create(Self); FAccessPassEdit.Parent := TabAcesso;
+  FAccessPassEdit.PasswordChar := '*';
+  FAccessPassEdit.SetBounds(384, 340, 180, 26);
+
+  FAccessActiveChk := TCheckBox.Create(Self); FAccessActiveChk.Parent := TabAcesso;
+  FAccessActiveChk.Caption := 'Ativo';
+  FAccessActiveChk.Checked := True;
+  FAccessActiveChk.SetBounds(576, 342, 80, 22);
+
+  BtnAccSave := TButton.Create(Self); BtnAccSave.Parent := TabAcesso;
+  BtnAccSave.Caption := 'Adicionar / Atualizar';
+  BtnAccSave.SetBounds(16, 380, 165, 30);
+  BtnAccSave.OnClick := @OnAccessSaveUserClick;
+
+  BtnAccRem := TButton.Create(Self); BtnAccRem.Parent := TabAcesso;
+  BtnAccRem.Caption := 'Remover Selecionado';
+  BtnAccRem.SetBounds(188, 380, 155, 30);
+  BtnAccRem.OnClick := @OnAccessRemoveUserClick;
+
+  BtnAccClear := TButton.Create(Self); BtnAccClear.Parent := TabAcesso;
+  BtnAccClear.Caption := 'Limpar';
+  BtnAccClear.SetBounds(350, 380, 90, 30);
+  BtnAccClear.OnClick := @OnAccessClearUserClick;
+
+  BtnAccReset := TButton.Create(Self); BtnAccReset.Parent := TabAcesso;
+  BtnAccReset.Caption := 'Restaurar ADMIN (123456)';
+  BtnAccReset.SetBounds(448, 380, 195, 30);
+  BtnAccReset.OnClick := @OnAccessResetAdminClick;
+
   // Select initial tab
   TargetTabLower := LowerCase(Trim(InitialTab));
   SelIdx := 0;
@@ -614,7 +718,8 @@ begin
   else if TargetTabLower = 'predefinicoes' then SelIdx := 12
   else if TargetTabLower = 'politicas' then SelIdx := 13
   else if TargetTabLower = 'ferramentas' then SelIdx := 14
-  else if (TargetTabLower = 'rede') or (TargetTabLower = 'interface') then SelIdx := 15;
+  else if (TargetTabLower = 'rede') or (TargetTabLower = 'interface') then SelIdx := 15
+  else if TargetTabLower = 'acesso' then SelIdx := 16;
 
   if (SelIdx >= 0) and (SelIdx < FNavTree.Items.Count) then
     FNavTree.Selected := FNavTree.Items[SelIdx]
@@ -678,6 +783,7 @@ begin
   LoadSelectedAppFields;
   LoadPromptsForSelectedApp;
   LoadMediaAndPresets;
+  LoadAccessControlFields;
   UpdateToolBadges;
   OnVerifyEnvClick(nil);
 end;
@@ -744,6 +850,8 @@ end;
 procedure TMmenuSettingsForm.OnCatalogProvChanged(Sender: TObject);
 begin
   PopulateCatalogModelsForSelectedProvider;
+  if Sender <> nil then
+    OnApplyPresetClick(nil);
 end;
 
 procedure TMmenuSettingsForm.OnCatalogModelChanged(Sender: TObject);
@@ -795,6 +903,8 @@ begin
       FProvCatalogHintLabel.Caption := VidInfo.FriendlyName + ' | ' + Flags;
     end;
   end;
+  if Sender <> nil then
+    OnApplyPresetClick(nil);
 end;
 
 procedure TMmenuSettingsForm.OnApplyPresetClick(Sender: TObject);
@@ -926,8 +1036,10 @@ procedure TMmenuSettingsForm.SaveProviderKindFields;
 var
   Prov: TMmpAiProviderCfg;
 begin
-  if not FHasProduction then Exit;
   FSettings.ResolveProvider(FCurrentKind, maMMenu, Prov);
+  if Trim(Prov.Id) = '' then
+    Prov.Id := FCurrentKind + '.default';
+  Prov.Kind := FCurrentKind;
   Prov.Enabled := FProvEnabledChk.Checked;
   Prov.Adapter := FProvAdapterCombo.Text;
   Prov.BaseUrl := Trim(FProvBaseUrlEdit.Text);
@@ -964,7 +1076,6 @@ var
   A: TMMApp;
   Cfg: TMmpAppSettingsCfg;
 begin
-  if not FHasProduction then Exit;
   A := AppIndexToEnum(FAppCombo.ItemIndex + 1);
   if Trim(FAppTextProvEdit.Text) <> '' then FSettings.SetAppProvider(A, 'text', Trim(FAppTextProvEdit.Text));
   if Trim(FAppImgProvEdit.Text) <> '' then FSettings.SetAppProvider(A, 'image', Trim(FAppImgProvEdit.Text));
@@ -1019,6 +1130,8 @@ begin
     FPageControl.ActivePageIndex := 2;
     LoadProviderKindFields(FKindTabs[TagVal - 10]);
   end
+  else if TagVal = 20 then
+    FPageControl.ActivePageIndex := 10
   else if (TagVal >= 0) and (TagVal < FPageControl.PageCount) then
     FPageControl.ActivePageIndex := TagVal;
 end;
@@ -1092,6 +1205,12 @@ var
   Info, Err: string;
 begin
   SaveProviderKindFields;
+  if SameText(FProvAdapterCombo.Text, 'mock') or FOfflineChk.Checked then
+  begin
+    FProvTestLabel.Caption := 'MODO SIMULADO (mock): selecione um provedor real no Catalogo acima e clique em Aplicar antes de salvar.';
+    FProvTestLabel.Font.Color := $000068B8;
+    Exit;
+  end;
   Bridge := TMmpAiBridge.Create('MMenu');
   try
     if FHasProduction then Bridge.LoadForProduction(FSettings.ProductionRoot);
@@ -1452,7 +1571,24 @@ begin
   FSettings.LogLevel := FLogLevelCombo.Text;
   FSettings.LogRetentionDays := StrToIntDef(FLogRetentionEdit.Text, 30);
 
+  if FAccessModeCombo.ItemIndex = 1 then
+    FSettings.AccessMode := amRestricted
+  else
+    FSettings.AccessMode := amOpen;
+  if not FSettings.SaveAccessControl(ErrMsg) then
+  begin
+    MessageDlg(ErrMsg, mtError, [mbOK], 0);
+    Exit;
+  end;
+
+  SaveProviderKindFields;
+  SaveSelectedAppFields;
   FSettings.SaveMachineIni;
+  if not FSettings.SaveMachineAiSettings(ErrMsg) then
+  begin
+    MessageDlg(ErrMsg, mtError, [mbOK], 0);
+    Exit;
+  end;
 
   if FHasProduction then
   begin
@@ -1472,8 +1608,6 @@ begin
     FSettings.AutosaveSec := StrToIntDef(FPolAutosaveEdit.Text, 60);
     FSettings.MonitorIntervalSec := StrToIntDef(FPolMonitorEdit.Text, 5);
 
-    SaveProviderKindFields;
-    SaveSelectedAppFields;
     SaveMediaAndPresets;
 
     if not FSettings.SaveProductionSettings(ErrMsg) then
@@ -1484,6 +1618,247 @@ begin
   end;
 
   ModalResult := mrOK;
+end;
+
+procedure TMmenuSettingsForm.LoadAccessControlFields;
+begin
+  FSettings.LoadAccessControl;
+  if FSettings.AccessMode = amRestricted then
+    FAccessModeCombo.ItemIndex := 1
+  else
+    FAccessModeCombo.ItemIndex := 0;
+  RefreshAccessUsersGrid;
+  OnAccessClearUserClick(nil);
+end;
+
+procedure TMmenuSettingsForm.RefreshAccessUsersGrid;
+var
+  Users: TMmpAccessUserArray;
+  I, Row: Integer;
+begin
+  Users := FSettings.GetAccessUsers;
+  if Length(Users) = 0 then
+  begin
+    FAccessUsersGrid.RowCount := 2;
+    for I := 0 to FAccessUsersGrid.ColCount - 1 do
+      FAccessUsersGrid.Cells[I, 1] := '';
+    Exit;
+  end;
+  FAccessUsersGrid.RowCount := Length(Users) + 1;
+  for I := 0 to High(Users) do
+  begin
+    Row := I + 1;
+    FAccessUsersGrid.Cells[0, Row] := Users[I].Username;
+    FAccessUsersGrid.Cells[1, Row] := MmpUserProfileToStr(Users[I].Profile);
+    if Users[I].Active then
+      FAccessUsersGrid.Cells[2, Row] := 'Sim'
+    else
+      FAccessUsersGrid.Cells[2, Row] := 'Nao';
+    FAccessUsersGrid.Cells[3, Row] := Users[I].UpdatedAt;
+  end;
+end;
+
+procedure TMmenuSettingsForm.OnAccessModeChanged(Sender: TObject);
+begin
+  if Sender <> nil then;
+end;
+
+procedure TMmenuSettingsForm.OnAccessGridSelection(Sender: TObject; aCol, aRow: Integer);
+var
+  Users: TMmpAccessUserArray;
+  Idx: Integer;
+begin
+  Idx := aRow - 1;
+  Users := FSettings.GetAccessUsers;
+  if (Idx < 0) or (Idx > High(Users)) then Exit;
+  FAccessUserEdit.Text := Users[Idx].Username;
+  if Users[Idx].Profile = upAdministrador then
+    FAccessProfileCombo.ItemIndex := 0
+  else
+    FAccessProfileCombo.ItemIndex := 1;
+  FAccessPassEdit.Text := '';
+  FAccessActiveChk.Checked := Users[Idx].Active;
+  if Sender <> nil then;
+  if aCol >= 0 then;
+end;
+
+procedure TMmenuSettingsForm.OnAccessSaveUserClick(Sender: TObject);
+var
+  UName, Pass, ErrMsg: string;
+  Prof: TMmpUserProfile;
+  ExistingIdx: Integer;
+  IsExisting: Boolean;
+begin
+  UName := Trim(FAccessUserEdit.Text);
+  if FAccessProfileCombo.ItemIndex = 0 then
+    Prof := upAdministrador
+  else
+    Prof := upUser;
+  Pass := FAccessPassEdit.Text;
+  IsExisting := FSettings.FindAccessUser(UName, ExistingIdx);
+
+  if not FSettings.AddOrUpdateAccessUser(UName, Prof, Pass, FAccessActiveChk.Checked, IsExisting, ErrMsg) then
+  begin
+    MessageDlg(ErrMsg, mtWarning, [mbOK], 0);
+    Exit;
+  end;
+  FAccessPassEdit.Text := '';
+  RefreshAccessUsersGrid;
+  MessageDlg('Usuario "' + UName + '" salvo com perfil ' + MmpUserProfileToStr(Prof) + '.',
+    mtInformation, [mbOK], 0);
+  if Sender <> nil then;
+end;
+
+procedure TMmenuSettingsForm.OnAccessRemoveUserClick(Sender: TObject);
+var
+  UName, ErrMsg: string;
+begin
+  UName := Trim(FAccessUserEdit.Text);
+  if UName = '' then
+  begin
+    MessageDlg('Selecione um usuario para remover.', mtInformation, [mbOK], 0);
+    Exit;
+  end;
+  if MessageDlg('Remover usuario "' + UName + '"?', mtConfirmation, [mbYes, mbNo], 0) <> mrYes then
+    Exit;
+  if not FSettings.RemoveAccessUser(UName, ErrMsg) then
+  begin
+    MessageDlg(ErrMsg, mtWarning, [mbOK], 0);
+    Exit;
+  end;
+  RefreshAccessUsersGrid;
+  OnAccessClearUserClick(nil);
+  if Sender <> nil then;
+end;
+
+procedure TMmenuSettingsForm.OnAccessClearUserClick(Sender: TObject);
+begin
+  FAccessUserEdit.Text := '';
+  FAccessProfileCombo.ItemIndex := 1; // User
+  FAccessPassEdit.Text := '';
+  FAccessActiveChk.Checked := True;
+  if Sender <> nil then;
+end;
+
+procedure TMmenuSettingsForm.OnAccessResetAdminClick(Sender: TObject);
+var
+  ErrMsg: string;
+begin
+  if MessageDlg('Restaurar usuario ADMIN com senha padrao 123456 e perfil Administrador?',
+    mtConfirmation, [mbYes, mbNo], 0) <> mrYes then
+    Exit;
+  if not FSettings.ResetDefaultAdminUser(ErrMsg) then
+  begin
+    MessageDlg(ErrMsg, mtError, [mbOK], 0);
+    Exit;
+  end;
+  RefreshAccessUsersGrid;
+  MessageDlg('Usuario ADMIN restaurado (senha padrao: 123456).', mtInformation, [mbOK], 0);
+  if Sender <> nil then;
+end;
+
+function PromptMMenuLogin(Settings: TMMSettings;
+  out LoggedUser: TMmpAccessUser): Boolean;
+var
+  Frm: TForm;
+  Head: TPanel;
+  LTitle, LSub, LU, LP, LHint: TLabel;
+  EdUser, EdPass: TEdit;
+  BtnOk, BtnCancel: TButton;
+  ErrMsg: string;
+begin
+  Result := False;
+  FillChar(LoggedUser, SizeOf(LoggedUser), 0);
+  if Settings = nil then Exit;
+  Settings.LoadAccessControl;
+
+  Frm := TForm.CreateNew(nil, 1);
+  try
+    Frm.Caption := 'MMenu - Acesso Restrito por Usuarios';
+    Frm.Width := 420;
+    Frm.Height := 275;
+    Frm.Position := poScreenCenter;
+    Frm.BorderStyle := bsDialog;
+
+    Head := TPanel.Create(Frm);
+    Head.Parent := Frm;
+    Head.Align := alTop;
+    Head.Height := 58;
+    Head.BevelOuter := bvNone;
+    Head.Color := $006E3B16;
+    Head.ParentBackground := False;
+
+    LTitle := TLabel.Create(Frm);
+    LTitle.Parent := Head;
+    LTitle.Caption := 'MaurinMovie | Autenticacao';
+    LTitle.Font.Size := 13;
+    LTitle.Font.Style := [fsBold];
+    LTitle.Font.Color := clWhite;
+    LTitle.SetBounds(16, 10, 380, 22);
+
+    LSub := TLabel.Create(Frm);
+    LSub.Parent := Head;
+    LSub.Caption := 'Perfis: Administrador ou User';
+    LSub.Font.Color := $00FFE2C4;
+    LSub.SetBounds(16, 34, 380, 16);
+
+    LU := TLabel.Create(Frm);
+    LU.Parent := Frm;
+    LU.Caption := 'Usuario:';
+    LU.SetBounds(24, 76, 120, 18);
+
+    EdUser := TEdit.Create(Frm);
+    EdUser.Parent := Frm;
+    EdUser.SetBounds(24, 96, 366, 26);
+    EdUser.Text := 'ADMIN';
+
+    LP := TLabel.Create(Frm);
+    LP.Parent := Frm;
+    LP.Caption := 'Senha:';
+    LP.SetBounds(24, 132, 120, 18);
+
+    EdPass := TEdit.Create(Frm);
+    EdPass.Parent := Frm;
+    EdPass.PasswordChar := '*';
+    EdPass.SetBounds(24, 152, 366, 26);
+
+    LHint := TLabel.Create(Frm);
+    LHint.Parent := Frm;
+    LHint.Caption := 'Padrao inicial: ADMIN / 123456';
+    LHint.Font.Color := $008C684C;
+    LHint.SetBounds(24, 184, 240, 16);
+
+    BtnOk := TButton.Create(Frm);
+    BtnOk.Parent := Frm;
+    BtnOk.Caption := 'Entrar';
+    BtnOk.Default := True;
+    BtnOk.ModalResult := mrOK;
+    BtnOk.SetBounds(206, 214, 90, 32);
+
+    BtnCancel := TButton.Create(Frm);
+    BtnCancel.Parent := Frm;
+    BtnCancel.Caption := 'Cancelar';
+    BtnCancel.Cancel := True;
+    BtnCancel.ModalResult := mrCancel;
+    BtnCancel.SetBounds(302, 214, 90, 32);
+
+    Frm.ActiveControl := EdPass;
+
+    while Frm.ShowModal = mrOK do
+    begin
+      if Settings.AuthenticateUser(EdUser.Text, EdPass.Text, LoggedUser, ErrMsg) then
+      begin
+        Settings.UserName := LoggedUser.Username;
+        Settings.UserRole := MmpUserProfileToStr(LoggedUser.Profile);
+        Exit(True);
+      end;
+      MessageDlg(ErrMsg, mtWarning, [mbOK], 0);
+      EdPass.Text := '';
+      EdPass.SetFocus;
+    end;
+  finally
+    Frm.Free;
+  end;
 end;
 
 end.

@@ -7,7 +7,7 @@ interface
 uses
   Classes, SysUtils, StrUtils, Math, Types, Forms, Controls, Graphics, Dialogs,
   StdCtrls, ExtCtrls, ComCtrls, Grids, Menus, LCLProc, Process, IniFiles,
-  mmpcommon, mmpsettings, ummpprotocol, ummenusettings;
+  mmpcommon, mmpsettings, ummpdb, ummpprotocol, ummpappbase, ummenusettings;
 
 const
   // Paleta Azul & Branco (formato BGR do LCL: $00BBGGRR)
@@ -42,9 +42,18 @@ type
     FSettings: TMMSettings;
     FMonitorTimer: TTimer;
     FSelectedProjectIndex: Integer;
+    FVisibleProjectIndices: array of Integer;
 
     // Menu suspenso e Popup da Engrenagem
     FMainMenu: TMainMenu;
+    FMenuCloseProd: TMenuItem;
+    FMenuSwitchUser: TMenuItem;
+    FMenuAplicativos: TMenuItem;
+    FMenuExibir: TMenuItem;
+    FMenuFerramentas: TMenuItem;
+    FMenuConfig: TMenuItem;
+    FHasLoggedUser: Boolean;
+    FCurrentUser: TMmpAccessUser;
     FGearPopup: TPopupMenu;
     FGearHover: Boolean;
     FGearDropHover: Boolean;
@@ -61,16 +70,36 @@ type
     FActiveProdTitleLabel: TLabel;
     FActiveProdIdLabel: TLabel;
     FActiveProdPathLabel: TLabel;
+    FBtnCloseProdHead: TButton;
+    FBtnCloseProdSide: TButton;
     FRecentsList: TListBox;
     FSummaryLabel: TLabel;
 
-    // Central Tabs
+    // Gerenciador de Projetos (quando nenhuma producao esta aberta)
+    FManagerPanel: TPanel;
+    FManagerGrid: TStringGrid;
+    FBtnMgrOpenSel: TButton;
+    FBtnMgrLocate: TButton;
+    FBtnMgrRemove: TButton;
+
+    // Central Tabs (somente com producao aberta)
     FPageControl: TPageControl;
     FTabPortal: TTabSheet;
+    FTabHistory: TTabSheet;
     FTabProjects: TTabSheet;
     FTabSync: TTabSheet;
     FTabArtifacts: TTabSheet;
     FTabLog: TTabSheet;
+
+    // Tab 1b: Historico & Controle
+    FHistoryEntries: TMmpHistoryEntryArray;
+    FHistoryFilteredIndices: array of Integer;
+    FHistorySummaryLabel: TLabel;
+    FHistoryAppFilter: TComboBox;
+    FHistoryKindFilter: TComboBox;
+    FHistorySearchEdit: TEdit;
+    FHistoryGrid: TStringGrid;
+    FHistoryDetailMemo: TMemo;
 
     // Portal (Menu visual alternado azul e branco inspirado no cardapio)
     FPortalScroll: TScrollBox;
@@ -114,7 +143,14 @@ type
     FBtnVerifyArtifacts: TButton;
     FBtnRebuildCatalog: TButton;
 
-    // Tab 5: Log
+    // Tab 5: Log Centralizado (SQLite)
+    FLogEntries: TMmpCentralLogArray;
+    FLogSummaryLabel: TLabel;
+    FLogAppFilter: TComboBox;
+    FLogLevelFilter: TComboBox;
+    FLogResolvedFilter: TComboBox;
+    FLogSearchEdit: TEdit;
+    FCentralLogGrid: TStringGrid;
     FLogMemo: TMemo;
 
     // Footer
@@ -127,7 +163,9 @@ type
     procedure BuildFooter(AParent: TWinControl);
     procedure BuildSidebar(AParent: TWinControl);
     procedure BuildCenterTabs(AParent: TWinControl);
+    procedure BuildProjectManager(AParent: TWinControl);
     procedure BuildPortalTab;
+    procedure BuildHistoryTab;
     procedure BuildProjectsTab;
     procedure BuildSyncTab;
     procedure BuildArtifactsTab;
@@ -148,7 +186,12 @@ type
     function FindExecutable(const AppName: string): string;
     function LaunchApplication(AppIdx: Integer; const ProjectId, RevisionId: string): Boolean;
 
-    procedure OpenProductionPath(const PathOrJson: string; CheckHashes: Boolean);
+    procedure OpenProductionPath(const PathOrJson: string; CheckHashes: Boolean;
+      ShowIntegrityAlert: Boolean = True);
+    procedure OpenRecentByIndex(Idx: Integer);
+    procedure LocateMovedRecentByIndex(Idx: Integer);
+    procedure RemoveRecentByIndex(Idx: Integer);
+    procedure RefreshManagerGrid;
     procedure RefreshAllViews;
     procedure RefreshPortalCards;
     procedure RefreshProjectsGrid;
@@ -156,6 +199,12 @@ type
     procedure RefreshSelectedProjectDetails;
     procedure RefreshSyncTab;
     procedure RefreshArtifactsGrid;
+    procedure RefreshHistoryTab;
+    procedure PopulateHistoryGrid;
+    procedure RefreshCentralLogTab;
+    function IsAdminAllowed: Boolean;
+    function CheckAdminAccess(const ActionDesc: string): Boolean;
+    function CurrentSessionUserName: string;
 
     // Event handlers - Menu & Gear
     procedure OnMenuExitClick(Sender: TObject);
@@ -187,11 +236,16 @@ type
     // Event handlers - Core
     procedure OnNewProductionClick(Sender: TObject);
     procedure OnOpenProductionClick(Sender: TObject);
+    procedure OnCloseProductionClick(Sender: TObject);
     procedure OnRefreshClick(Sender: TObject);
     procedure OnOpenSettingsClick(Sender: TObject);
     procedure OnRecentDblClick(Sender: TObject);
     procedure OnLocateMovedRecentClick(Sender: TObject);
     procedure OnRemoveRecentClick(Sender: TObject);
+    procedure OnManagerGridDblClick(Sender: TObject);
+    procedure OnManagerOpenSelectedClick(Sender: TObject);
+    procedure OnManagerLocateClick(Sender: TObject);
+    procedure OnManagerRemoveClick(Sender: TObject);
 
     procedure OnPortalOpenAppClick(Sender: TObject);
     procedure OnPortalViewRevisionsClick(Sender: TObject);
@@ -210,9 +264,17 @@ type
 
     procedure OnArtifactsFilterChange(Sender: TObject);
     procedure OnRebuildCatalogClick(Sender: TObject);
+    procedure OnHistoryFilterChange(Sender: TObject);
+    procedure OnHistoryGridSelection(Sender: TObject; aCol, aRow: Integer);
+    procedure OnExportHistoryClick(Sender: TObject);
 
     procedure OnClearLogClick(Sender: TObject);
     procedure OnSaveLogClick(Sender: TObject);
+    procedure OnCentralLogFilterChange(Sender: TObject);
+    procedure OnCentralLogGridSelection(Sender: TObject; aCol, aRow: Integer);
+    procedure OnResolveCentralLogClick(Sender: TObject);
+    procedure OnOpenLogAppClick(Sender: TObject);
+    procedure OnSwitchUserClick(Sender: TObject);
   public
     constructor Create(TheOwner: TComponent); override;
     destructor Destroy; override;
@@ -220,11 +282,13 @@ type
 
 var
   mmenuMainForm: TMmenuMainForm;
+  GMMenuHasLoggedUser: Boolean = False;
+  GMMenuLoggedUser: TMmpAccessUser;
 
 implementation
 
 const
-  SETTINGS_TAB_COUNT = 16;
+  SETTINGS_TAB_COUNT = 17;
   SettingsTabLabels: array[0..SETTINGS_TAB_COUNT - 1] of string = (
     'Geral e Ambiente...',
     'Producao Atual...',
@@ -241,7 +305,8 @@ const
     'Predefinicoes...',
     'Politicas...',
     'Ferramentas e Executaveis...',
-    'Rede, Interface e Log...'
+    'Rede, Interface e Log...',
+    'Controle de Acesso (Perfis)...'
   );
   SettingsTabKeys: array[0..SETTINGS_TAB_COUNT - 1] of string = (
     'geral',
@@ -259,7 +324,8 @@ const
     'predefinicoes',
     'politicas',
     'ferramentas',
-    'rede'
+    'rede',
+    'acesso'
   );
 
 function CompactMiddlePath(const S: string; MaxLen: Integer): string;
@@ -289,6 +355,13 @@ begin
 
   FSelectedProjectIndex := -1;
   FSettings := TMMSettings.Create;
+  FHasLoggedUser := GMMenuHasLoggedUser;
+  if FHasLoggedUser then
+  begin
+    FCurrentUser := GMMenuLoggedUser;
+    FSettings.UserName := FCurrentUser.Username;
+    FSettings.UserRole := MmpUserProfileToStr(FCurrentUser.Profile);
+  end;
   FConfigPath := FSettings.MachineIniPath;
   FDefaultProductionsDir := FSettings.ProductionsDir;
 
@@ -304,9 +377,9 @@ begin
   Args := ParseLaunchArgs;
   LogMsg('MMenu v' + MMP_EXECUTABLE_VERSION + ' iniciado (protocolo MMP v1).');
   if Args.Production <> '' then
-    OpenProductionPath(Args.Production, False)
+    OpenProductionPath(Args.Production, True, True)
   else if FProd.RootDir <> '' then
-    OpenProductionPath(FProd.RootDir, False)
+    OpenProductionPath(FProd.RootDir, True, True)
   else
     RefreshAllViews;
 
@@ -390,6 +463,12 @@ begin
   Item.OnClick := @OnOpenProductionClick;
   MArquivo.Add(Item);
 
+  FMenuCloseProd := TMenuItem.Create(Self);
+  FMenuCloseProd.Caption := 'Fechar Producao';
+  FMenuCloseProd.ShortCut := TextToShortCut('Ctrl+W');
+  FMenuCloseProd.OnClick := @OnCloseProductionClick;
+  MArquivo.Add(FMenuCloseProd);
+
   Item := TMenuItem.Create(Self);
   Item.Caption := 'Atualizar';
   Item.ShortCut := TextToShortCut('F5');
@@ -409,15 +488,25 @@ begin
   Item.Caption := '-';
   MArquivo.Add(Item);
 
+  FMenuSwitchUser := TMenuItem.Create(Self);
+  FMenuSwitchUser.Caption := 'Trocar Usuario (Login)...';
+  FMenuSwitchUser.OnClick := @OnSwitchUserClick;
+  MArquivo.Add(FMenuSwitchUser);
+
+  Item := TMenuItem.Create(Self);
+  Item.Caption := '-';
+  MArquivo.Add(Item);
+
   Item := TMenuItem.Create(Self);
   Item.Caption := 'Sair';
   Item.OnClick := @OnMenuExitClick;
   MArquivo.Add(Item);
 
   // Aplicativos
-  MAplicativos := TMenuItem.Create(Self);
-  MAplicativos.Caption := 'A&plicativos';
-  FMainMenu.Items.Add(MAplicativos);
+  FMenuAplicativos := TMenuItem.Create(Self);
+  FMenuAplicativos.Caption := 'A&plicativos';
+  FMainMenu.Items.Add(FMenuAplicativos);
+  MAplicativos := FMenuAplicativos;
 
   for I := 1 to 6 do
   begin
@@ -429,19 +518,21 @@ begin
   end;
 
   // Exibir
-  MExibir := TMenuItem.Create(Self);
-  MExibir.Caption := '&Exibir';
-  FMainMenu.Items.Add(MExibir);
+  FMenuExibir := TMenuItem.Create(Self);
+  FMenuExibir.Caption := '&Exibir';
+  FMainMenu.Items.Add(FMenuExibir);
+  MExibir := FMenuExibir;
 
-  for I := 0 to 4 do
+  for I := 0 to 5 do
   begin
     Item := TMenuItem.Create(Self);
     case I of
       0: Item.Caption := 'Portal (Aplicativos)';
-      1: Item.Caption := 'Projetos & Revisoes';
-      2: Item.Caption := 'Sincronizacoes & Pendencias';
-      3: Item.Caption := 'Artefatos & Catalogo';
-      4: Item.Caption := 'Log Operacional';
+      1: Item.Caption := 'Historico & Controle';
+      2: Item.Caption := 'Projetos & Revisoes';
+      3: Item.Caption := 'Sincronizacoes & Pendencias';
+      4: Item.Caption := 'Artefatos & Catalogo';
+      5: Item.Caption := 'Log Centralizado (SQLite)';
     end;
     Item.Tag := I;
     Item.OnClick := @OnMenuSwitchTabClick;
@@ -449,9 +540,10 @@ begin
   end;
 
   // Ferramentas
-  MFerramentas := TMenuItem.Create(Self);
-  MFerramentas.Caption := '&Ferramentas';
-  FMainMenu.Items.Add(MFerramentas);
+  FMenuFerramentas := TMenuItem.Create(Self);
+  FMenuFerramentas.Caption := '&Ferramentas';
+  FMainMenu.Items.Add(FMenuFerramentas);
+  MFerramentas := FMenuFerramentas;
 
   Item := TMenuItem.Create(Self);
   Item.Caption := 'Auditar Integridade (SHA-256)';
@@ -464,9 +556,10 @@ begin
   MFerramentas.Add(Item);
 
   // Configuracoes
-  MConfig := TMenuItem.Create(Self);
-  MConfig.Caption := '&Configuracoes';
-  FMainMenu.Items.Add(MConfig);
+  FMenuConfig := TMenuItem.Create(Self);
+  FMenuConfig.Caption := '&Configuracoes';
+  FMainMenu.Items.Add(FMenuConfig);
+  MConfig := FMenuConfig;
   BuildSettingsMenuItems(MConfig);
 
   // Ajuda
@@ -538,7 +631,7 @@ begin
   RightPanel := TPanel.Create(Self);
   RightPanel.Parent := Head;
   RightPanel.Align := alRight;
-  RightPanel.Width := 346;
+  RightPanel.Width := 424;
   RightPanel.Caption := '';
   RightPanel.BevelOuter := bvNone;
   RightPanel.Color := CLR_NAVY_HEADER;
@@ -556,16 +649,22 @@ begin
   BtnOpen.SetBounds(86, 15, 76, 34);
   BtnOpen.OnClick := @OnOpenProductionClick;
 
+  FBtnCloseProdHead := TButton.Create(Self);
+  FBtnCloseProdHead.Parent := RightPanel;
+  FBtnCloseProdHead.Caption := 'Fechar';
+  FBtnCloseProdHead.SetBounds(168, 15, 72, 34);
+  FBtnCloseProdHead.OnClick := @OnCloseProductionClick;
+
   BtnRefresh := TButton.Create(Self);
   BtnRefresh.Parent := RightPanel;
   BtnRefresh.Caption := 'Atualizar';
-  BtnRefresh.SetBounds(168, 15, 82, 34);
+  BtnRefresh.SetBounds(246, 15, 82, 34);
   BtnRefresh.OnClick := @OnRefreshClick;
 
   // Botao de Configuracoes com icone de Engrenagem + seta dropdown no canto direito superior
   FHeaderGearPanel := TPanel.Create(Self);
   FHeaderGearPanel.Parent := RightPanel;
-  FHeaderGearPanel.SetBounds(258, 14, 74, 36);
+  FHeaderGearPanel.SetBounds(336, 14, 74, 36);
   FHeaderGearPanel.BevelOuter := bvNone;
   FHeaderGearPanel.Color := CLR_BLUE_PRIMARY;
   FHeaderGearPanel.ParentBackground := False;
@@ -769,14 +868,20 @@ begin
   BtnNew := TButton.Create(Self);
   BtnNew.Parent := ProdCard;
   BtnNew.Caption := 'Nova...';
-  BtnNew.SetBounds(14, 140, 98, 30);
+  BtnNew.SetBounds(14, 140, 64, 30);
   BtnNew.OnClick := @OnNewProductionClick;
 
   BtnOpen := TButton.Create(Self);
   BtnOpen.Parent := ProdCard;
   BtnOpen.Caption := 'Abrir...';
-  BtnOpen.SetBounds(120, 140, 98, 30);
+  BtnOpen.SetBounds(84, 140, 68, 30);
   BtnOpen.OnClick := @OnOpenProductionClick;
+
+  FBtnCloseProdSide := TButton.Create(Self);
+  FBtnCloseProdSide.Parent := ProdCard;
+  FBtnCloseProdSide.Caption := 'Fechar';
+  FBtnCloseProdSide.SetBounds(158, 140, 62, 30);
+  FBtnCloseProdSide.OnClick := @OnCloseProductionClick;
 
   // Lista de Producoes Recentes (com rodape sempre visivel!)
   RecentsWrap := TPanel.Create(Self);
@@ -826,15 +931,155 @@ begin
   FRecentsList.OnDblClick := @OnRecentDblClick;
 end;
 
+procedure TMmenuMainForm.BuildProjectManager(AParent: TWinControl);
+var
+  Banner, BodyCard, ActionsBar, GridBottom: TPanel;
+  BannerTitle, BannerSub, ListHeader: TLabel;
+  BtnNew, BtnOpen, BtnSettings: TButton;
+begin
+  FManagerPanel := TPanel.Create(Self);
+  FManagerPanel.Parent := AParent;
+  FManagerPanel.Align := alClient;
+  FManagerPanel.BevelOuter := bvNone;
+  FManagerPanel.Color := CLR_BLUE_ICE;
+  FManagerPanel.ParentBackground := False;
+  FManagerPanel.Caption := '';
+  FManagerPanel.BorderWidth := 16;
+
+  Banner := TPanel.Create(Self);
+  Banner.Parent := FManagerPanel;
+  Banner.Align := alTop;
+  Banner.Height := 84;
+  Banner.BevelOuter := bvNone;
+  Banner.Color := CLR_BLUE_PRIMARY;
+  Banner.ParentBackground := False;
+  Banner.Caption := '';
+
+  BannerTitle := TLabel.Create(Self);
+  BannerTitle.Parent := Banner;
+  BannerTitle.Caption := 'Gerenciador de Projetos  •  MaurinMovie';
+  BannerTitle.Font.Size := 15;
+  BannerTitle.Font.Style := [fsBold];
+  BannerTitle.Font.Color := clWhite;
+  BannerTitle.SetBounds(20, 14, 580, 26);
+
+  BannerSub := TLabel.Create(Self);
+  BannerSub.Parent := Banner;
+  BannerSub.Caption := 'Nenhum projeto aberto. Crie uma nova producao ou selecione uma producao existente para liberar as etapas da suite.';
+  BannerSub.Font.Size := 9;
+  BannerSub.Font.Color := CLR_ICE_SUB;
+  BannerSub.WordWrap := True;
+  BannerSub.Anchors := [akLeft, akTop, akRight];
+  BannerSub.SetBounds(20, 44, 780, 28);
+
+  ActionsBar := TPanel.Create(Self);
+  ActionsBar.Parent := FManagerPanel;
+  ActionsBar.Align := alTop;
+  ActionsBar.Height := 62;
+  ActionsBar.BevelOuter := bvNone;
+  ActionsBar.Color := CLR_BLUE_ICE;
+  ActionsBar.ParentBackground := False;
+  ActionsBar.Caption := '';
+
+  BtnNew := TButton.Create(Self);
+  BtnNew.Parent := ActionsBar;
+  BtnNew.Caption := '+ Nova Producao...';
+  BtnNew.SetBounds(0, 14, 170, 36);
+  BtnNew.OnClick := @OnNewProductionClick;
+
+  BtnOpen := TButton.Create(Self);
+  BtnOpen.Parent := ActionsBar;
+  BtnOpen.Caption := 'Abrir Producao...';
+  BtnOpen.SetBounds(182, 14, 170, 36);
+  BtnOpen.OnClick := @OnOpenProductionClick;
+
+  BtnSettings := TButton.Create(Self);
+  BtnSettings.Parent := ActionsBar;
+  BtnSettings.Caption := 'Configuracoes da Suite...';
+  BtnSettings.SetBounds(364, 14, 200, 36);
+  BtnSettings.OnClick := @OnOpenSettingsClick;
+
+  BodyCard := TPanel.Create(Self);
+  BodyCard.Parent := FManagerPanel;
+  BodyCard.Align := alClient;
+  BodyCard.BevelOuter := bvNone;
+  BodyCard.Color := clWhite;
+  BodyCard.ParentBackground := False;
+  BodyCard.Caption := '';
+  BodyCard.BorderWidth := 12;
+  BodyCard.OnPaint := @OnCardBorderPaint;
+
+  ListHeader := TLabel.Create(Self);
+  ListHeader.Parent := BodyCard;
+  ListHeader.Align := alTop;
+  ListHeader.Height := 26;
+  ListHeader.Caption := 'PRODUCOES RECENTES (duplo clique para abrir)';
+  ListHeader.Font.Size := 9;
+  ListHeader.Font.Style := [fsBold];
+  ListHeader.Font.Color := CLR_TEXT_NAVY;
+
+  GridBottom := TPanel.Create(Self);
+  GridBottom.Parent := BodyCard;
+  GridBottom.Align := alBottom;
+  GridBottom.Height := 46;
+  GridBottom.BevelOuter := bvNone;
+  GridBottom.Color := clWhite;
+  GridBottom.ParentBackground := False;
+  GridBottom.Caption := '';
+
+  FBtnMgrOpenSel := TButton.Create(Self);
+  FBtnMgrOpenSel.Parent := GridBottom;
+  FBtnMgrOpenSel.Caption := 'Abrir Selecionado';
+  FBtnMgrOpenSel.SetBounds(0, 10, 155, 32);
+  FBtnMgrOpenSel.OnClick := @OnManagerOpenSelectedClick;
+
+  FBtnMgrLocate := TButton.Create(Self);
+  FBtnMgrLocate.Parent := GridBottom;
+  FBtnMgrLocate.Caption := 'Localizar Pasta...';
+  FBtnMgrLocate.SetBounds(165, 10, 145, 32);
+  FBtnMgrLocate.OnClick := @OnManagerLocateClick;
+
+  FBtnMgrRemove := TButton.Create(Self);
+  FBtnMgrRemove.Parent := GridBottom;
+  FBtnMgrRemove.Caption := 'Remover da Lista';
+  FBtnMgrRemove.SetBounds(320, 10, 145, 32);
+  FBtnMgrRemove.OnClick := @OnManagerRemoveClick;
+
+  FManagerGrid := TStringGrid.Create(Self);
+  FManagerGrid.Parent := BodyCard;
+  FManagerGrid.Align := alClient;
+  FManagerGrid.FixedCols := 0;
+  FManagerGrid.FixedRows := 1;
+  FManagerGrid.ColCount := 4;
+  FManagerGrid.RowCount := 2;
+  FManagerGrid.Options := FManagerGrid.Options + [goRowSelect, goColSizing];
+  FManagerGrid.Cells[0, 0] := 'Titulo';
+  FManagerGrid.Cells[1, 0] := 'Production ID';
+  FManagerGrid.Cells[2, 0] := 'Status';
+  FManagerGrid.Cells[3, 0] := 'Pasta da Producao';
+  FManagerGrid.ColWidths[0] := 180;
+  FManagerGrid.ColWidths[1] := 210;
+  FManagerGrid.ColWidths[2] := 130;
+  FManagerGrid.ColWidths[3] := 340;
+  FManagerGrid.OnDblClick := @OnManagerGridDblClick;
+end;
+
 procedure TMmenuMainForm.BuildCenterTabs(AParent: TWinControl);
 begin
+  BuildProjectManager(AParent);
+
   FPageControl := TPageControl.Create(Self);
   FPageControl.Parent := AParent;
   FPageControl.Align := alClient;
+  FPageControl.Visible := False;
 
   FTabPortal := TTabSheet.Create(FPageControl);
   FTabPortal.PageControl := FPageControl;
   FTabPortal.Caption := 'Portal (Aplicativos)';
+
+  FTabHistory := TTabSheet.Create(FPageControl);
+  FTabHistory.PageControl := FPageControl;
+  FTabHistory.Caption := 'Historico & Controle';
 
   FTabProjects := TTabSheet.Create(FPageControl);
   FTabProjects.PageControl := FPageControl;
@@ -850,9 +1095,10 @@ begin
 
   FTabLog := TTabSheet.Create(FPageControl);
   FTabLog.PageControl := FPageControl;
-  FTabLog.Caption := 'Log Operacional';
+  FTabLog.Caption := 'Log Centralizado (SQLite)';
 
   BuildPortalTab;
+  BuildHistoryTab;
   BuildProjectsTab;
   BuildSyncTab;
   BuildArtifactsTab;
@@ -1680,33 +1926,255 @@ end;
 
 procedure TMmenuMainForm.BuildLogTab;
 var
-  Bar: TPanel;
-  BtnClear, BtnSave: TButton;
+  SumBar, FilterBar, BottomBox: TPanel;
+  LApp, LLvl, LRes, LSearch, LDtl: TLabel;
+  BtnRefresh, BtnResolve, BtnOpenApp, BtnSave: TButton;
+  Split: TSplitter;
+  I: Integer;
 begin
-  Bar := TPanel.Create(Self);
-  Bar.Parent := FTabLog;
-  Bar.Align := alTop;
-  Bar.Height := 42;
-  Bar.Caption := '';
-  Bar.BevelOuter := bvNone;
+  SumBar := TPanel.Create(Self);
+  SumBar.Parent := FTabLog;
+  SumBar.Align := alTop;
+  SumBar.Height := 42;
+  SumBar.BevelOuter := bvNone;
+  SumBar.Color := CLR_BLUE_ICE;
 
-  BtnClear := TButton.Create(Self);
-  BtnClear.Parent := Bar;
-  BtnClear.Caption := 'Limpar log';
-  BtnClear.SetBounds(12, 6, 110, 30);
-  BtnClear.OnClick := @OnClearLogClick;
+  FLogSummaryLabel := TLabel.Create(Self);
+  FLogSummaryLabel.Parent := SumBar;
+  FLogSummaryLabel.SetBounds(12, 12, 860, 18);
+  FLogSummaryLabel.Font.Style := [fsBold];
+  FLogSummaryLabel.Font.Color := CLR_TEXT_NAVY;
+  FLogSummaryLabel.Caption := 'Log Centralizado SQLite: todas as operacoes dos 7 executaveis.';
 
-  BtnSave := TButton.Create(Self);
-  BtnSave.Parent := Bar;
-  BtnSave.Caption := 'Salvar log...';
-  BtnSave.SetBounds(130, 6, 120, 30);
-  BtnSave.OnClick := @OnSaveLogClick;
+  FilterBar := TPanel.Create(Self);
+  FilterBar.Parent := FTabLog;
+  FilterBar.Align := alTop;
+  FilterBar.Height := 44;
+  FilterBar.Caption := '';
+  FilterBar.BevelOuter := bvNone;
+
+  LApp := TLabel.Create(Self); LApp.Parent := FilterBar; LApp.Caption := 'App:'; LApp.SetBounds(12, 13, 28, 18);
+  FLogAppFilter := TComboBox.Create(Self); FLogAppFilter.Parent := FilterBar;
+  FLogAppFilter.Style := csDropDownList;
+  FLogAppFilter.Items.Add('Todos');
+  for I := 0 to 6 do FLogAppFilter.Items.Add(MmpAppNames[I]);
+  FLogAppFilter.ItemIndex := 0;
+  FLogAppFilter.SetBounds(42, 9, 98, 26);
+  FLogAppFilter.OnChange := @OnCentralLogFilterChange;
+
+  LLvl := TLabel.Create(Self); LLvl.Parent := FilterBar; LLvl.Caption := 'Nivel:'; LLvl.SetBounds(146, 13, 35, 18);
+  FLogLevelFilter := TComboBox.Create(Self); FLogLevelFilter.Parent := FilterBar;
+  FLogLevelFilter.Style := csDropDownList;
+  FLogLevelFilter.Items.Add('Todos');
+  FLogLevelFilter.Items.Add('info');
+  FLogLevelFilter.Items.Add('warn');
+  FLogLevelFilter.Items.Add('error');
+  FLogLevelFilter.ItemIndex := 0;
+  FLogLevelFilter.SetBounds(184, 9, 78, 26);
+  FLogLevelFilter.OnChange := @OnCentralLogFilterChange;
+
+  LRes := TLabel.Create(Self); LRes.Parent := FilterBar; LRes.Caption := 'Situacao:'; LRes.SetBounds(268, 13, 55, 18);
+  FLogResolvedFilter := TComboBox.Create(Self); FLogResolvedFilter.Parent := FilterBar;
+  FLogResolvedFilter.Style := csDropDownList;
+  FLogResolvedFilter.Items.Add('Todos');
+  FLogResolvedFilter.Items.Add('Pendentes / Nao resolvidos');
+  FLogResolvedFilter.Items.Add('Corrigidos / Resolvidos');
+  FLogResolvedFilter.ItemIndex := 0;
+  FLogResolvedFilter.SetBounds(326, 9, 155, 26);
+  FLogResolvedFilter.OnChange := @OnCentralLogFilterChange;
+
+  LSearch := TLabel.Create(Self); LSearch.Parent := FilterBar; LSearch.Caption := 'Buscar:'; LSearch.SetBounds(488, 13, 44, 18);
+  FLogSearchEdit := TEdit.Create(Self); FLogSearchEdit.Parent := FilterBar;
+  FLogSearchEdit.SetBounds(534, 9, 130, 26);
+  FLogSearchEdit.OnChange := @OnCentralLogFilterChange;
+
+  BtnRefresh := TButton.Create(Self); BtnRefresh.Parent := FilterBar; BtnRefresh.Caption := 'Atualizar';
+  BtnRefresh.SetBounds(670, 8, 74, 28); BtnRefresh.OnClick := @OnCentralLogFilterChange;
+
+  BtnResolve := TButton.Create(Self); BtnResolve.Parent := FilterBar; BtnResolve.Caption := 'Marcar Corrigido...';
+  BtnResolve.SetBounds(748, 8, 128, 28); BtnResolve.OnClick := @OnResolveCentralLogClick;
+
+  BtnOpenApp := TButton.Create(Self); BtnOpenApp.Parent := FilterBar; BtnOpenApp.Caption := 'Abrir Etapa';
+  BtnOpenApp.SetBounds(880, 8, 88, 28); BtnOpenApp.OnClick := @OnOpenLogAppClick;
+
+  BtnSave := TButton.Create(Self); BtnSave.Parent := FilterBar; BtnSave.Caption := 'Exportar...';
+  BtnSave.SetBounds(972, 8, 82, 28); BtnSave.OnClick := @OnSaveLogClick;
+
+  BottomBox := TPanel.Create(Self);
+  BottomBox.Parent := FTabLog;
+  BottomBox.Align := alBottom;
+  BottomBox.Height := 165;
+  BottomBox.BevelOuter := bvNone;
+
+  LDtl := TLabel.Create(Self);
+  LDtl.Parent := BottomBox;
+  LDtl.Align := alTop;
+  LDtl.Height := 24;
+  LDtl.Layout := tlCenter;
+  LDtl.Font.Style := [fsBold];
+  LDtl.Caption := '  Detalhes da entrada selecionada / Nota de correcao:';
 
   FLogMemo := TMemo.Create(Self);
-  FLogMemo.Parent := FTabLog;
+  FLogMemo.Parent := BottomBox;
   FLogMemo.Align := alClient;
   FLogMemo.ReadOnly := True;
   FLogMemo.ScrollBars := ssBoth;
+
+  Split := TSplitter.Create(Self);
+  Split.Parent := FTabLog;
+  Split.Align := alBottom;
+  Split.Height := 5;
+
+  FCentralLogGrid := TStringGrid.Create(Self);
+  FCentralLogGrid.Parent := FTabLog;
+  FCentralLogGrid.Align := alClient;
+  FCentralLogGrid.ColCount := 7;
+  FCentralLogGrid.RowCount := 2;
+  FCentralLogGrid.FixedRows := 1;
+  FCentralLogGrid.Options := [goFixedVertLine, goFixedHorzLine, goVertLine, goHorzLine, goRowSelect, goColSizing];
+  FCentralLogGrid.Cells[0, 0] := 'ID';
+  FCentralLogGrid.Cells[1, 0] := 'Data/Hora';
+  FCentralLogGrid.Cells[2, 0] := 'App';
+  FCentralLogGrid.Cells[3, 0] := 'Nivel';
+  FCentralLogGrid.Cells[4, 0] := 'Revisao';
+  FCentralLogGrid.Cells[5, 0] := 'Estado';
+  FCentralLogGrid.Cells[6, 0] := 'Mensagem';
+  FCentralLogGrid.ColWidths[0] := 48;
+  FCentralLogGrid.ColWidths[1] := 142;
+  FCentralLogGrid.ColWidths[2] := 74;
+  FCentralLogGrid.ColWidths[3] := 58;
+  FCentralLogGrid.ColWidths[4] := 65;
+  FCentralLogGrid.ColWidths[5] := 92;
+  FCentralLogGrid.ColWidths[6] := 470;
+  FCentralLogGrid.OnSelection := @OnCentralLogGridSelection;
+end;
+
+procedure TMmenuMainForm.BuildHistoryTab;
+var
+  SummaryBar, FilterBar, BottomBox: TPanel;
+  LApp, LKind, LSearch, LDtlTitle: TLabel;
+  BtnRefresh, BtnExport: TButton;
+  Split: TSplitter;
+  I: Integer;
+begin
+  SummaryBar := TPanel.Create(Self);
+  SummaryBar.Parent := FTabHistory;
+  SummaryBar.Align := alTop;
+  SummaryBar.Height := 46;
+  SummaryBar.BevelOuter := bvNone;
+  SummaryBar.Color := CLR_BLUE_ICE;
+
+  FHistorySummaryLabel := TLabel.Create(Self);
+  FHistorySummaryLabel.Parent := SummaryBar;
+  FHistorySummaryLabel.SetBounds(12, 13, 860, 20);
+  FHistorySummaryLabel.Font.Style := [fsBold];
+  FHistorySummaryLabel.Font.Color := CLR_TEXT_NAVY;
+  FHistorySummaryLabel.Caption := 'Controle do que ja foi feito na producao.';
+
+  FilterBar := TPanel.Create(Self);
+  FilterBar.Parent := FTabHistory;
+  FilterBar.Align := alTop;
+  FilterBar.Height := 42;
+  FilterBar.BevelOuter := bvNone;
+
+  LApp := TLabel.Create(Self);
+  LApp.Parent := FilterBar;
+  LApp.Caption := 'Etapa/App:';
+  LApp.SetBounds(12, 13, 66, 18);
+
+  FHistoryAppFilter := TComboBox.Create(Self);
+  FHistoryAppFilter.Parent := FilterBar;
+  FHistoryAppFilter.Style := csDropDownList;
+  FHistoryAppFilter.SetBounds(80, 9, 110, 26);
+  FHistoryAppFilter.Items.Add('Todos');
+  for I := 0 to 6 do
+    FHistoryAppFilter.Items.Add(MmpAppNames[I]);
+  FHistoryAppFilter.ItemIndex := 0;
+  FHistoryAppFilter.OnChange := @OnHistoryFilterChange;
+
+  LKind := TLabel.Create(Self);
+  LKind.Parent := FilterBar;
+  LKind.Caption := 'Tipo:';
+  LKind.SetBounds(202, 13, 35, 18);
+
+  FHistoryKindFilter := TComboBox.Create(Self);
+  FHistoryKindFilter.Parent := FilterBar;
+  FHistoryKindFilter.Style := csDropDownList;
+  FHistoryKindFilter.SetBounds(240, 9, 120, 26);
+  FHistoryKindFilter.Items.Add('Todos');
+  FHistoryKindFilter.Items.Add('Revisao');
+  FHistoryKindFilter.Items.Add('Log');
+  FHistoryKindFilter.Items.Add('Sincronizacao');
+  FHistoryKindFilter.ItemIndex := 0;
+  FHistoryKindFilter.OnChange := @OnHistoryFilterChange;
+
+  LSearch := TLabel.Create(Self);
+  LSearch.Parent := FilterBar;
+  LSearch.Caption := 'Buscar:';
+  LSearch.SetBounds(372, 13, 46, 18);
+
+  FHistorySearchEdit := TEdit.Create(Self);
+  FHistorySearchEdit.Parent := FilterBar;
+  FHistorySearchEdit.SetBounds(420, 9, 200, 26);
+  FHistorySearchEdit.OnChange := @OnHistoryFilterChange;
+
+  BtnRefresh := TButton.Create(Self);
+  BtnRefresh.Parent := FilterBar;
+  BtnRefresh.Caption := 'Atualizar';
+  BtnRefresh.SetBounds(630, 8, 92, 28);
+  BtnRefresh.OnClick := @OnRefreshClick;
+
+  BtnExport := TButton.Create(Self);
+  BtnExport.Parent := FilterBar;
+  BtnExport.Caption := 'Exportar...';
+  BtnExport.SetBounds(728, 8, 102, 28);
+  BtnExport.OnClick := @OnExportHistoryClick;
+
+  BottomBox := TPanel.Create(Self);
+  BottomBox.Parent := FTabHistory;
+  BottomBox.Align := alBottom;
+  BottomBox.Height := 175;
+  BottomBox.BevelOuter := bvNone;
+
+  LDtlTitle := TLabel.Create(Self);
+  LDtlTitle.Parent := BottomBox;
+  LDtlTitle.Align := alTop;
+  LDtlTitle.Caption := '  Detalhes da acao selecionada (o que foi feito, versao, sinopse e artefatos):';
+  LDtlTitle.Font.Style := [fsBold];
+  LDtlTitle.Layout := tlCenter;
+  LDtlTitle.Height := 24;
+
+  FHistoryDetailMemo := TMemo.Create(Self);
+  FHistoryDetailMemo.Parent := BottomBox;
+  FHistoryDetailMemo.Align := alClient;
+  FHistoryDetailMemo.ReadOnly := True;
+  FHistoryDetailMemo.ScrollBars := ssBoth;
+
+  Split := TSplitter.Create(Self);
+  Split.Parent := FTabHistory;
+  Split.Align := alBottom;
+  Split.Height := 5;
+
+  FHistoryGrid := TStringGrid.Create(Self);
+  FHistoryGrid.Parent := FTabHistory;
+  FHistoryGrid.Align := alClient;
+  FHistoryGrid.ColCount := 6;
+  FHistoryGrid.RowCount := 2;
+  FHistoryGrid.FixedRows := 1;
+  FHistoryGrid.Options := [goFixedVertLine, goFixedHorzLine, goVertLine, goHorzLine, goRowSelect, goColSizing];
+  FHistoryGrid.Cells[0, 0] := 'Data/Hora';
+  FHistoryGrid.Cells[1, 0] := 'Etapa/App';
+  FHistoryGrid.Cells[2, 0] := 'Tipo';
+  FHistoryGrid.Cells[3, 0] := 'Versao';
+  FHistoryGrid.Cells[4, 0] := 'Estado';
+  FHistoryGrid.Cells[5, 0] := 'Resumo do que foi feito';
+  FHistoryGrid.ColWidths[0] := 145;
+  FHistoryGrid.ColWidths[1] := 85;
+  FHistoryGrid.ColWidths[2] := 95;
+  FHistoryGrid.ColWidths[3] := 85;
+  FHistoryGrid.ColWidths[4] := 90;
+  FHistoryGrid.ColWidths[5] := 460;
+  FHistoryGrid.OnSelection := @OnHistoryGridSelection;
 end;
 
 // === Event handlers de desenho e menus ===
@@ -1938,7 +2406,28 @@ begin
   end;
 
   // Cores da pilula
-  if DarkBg then
+  if FCardActionOkFlag[AppIdx] = -2 then
+  begin
+    PillBg := $00D8DDE4;
+    PillBorder := $008C96A4;
+    PillText := $00505864;
+  end
+  else if FCardActionOkFlag[AppIdx] = 2 then
+  begin
+    if DarkBg then
+    begin
+      if IsHover then PillBg := $00C8ECFF else PillBg := $00E8F6FF;
+      PillBorder := $0060C0FF;
+      PillText := $000058A8;
+    end
+    else
+    begin
+      if IsHover then PillBg := $00188AE8 else PillBg := $00006EC8;
+      PillBorder := $00004C8C;
+      PillText := clWhite;
+    end;
+  end
+  else if DarkBg then
   begin
     if IsHover then PillBg := CLR_BLUE_SOFT else PillBg := clWhite;
     PillBorder := clWhite;
@@ -1975,7 +2464,9 @@ begin
   begin
     case FCardActionOkFlag[AppIdx] of
       1: SubCol := CLR_STATUS_OK;
+      2: SubCol := CLR_STATUS_WARN;
       -1: SubCol := CLR_STATUS_ERR;
+      -2: SubCol := CLR_TEXT_MUTED;
     else
       SubCol := CLR_TEXT_MUTED;
     end;
@@ -2036,6 +2527,8 @@ procedure TMmenuMainForm.LogMsg(const Msg: string);
 begin
   if FLogMemo <> nil then
     FLogMemo.Lines.Add('[' + FormatDateTime('hh:nn:ss', Now) + '] ' + Msg);
+  if not (csDestroying in ComponentState) then
+    MmpLogAppOperation(FProd.RootDir, FProd.ProductionId, 'MMenu', Msg, '', 'menu', CurrentSessionUserName);
 end;
 
 procedure TMmenuMainForm.SetStatus(const Msg: string; ProgressPercent: Integer);
@@ -2160,6 +2653,44 @@ begin
   finally
     FRecentsList.Items.EndUpdate;
   end;
+  RefreshManagerGrid;
+end;
+
+procedure TMmenuMainForm.RefreshManagerGrid;
+var
+  I, Row: Integer;
+  HasAny, ExistsOk: Boolean;
+begin
+  if FManagerGrid = nil then Exit;
+  HasAny := Length(FRecents) > 0;
+  if FBtnMgrOpenSel <> nil then FBtnMgrOpenSel.Enabled := HasAny;
+  if FBtnMgrLocate <> nil then FBtnMgrLocate.Enabled := HasAny;
+  if FBtnMgrRemove <> nil then FBtnMgrRemove.Enabled := HasAny;
+
+  if not HasAny then
+  begin
+    FManagerGrid.RowCount := 2;
+    for I := 0 to FManagerGrid.ColCount - 1 do
+      FManagerGrid.Cells[I, 1] := '';
+    FManagerGrid.Cells[0, 1] := '(nenhuma producao recente)';
+    Exit;
+  end;
+
+  FManagerGrid.RowCount := Length(FRecents) + 1;
+  for I := 0 to High(FRecents) do
+  begin
+    Row := I + 1;
+    ExistsOk := FileExists(IncludeTrailingPathDelimiter(FRecents[I].RootDir) + MMP_PRODUCTION_FILE);
+    FManagerGrid.Cells[0, Row] := FRecents[I].Title;
+    FManagerGrid.Cells[1, Row] := FRecents[I].ProductionId;
+    if ExistsOk then
+      FManagerGrid.Cells[2, Row] := 'Disponivel'
+    else
+      FManagerGrid.Cells[2, Row] := 'Movida / Ausente';
+    FManagerGrid.Cells[3, Row] := FRecents[I].RootDir;
+  end;
+  if (FManagerGrid.Row < 1) or (FManagerGrid.Row >= FManagerGrid.RowCount) then
+    FManagerGrid.Row := 1;
 end;
 
 function TMmenuMainForm.FindExecutable(const AppName: string): string;
@@ -2185,7 +2716,8 @@ function TMmenuMainForm.LaunchApplication(AppIdx: Integer;
 var
   Executable, ArgLine, ProjDir, LockInfo, EffProjId, EffRevId: string;
   P: TProcess;
-  I: Integer;
+  I, K, AskRes: Integer;
+  Eval, UpEval: TMmpStageStatus;
 begin
   Result := False;
   if (AppIdx < 1) or (AppIdx > 6) then
@@ -2203,6 +2735,42 @@ begin
       mtInformation, [mbOK], 0);
     Exit;
   end;
+
+  Eval := MmpEvaluateStageStatus(FProd, AppIdx);
+  if not Eval.CanOpen then
+  begin
+    LogMsg('Bloqueado ' + MmpAppNames[AppIdx] + ': etapas anteriores nao geradas (' + Eval.MissingPrereqs + ').');
+    MessageDlg('Nao e possivel abrir ' + MmpAppNames[AppIdx] + ' ainda.' + LineEnding + LineEnding +
+      'Etapa(s) anterior(es) ainda nao gerada(s): ' + Eval.MissingPrereqs + '.' + LineEnding +
+      'Execute e salve as etapas na ordem da suite antes de continuar.',
+      mtWarning, [mbOK], 0);
+    Exit;
+  end;
+
+  for K := 1 to AppIdx - 1 do
+  begin
+    UpEval := MmpEvaluateStageStatus(FProd, K);
+    if UpEval.NeedsAdjustment then
+    begin
+      AskRes := MessageDlg(
+        'A etapa anterior "' + MmpAppNames[K] + '" tambem precisa ser reajustada (' +
+        UpEval.StaleReason + ').' + LineEnding + LineEnding +
+        'Deseja abrir ' + MmpAppNames[K] + ' primeiro para reajustar em ordem?' + LineEnding +
+        '(Clique em Nao para abrir ' + MmpAppNames[AppIdx] + ' diretamente.)',
+        mtConfirmation, [mbYes, mbNo, mbCancel], 0);
+      if AskRes = mrYes then
+      begin
+        Result := LaunchApplication(K, '', '');
+        Exit;
+      end
+      else if AskRes <> mrNo then
+        Exit;
+      Break;
+    end;
+  end;
+
+  if Eval.NeedsAdjustment then
+    LogMsg('Abrindo ' + MmpAppNames[AppIdx] + ' para reajuste: ' + Eval.StaleReason);
 
   EffProjId := Trim(ProjectId);
   EffRevId := Trim(RevisionId);
@@ -2236,6 +2804,18 @@ begin
   end;
   if EffRevId = '' then
     EffRevId := 'r0001';
+
+  if IsAppInstanceRunning(AppIndexToEnum(AppIdx)) then
+  begin
+    FocusAppInstanceWindow(AppIndexToEnum(AppIdx));
+    LogMsg('Instancia unica: ' + MmpAppNames[AppIdx] + ' ja esta em execucao.');
+    SetStatus(MmpAppNames[AppIdx] + ' ja esta aberto.', 100);
+    MessageDlg('O aplicativo ' + MmpAppNames[AppIdx] +
+      ' ja esta em execucao (permitida apenas 1 instancia).' + LineEnding +
+      'A janela existente foi trazida para frente.',
+      mtInformation, [mbOK], 0);
+    Exit;
+  end;
 
   ProjDir := IncludeTrailingPathDelimiter(FProd.RootDir) + 'projects' +
     PathDelim + MmpAppFolders[AppIdx];
@@ -2271,6 +2851,9 @@ begin
 
     try
       P.Execute;
+      AppendJsonLogLine(FProd.RootDir, 'MMenu', 'info',
+        'Iniciado ' + MmpAppNames[AppIdx] + ' (projeto ' + EffProjId +
+        ', revisao ' + EffRevId + ')');
       LogMsg('Iniciado (MMenu v' + MAURINMOVIE_VERSION + ', proj=' + EffProjId +
         ', rev=' + EffRevId + '): ' + ArgLine);
       SetStatus(MmpAppNames[AppIdx] + ' iniciado (projeto ' + EffProjId +
@@ -2290,11 +2873,13 @@ begin
 end;
 
 procedure TMmenuMainForm.OpenProductionPath(const PathOrJson: string;
-  CheckHashes: Boolean);
+  CheckHashes: Boolean; ShowIntegrityAlert: Boolean);
 var
   LoadedProd: TMmpProduction;
+  I, MaxShow: Integer;
+  WarnLines: string;
 begin
-  SetStatus('Carregando producao...', 20);
+  SetStatus('Verificando integridade e carregando producao...', 20);
   Application.ProcessMessages;
 
   if LoadProduction(PathOrJson, CheckHashes, LoadedProd) then
@@ -2305,23 +2890,63 @@ begin
     SaveConfig;
     LogMsg('Producao carregada: "' + FProd.Title + '" (' + FProd.ProductionId +
       ') em ' + FProd.RootDir + ' | ' + FProd.OverallStatusText);
-    AppendJsonLogLine(FProd.RootDir, 'MMenu', 'info', 'Producao aberta: ' + FProd.Title);
+    AppendJsonLogLine(FProd.RootDir, 'MMenu', 'info',
+      'Producao aberta (hashCheck=' + BoolToStr(CheckHashes, True) + '): ' + FProd.Title);
+    if CheckHashes and (not FProd.HasFailures) then
+      LogMsg('Verificacao de integridade OK: ' + IntToStr(Length(FProd.Artifacts)) + ' artefato(s) integro(s).');
     SetStatus('Producao carregada: ' + FProd.Title, 100);
+    RefreshAllViews;
+
+    if FProd.HasFailures and ShowIntegrityAlert then
+    begin
+      WarnLines := '';
+      MaxShow := Length(FProd.MissingLinks);
+      if MaxShow > 6 then MaxShow := 6;
+      for I := 0 to MaxShow - 1 do
+        WarnLines := WarnLines + '• [' + FProd.MissingLinks[I].AppName + ' / ' +
+          FProd.MissingLinks[I].Status + '] ' + FProd.MissingLinks[I].Detail + LineEnding;
+      if Length(FProd.MissingLinks) > 6 then
+        WarnLines := WarnLines + '... e mais ' + IntToStr(Length(FProd.MissingLinks) - 6) + ' ocorrencia(s).' + LineEnding;
+      if WarnLines = '' then
+        WarnLines := '• Existem falhas registradas em sincronizacoes ou manifestos.' + LineEnding;
+
+      LogMsg('ALERTA DE INTEGRIDADE ao abrir "' + FProd.Title + '": ' +
+        IntToStr(Length(FProd.MissingLinks)) + ' problema(s) encontrado(s).');
+      FPageControl.ActivePage := FTabSync;
+      MessageDlg('A verificacao de integridade detectou problemas ao abrir "' + FProd.Title + '":' +
+        LineEnding + LineEnding + WarnLines + LineEnding +
+        'Confira os detalhes na aba Sincronizacoes & Pendencias.',
+        mtWarning, [mbOK], 0);
+    end;
   end
   else
   begin
-    FProd := LoadedProd;
-    LogMsg('FALHA ao abrir producao: ' + FProd.ErrorMessage);
-    SetStatus(FProd.ErrorMessage, 0);
+    Finalize(FProd);
+    FillChar(FProd, SizeOf(FProd), 0);
+    FSelectedProjectIndex := -1;
+    SetLength(FVisibleProjectIndices, 0);
+    LogMsg('FALHA DE INTEGRIDADE ao abrir producao: ' + LoadedProd.ErrorMessage);
+    SetStatus(LoadedProd.ErrorMessage, 0);
+    RefreshAllViews;
+    if ShowIntegrityAlert then
+      MessageDlg('Nao foi possivel abrir a producao porque os arquivos de controle estao ausentes ou corrompidos:' +
+        LineEnding + LineEnding + LoadedProd.ErrorMessage,
+        mtError, [mbOK], 0);
   end;
-
-  RefreshAllViews;
 end;
 
 procedure TMmenuMainForm.RefreshAllViews;
+var
+  I, VisibleProjCount: Integer;
+  Eval: TMmpStageStatus;
+  TagSuffix: string;
 begin
   if FProd.Loaded then
   begin
+    VisibleProjCount := 0;
+    for I := 0 to High(FProd.Projects) do
+      if MmpProjectHasActivity(FProd.Projects[I]) then
+        Inc(VisibleProjCount);
     FHeaderProdLabel.Caption := FProd.Title + '  (' + FProd.ProductionId + ')';
     FHeaderStatusBadge.Caption := FProd.OverallStatusText;
     if FProd.HasFailures then
@@ -2357,7 +2982,7 @@ begin
     FSummaryLabel.Caption := Format(
       'Projetos: %d  •  Artefatos: %d' + LineEnding +
       'Sync: %d  •  Alertas: %d',
-      [Length(FProd.Projects), Length(FProd.Artifacts),
+      [VisibleProjCount, Length(FProd.Artifacts),
        Length(FProd.SyncJobs), Length(FProd.MissingLinks)]);
   end
   else
@@ -2378,17 +3003,68 @@ begin
     FSummaryLabel.Caption := 'Abra ou crie uma producao.';
   end;
 
+  if FMenuCloseProd <> nil then FMenuCloseProd.Enabled := FProd.Loaded;
+  if FMenuAplicativos <> nil then
+  begin
+    FMenuAplicativos.Enabled := FProd.Loaded;
+    for I := 0 to FMenuAplicativos.Count - 1 do
+    begin
+      if (I + 1 >= 1) and (I + 1 <= 6) then
+      begin
+        if FProd.Loaded then
+        begin
+          Eval := MmpEvaluateStageStatus(FProd, I + 1);
+          FMenuAplicativos.Items[I].Enabled := Eval.CanOpen;
+          if not Eval.CanOpen then
+            TagSuffix := ' [Bloqueado]'
+          else if Eval.NeedsAdjustment then
+            TagSuffix := ' [Reajustar]'
+          else
+            TagSuffix := '';
+        end
+        else
+        begin
+          FMenuAplicativos.Items[I].Enabled := False;
+          TagSuffix := '';
+        end;
+        FMenuAplicativos.Items[I].Caption := IntToStr(I + 1) + ' - ' +
+          MmpAppNames[I + 1] + ' (' + MmpAppDescriptions[I + 1] + ')' + TagSuffix;
+      end;
+    end;
+  end;
+  if FMenuExibir <> nil then FMenuExibir.Enabled := FProd.Loaded;
+  if FMenuFerramentas <> nil then FMenuFerramentas.Enabled := FProd.Loaded;
+  if FMenuConfig <> nil then FMenuConfig.Enabled := IsAdminAllowed;
+  if FMenuSwitchUser <> nil then FMenuSwitchUser.Enabled := (FSettings.AccessMode = amRestricted);
+  if FHeaderGearPanel <> nil then FHeaderGearPanel.Enabled := IsAdminAllowed;
+  if FExeVersionLabel <> nil then
+  begin
+    if FSettings.AccessMode = amRestricted then
+      FExeVersionLabel.Caption := 'Suite v' + MMP_EXECUTABLE_VERSION + '  •  Usuario: ' +
+        CurrentSessionUserName + ' (' + MmpUserProfileToStr(FCurrentUser.Profile) + ')'
+    else
+      FExeVersionLabel.Caption := 'Suite v' + MMP_EXECUTABLE_VERSION + '  •  Acesso Aberto';
+  end;
+  if FBtnCloseProdHead <> nil then FBtnCloseProdHead.Enabled := FProd.Loaded;
+  if FBtnCloseProdSide <> nil then FBtnCloseProdSide.Enabled := FProd.Loaded;
+  if FManagerPanel <> nil then FManagerPanel.Visible := not FProd.Loaded;
+  if FPageControl <> nil then FPageControl.Visible := FProd.Loaded;
+
+  RefreshManagerGrid;
   RefreshPortalCards;
+  RefreshHistoryTab;
   RefreshProjectsGrid;
   RefreshSyncTab;
   RefreshArtifactsGrid;
+  RefreshCentralLogTab;
 end;
 
 procedure TMmenuMainForm.RefreshPortalCards;
 var
   I, PIdx: Integer;
   ProjId, RevStr, StatusStr, ExePath: string;
-  IsBlue: Boolean;
+  IsBlue, ExeOk: Boolean;
+  Eval: TMmpStageStatus;
 begin
   for I := 1 to 6 do
   begin
@@ -2396,41 +3072,35 @@ begin
     ProjId := '-';
     RevStr := '-';
     StatusStr := 'sem producao';
+    FillChar(Eval, SizeOf(Eval), 0);
+
     if FProd.Loaded then
     begin
+      Eval := MmpEvaluateStageStatus(FProd, I);
       for PIdx := 0 to High(FProd.Projects) do
       begin
         if (FProd.Projects[PIdx].SoftwareIndex = I) and
            (FProd.Projects[PIdx].SceneId = '') then
         begin
           ProjId := FProd.Projects[PIdx].ProjectId;
-          RevStr := FProd.Projects[PIdx].ActiveRevision;
-          StatusStr := FProd.Projects[PIdx].Status;
           Break;
         end;
       end;
+      if Eval.HasActivity then
+      begin
+        RevStr := 'Versao ' + IntToStr(RevisionVersionNumber(Eval.ActiveRevision)) +
+          ' (' + Eval.ActiveRevision + ')';
+        StatusStr := Eval.StatusText;
+      end;
     end;
 
-    if FProd.Loaded then
-    begin
-      FCardProjInfoLabels[I].Caption := Format('Revisao: %s  •  Estado: %s', [RevStr, StatusStr]);
-      FCardProjInfoLabels[I].Hint := 'Project ID: ' + ProjId;
-      FCardActionSubLabels[I] := RevStr + '  •  ' + StatusStr;
-    end
-    else
-    begin
-      FCardProjInfoLabels[I].Caption := 'Abra ou crie uma producao para editar';
-      FCardProjInfoLabels[I].Hint := '';
-      FCardActionSubLabels[I] := 'Sem producao';
-    end;
-
+    ExeOk := True;
     ExePath := FAppPaths[I];
     if (ExePath <> '') and FileExists(ExePath) then
     begin
       FCardExeInfoLabels[I].Caption := 'Executavel configurado (' + ExtractFileName(ExePath) + ')';
       if IsBlue then FCardExeInfoLabels[I].Font.Color := CLR_ICE_SUB
       else FCardExeInfoLabels[I].Font.Color := CLR_STATUS_OK;
-      FCardActionOkFlag[I] := 1;
     end
     else
     begin
@@ -2440,13 +3110,70 @@ begin
         FCardExeInfoLabels[I].Caption := 'Pronto (' + ExtractFileName(ExePath) + ')';
         if IsBlue then FCardExeInfoLabels[I].Font.Color := CLR_ICE_SUB
         else FCardExeInfoLabels[I].Font.Color := CLR_BLUE_PRIMARY;
-        FCardActionOkFlag[I] := 1;
       end
       else
       begin
         FCardExeInfoLabels[I].Caption := 'Executavel nao encontrado (configure na engrenagem)';
         if IsBlue then FCardExeInfoLabels[I].Font.Color := $00B0C4FF
         else FCardExeInfoLabels[I].Font.Color := CLR_STATUS_ERR;
+        ExeOk := False;
+      end;
+    end;
+
+    if FProd.Loaded then
+    begin
+      FCardProjInfoLabels[I].Hint := 'Project ID: ' + ProjId;
+      if not ExeOk then
+      begin
+        FCardActionOkFlag[I] := -1;
+        FCardActionLabels[I] := 'Abrir ' + MmpAppNames[I];
+        FCardActionSubLabels[I] := 'Exe ausente';
+        if Eval.HasActivity then
+          FCardProjInfoLabels[I].Caption := Format('%s  •  Estado: %s', [RevStr, StatusStr])
+        else
+          FCardProjInfoLabels[I].Caption := 'Nao iniciado';
+      end
+      else if not Eval.CanOpen then
+      begin
+        FCardActionOkFlag[I] := -2;
+        FCardActionLabels[I] := 'Bloqueado';
+        FCardActionSubLabels[I] := 'Falta ' + Eval.MissingPrereqs;
+        FCardProjInfoLabels[I].Caption := 'Bloqueado: gere ' + Eval.MissingPrereqs + ' primeiro';
+      end
+      else if Eval.NeedsAdjustment then
+      begin
+        FCardActionOkFlag[I] := 2;
+        FCardActionLabels[I] := 'Reajustar ' + MmpAppNames[I];
+        FCardActionSubLabels[I] := 'Requer reajuste';
+        FCardProjInfoLabels[I].Caption := 'REAJUSTE: ' + Eval.StaleReason;
+      end
+      else if Eval.HasActivity then
+      begin
+        FCardActionOkFlag[I] := 1;
+        FCardActionLabels[I] := 'Abrir ' + MmpAppNames[I];
+        FCardActionSubLabels[I] := RevStr + '  •  ' + StatusStr;
+        FCardProjInfoLabels[I].Caption := Format('%s  •  Estado: %s', [RevStr, StatusStr]);
+      end
+      else
+      begin
+        FCardActionOkFlag[I] := 1;
+        FCardActionLabels[I] := 'Iniciar ' + MmpAppNames[I];
+        FCardActionSubLabels[I] := 'Pronto para iniciar';
+        FCardProjInfoLabels[I].Caption := 'Etapas anteriores OK  •  Pronto para criar';
+      end;
+    end
+    else
+    begin
+      FCardProjInfoLabels[I].Caption := 'Abra ou crie uma producao para editar';
+      FCardProjInfoLabels[I].Hint := '';
+      FCardActionLabels[I] := 'Abrir ' + MmpAppNames[I];
+      if ExeOk then
+      begin
+        FCardActionOkFlag[I] := 1;
+        FCardActionSubLabels[I] := 'Sem producao';
+      end
+      else
+      begin
         FCardActionOkFlag[I] := -1;
         FCardActionSubLabels[I] := 'Exe ausente';
       end;
@@ -2459,8 +3186,10 @@ end;
 
 procedure TMmenuMainForm.RefreshProjectsGrid;
 var
-  I, Row: Integer;
+  I, Row, SelGridRow: Integer;
+  Eval: TMmpStageStatus;
 begin
+  SetLength(FVisibleProjectIndices, 0);
   if (not FProd.Loaded) or (Length(FProd.Projects) = 0) then
   begin
     FProjectsGrid.RowCount := 2;
@@ -2471,23 +3200,60 @@ begin
     Exit;
   end;
 
-  FProjectsGrid.RowCount := Length(FProd.Projects) + 1;
   for I := 0 to High(FProd.Projects) do
+    if MmpProjectHasActivity(FProd.Projects[I]) then
+    begin
+      Row := Length(FVisibleProjectIndices);
+      SetLength(FVisibleProjectIndices, Row + 1);
+      FVisibleProjectIndices[Row] := I;
+    end;
+
+  if Length(FVisibleProjectIndices) = 0 then
   begin
-    Row := I + 1;
-    FProjectsGrid.Cells[0, Row] := FProd.Projects[I].AppName;
-    FProjectsGrid.Cells[1, Row] := FProd.Projects[I].ProjectId;
-    FProjectsGrid.Cells[2, Row] := FProd.Projects[I].SceneId;
-    FProjectsGrid.Cells[3, Row] := FProd.Projects[I].ActiveRevision;
-    FProjectsGrid.Cells[4, Row] := FProd.Projects[I].Status;
-    FProjectsGrid.Cells[5, Row] := FProd.Projects[I].UpdatedAt;
-    FProjectsGrid.Cells[6, Row] := FProd.Projects[I].IntegrityMessage;
-    FProjectsGrid.Cells[7, Row] := FProd.Projects[I].ProjectFilePath;
+    FProjectsGrid.RowCount := 2;
+    for I := 0 to FProjectsGrid.ColCount - 1 do
+      FProjectsGrid.Cells[I, 1] := '';
+    FSelectedProjectIndex := -1;
+    RefreshSelectedProjectDetails;
+    Exit;
   end;
 
-  if (FSelectedProjectIndex < 0) or (FSelectedProjectIndex > High(FProd.Projects)) then
-    FSelectedProjectIndex := 0;
-  FProjectsGrid.Row := FSelectedProjectIndex + 1;
+  FProjectsGrid.RowCount := Length(FVisibleProjectIndices) + 1;
+  SelGridRow := -1;
+  for I := 0 to High(FVisibleProjectIndices) do
+  begin
+    Row := I + 1;
+    with FProd.Projects[FVisibleProjectIndices[I]] do
+    begin
+      FProjectsGrid.Cells[0, Row] := AppName;
+      FProjectsGrid.Cells[1, Row] := ProjectId;
+      FProjectsGrid.Cells[2, Row] := SceneId;
+      FProjectsGrid.Cells[3, Row] := 'Versao ' + IntToStr(RevisionVersionNumber(ActiveRevision)) +
+        ' (' + ActiveRevision + ')';
+      FProjectsGrid.Cells[4, Row] := Status;
+      FProjectsGrid.Cells[5, Row] := UpdatedAt;
+      if (SoftwareIndex >= 1) and (SoftwareIndex <= 6) then
+      begin
+        Eval := MmpEvaluateStageStatus(FProd, SoftwareIndex);
+        if Eval.NeedsAdjustment then
+          FProjectsGrid.Cells[6, Row] := IntegrityMessage + ' | Reajuste necessario (' + Eval.StaleReason + ')'
+        else
+          FProjectsGrid.Cells[6, Row] := IntegrityMessage;
+      end
+      else
+        FProjectsGrid.Cells[6, Row] := IntegrityMessage;
+      FProjectsGrid.Cells[7, Row] := ProjectFilePath;
+    end;
+    if FVisibleProjectIndices[I] = FSelectedProjectIndex then
+      SelGridRow := Row;
+  end;
+
+  if SelGridRow < 0 then
+  begin
+    FSelectedProjectIndex := FVisibleProjectIndices[0];
+    SelGridRow := 1;
+  end;
+  FProjectsGrid.Row := SelGridRow;
   RefreshSelectedProjectDetails;
 end;
 
@@ -2551,11 +3317,18 @@ begin
   FBtnRelinkProject.Enabled := True;
 
   for I := 0 to High(Proj.Revisions) do
-    FRevCombo.Items.Add(Proj.Revisions[I].RevisionId);
+    FRevCombo.Items.Add('Versao ' + IntToStr(RevisionVersionNumber(Proj.Revisions[I].RevisionId)) +
+      ' (' + Proj.Revisions[I].RevisionId + ')');
 
   if FRevCombo.Items.Count > 0 then
   begin
-    RevIdx := FRevCombo.Items.IndexOf(Proj.ActiveRevision);
+    RevIdx := -1;
+    for I := 0 to High(Proj.Revisions) do
+      if SameText(Proj.Revisions[I].RevisionId, Proj.ActiveRevision) then
+      begin
+        RevIdx := I;
+        Break;
+      end;
     if RevIdx < 0 then RevIdx := 0;
     FRevCombo.ItemIndex := RevIdx;
   end;
@@ -2695,6 +3468,204 @@ begin
   end;
 end;
 
+procedure TMmenuMainForm.RefreshHistoryTab;
+var
+  StageDoneCount, RevCount, I: Integer;
+  Eval: TMmpStageStatus;
+  LatestStr: string;
+begin
+  SetLength(FHistoryEntries, 0);
+  SetLength(FHistoryFilteredIndices, 0);
+
+  if not FProd.Loaded then
+  begin
+    FHistorySummaryLabel.Caption := 'Nenhuma producao aberta.';
+    PopulateHistoryGrid;
+    Exit;
+  end;
+
+  FHistoryEntries := MmpLoadProductionHistory(FProd);
+
+  StageDoneCount := 0;
+  for I := 1 to 6 do
+  begin
+    Eval := MmpEvaluateStageStatus(FProd, I);
+    if Eval.HasActivity then
+      Inc(StageDoneCount);
+  end;
+
+  RevCount := 0;
+  for I := 0 to High(FHistoryEntries) do
+    if SameText(FHistoryEntries[I].Kind, 'Revisao') then
+      Inc(RevCount);
+
+  if Length(FHistoryEntries) > 0 then
+    LatestStr := FHistoryEntries[0].AppName + ' (' + FHistoryEntries[0].Timestamp + ')'
+  else
+    LatestStr := 'nenhuma ainda';
+
+  FHistorySummaryLabel.Caption := Format(
+    'Etapas concluidas: %d/6  |  Versoes publicadas: %d  |  Eventos registrados: %d  |  Ultima acao: %s',
+    [StageDoneCount, RevCount, Length(FHistoryEntries), LatestStr]);
+
+  PopulateHistoryGrid;
+end;
+
+procedure TMmenuMainForm.PopulateHistoryGrid;
+var
+  AppF, KindF, SearchF, VerStr: string;
+  I, Row, N: Integer;
+  MatchApp, MatchKind, MatchSearch: Boolean;
+begin
+  SetLength(FHistoryFilteredIndices, 0);
+  AppF := '';
+  if FHistoryAppFilter.ItemIndex > 0 then
+    AppF := FHistoryAppFilter.Text;
+  KindF := '';
+  if FHistoryKindFilter.ItemIndex > 0 then
+    KindF := FHistoryKindFilter.Text;
+  SearchF := LowerCase(Trim(FHistorySearchEdit.Text));
+
+  for I := 0 to High(FHistoryEntries) do
+  begin
+    MatchApp := (AppF = '') or SameText(FHistoryEntries[I].AppName, AppF);
+    MatchKind := (KindF = '') or SameText(FHistoryEntries[I].Kind, KindF);
+    MatchSearch := (SearchF = '') or
+      (Pos(SearchF, LowerCase(FHistoryEntries[I].Summary)) > 0) or
+      (Pos(SearchF, LowerCase(FHistoryEntries[I].Details)) > 0) or
+      (Pos(SearchF, LowerCase(FHistoryEntries[I].RevisionId)) > 0) or
+      (Pos(SearchF, LowerCase(FHistoryEntries[I].AppName)) > 0);
+    if MatchApp and MatchKind and MatchSearch then
+    begin
+      N := Length(FHistoryFilteredIndices);
+      SetLength(FHistoryFilteredIndices, N + 1);
+      FHistoryFilteredIndices[N] := I;
+    end;
+  end;
+
+  if Length(FHistoryFilteredIndices) = 0 then
+  begin
+    FHistoryGrid.RowCount := 2;
+    for I := 0 to FHistoryGrid.ColCount - 1 do
+      FHistoryGrid.Cells[I, 1] := '';
+    FHistoryDetailMemo.Lines.Text := 'Nenhum registro encontrado para os filtros atuais.';
+    Exit;
+  end;
+
+  FHistoryGrid.RowCount := Length(FHistoryFilteredIndices) + 1;
+  for I := 0 to High(FHistoryFilteredIndices) do
+  begin
+    Row := I + 1;
+    N := FHistoryFilteredIndices[I];
+    FHistoryGrid.Cells[0, Row] := FHistoryEntries[N].Timestamp;
+    FHistoryGrid.Cells[1, Row] := FHistoryEntries[N].AppName;
+    FHistoryGrid.Cells[2, Row] := FHistoryEntries[N].Kind;
+    if (FHistoryEntries[N].RevisionId <> '') and (FHistoryEntries[N].RevisionId <> '-') then
+      VerStr := 'v' + IntToStr(RevisionVersionNumber(FHistoryEntries[N].RevisionId)) +
+        ' (' + FHistoryEntries[N].RevisionId + ')'
+    else
+      VerStr := '-';
+    FHistoryGrid.Cells[3, Row] := VerStr;
+    FHistoryGrid.Cells[4, Row] := FHistoryEntries[N].State;
+    FHistoryGrid.Cells[5, Row] := FHistoryEntries[N].Summary;
+  end;
+
+  FHistoryGrid.Row := 1;
+  OnHistoryGridSelection(FHistoryGrid, 0, 1);
+end;
+
+procedure TMmenuMainForm.OnHistoryFilterChange(Sender: TObject);
+begin
+  PopulateHistoryGrid;
+  if Sender <> nil then;
+end;
+
+procedure TMmenuMainForm.OnHistoryGridSelection(Sender: TObject; aCol, aRow: Integer);
+var
+  Idx, EntryIdx: Integer;
+begin
+  Idx := aRow - 1;
+  if (Idx < 0) or (Idx > High(FHistoryFilteredIndices)) then
+  begin
+    FHistoryDetailMemo.Lines.Clear;
+    Exit;
+  end;
+  EntryIdx := FHistoryFilteredIndices[Idx];
+  if (EntryIdx >= 0) and (EntryIdx <= High(FHistoryEntries)) then
+    FHistoryDetailMemo.Lines.Text := FHistoryEntries[EntryIdx].Details
+  else
+    FHistoryDetailMemo.Lines.Clear;
+  if Sender <> nil then;
+  if aCol >= 0 then;
+end;
+
+procedure TMmenuMainForm.OnExportHistoryClick(Sender: TObject);
+var
+  D: TSaveDialog;
+  Lines: TStringList;
+  I, EntryIdx: Integer;
+  IsMd: Boolean;
+begin
+  if not FProd.Loaded then Exit;
+  D := TSaveDialog.Create(Self);
+  Lines := TStringList.Create;
+  try
+    D.Title := 'Exportar Historico & Controle';
+    D.Filter := 'Markdown (*.md)|*.md|Texto (*.txt)|*.txt';
+    D.DefaultExt := 'md';
+    D.FileName := 'historico_' + FProd.ProductionId + '.md';
+    if not D.Execute then Exit;
+
+    IsMd := SameText(ExtractFileExt(D.FileName), '.md');
+    if IsMd then
+    begin
+      Lines.Add('# Historico & Controle - ' + FProd.Title);
+      Lines.Add('');
+      Lines.Add('- Production ID: `' + FProd.ProductionId + '`');
+      Lines.Add('- ' + FHistorySummaryLabel.Caption);
+      Lines.Add('');
+      Lines.Add('| Data/Hora | Etapa/App | Tipo | Versao | Estado | Resumo |');
+      Lines.Add('|---|---|---|---|---|---|');
+    end
+    else
+    begin
+      Lines.Add('Historico & Controle - ' + FProd.Title + ' (' + FProd.ProductionId + ')');
+      Lines.Add(FHistorySummaryLabel.Caption);
+      Lines.Add(StringOfChar('-', 80));
+    end;
+
+    for I := 0 to High(FHistoryFilteredIndices) do
+    begin
+      EntryIdx := FHistoryFilteredIndices[I];
+      if IsMd then
+        Lines.Add('| ' + FHistoryEntries[EntryIdx].Timestamp + ' | ' +
+          FHistoryEntries[EntryIdx].AppName + ' | ' +
+          FHistoryEntries[EntryIdx].Kind + ' | ' +
+          FHistoryEntries[EntryIdx].RevisionId + ' | ' +
+          FHistoryEntries[EntryIdx].State + ' | ' +
+          StringReplace(FHistoryEntries[EntryIdx].Summary, '|', '/', [rfReplaceAll]) + ' |')
+      else
+      begin
+        Lines.Add('[' + FHistoryEntries[EntryIdx].Timestamp + '] [' +
+          FHistoryEntries[EntryIdx].AppName + ' / ' + FHistoryEntries[EntryIdx].Kind + '] ' +
+          FHistoryEntries[EntryIdx].RevisionId + ' (' + FHistoryEntries[EntryIdx].State + '): ' +
+          FHistoryEntries[EntryIdx].Summary);
+        if FHistoryEntries[EntryIdx].Details <> '' then
+          Lines.Add(FHistoryEntries[EntryIdx].Details);
+        Lines.Add('');
+      end;
+    end;
+
+    Lines.SaveToFile(D.FileName);
+    LogMsg('Historico exportado para: ' + D.FileName);
+    SetStatus('Historico exportado com sucesso.', 100);
+  finally
+    Lines.Free;
+    D.Free;
+  end;
+  if Sender <> nil then;
+end;
+
 procedure TMmenuMainForm.OnNewProductionClick(Sender: TObject);
 var
   Title, CreatedRoot, ErrMsg: string;
@@ -2720,7 +3691,7 @@ begin
     begin
       FDefaultProductionsDir := DirDlg.FileName;
       LogMsg('Nova producao criada em: ' + CreatedRoot);
-      OpenProductionPath(CreatedRoot, False);
+      OpenProductionPath(CreatedRoot, True, True);
     end
     else
     begin
@@ -2738,38 +3709,63 @@ var
 begin
   D := TOpenDialog.Create(Self);
   try
-    D.Title := 'Selecione production.json da producao';
-    D.Filter := 'Projeto MaurinMovie (production.json)|production.json|JSON (*.json)|*.json';
+    D.Title := 'Selecione maurinmovie.db ou production.json da producao';
+    D.Filter := 'Banco SQLite / Producao (maurinmovie.db;production.json)|maurinmovie.db;production.json|Banco SQLite (*.db)|*.db|JSON (*.json)|*.json';
     D.Options := [ofFileMustExist, ofPathMustExist];
     if DirectoryExists(FDefaultProductionsDir) then
       D.InitialDir := FDefaultProductionsDir;
     if D.Execute then
     begin
-      if not SameText(ExtractFileName(D.FileName), 'production.json') then
+      if (not SameText(ExtractFileName(D.FileName), MMP_DB_FILENAME)) and
+         (not SameText(ExtractFileName(D.FileName), 'production.json')) then
       begin
-        MessageDlg('Selecione o arquivo production.json da producao.', mtWarning, [mbOK], 0);
+        MessageDlg('Selecione maurinmovie.db ou production.json da producao.', mtWarning, [mbOK], 0);
         Exit;
       end;
-      OpenProductionPath(D.FileName, False);
+      OpenProductionPath(D.FileName, True, True);
     end;
   finally
     D.Free;
   end;
 end;
 
+procedure TMmenuMainForm.OnCloseProductionClick(Sender: TObject);
+var
+  OldTitle: string;
+begin
+  if not FProd.Loaded then Exit;
+  OldTitle := FProd.Title;
+  Finalize(FProd);
+  FillChar(FProd, SizeOf(FProd), 0);
+  FSelectedProjectIndex := -1;
+  SetLength(FVisibleProjectIndices, 0);
+  FSettings.Load('', maMMenu);
+  SaveConfig;
+  RefreshAllViews;
+  LogMsg('Producao fechada: ' + OldTitle + '. Nenhuma producao ativa.');
+  SetStatus('Nenhuma producao aberta.', 0);
+  if Sender <> nil then;
+end;
+
 procedure TMmenuMainForm.OnRefreshClick(Sender: TObject);
 begin
   if FProd.RootDir <> '' then
-    OpenProductionPath(FProd.RootDir, False)
+    OpenProductionPath(FProd.RootDir, True, False)
   else
+  begin
+    RefreshRecentsList;
     RefreshAllViews;
+  end;
 end;
 
 procedure TMmenuMainForm.OpenSettingsTab(const TabName: string);
 var
   Dlg: TMmenuSettingsForm;
   I: Integer;
+  NewUser: TMmpAccessUser;
+  DummyErr: string;
 begin
+  if not CheckAdminAccess('alterar Configuracoes e Controle de Acesso') then Exit;
   FSettings.Load(FProd.RootDir, maMMenu);
   Dlg := TMmenuSettingsForm.CreateForSettings(Self, FSettings, FProd.Loaded, TabName);
   try
@@ -2779,7 +3775,22 @@ begin
       for I := 1 to 6 do
         FAppPaths[I] := FSettings.GetAppExe(AppIndexToEnum(I));
       SaveConfig;
-      RefreshPortalCards;
+
+      if (FSettings.AccessMode = amRestricted) and (not FHasLoggedUser) then
+      begin
+        if PromptMMenuLogin(FSettings, NewUser) then
+        begin
+          FCurrentUser := NewUser;
+          FHasLoggedUser := True;
+        end
+        else
+        begin
+          FSettings.AccessMode := amOpen;
+          FSettings.SaveAccessControl(DummyErr);
+        end;
+      end;
+
+      RefreshAllViews;
       LogMsg('Configuracoes centralizadas salvas em ' + FConfigPath +
         IfThen(FProd.Loaded, ' e settings/', ''));
       if FProd.Loaded then
@@ -2796,15 +3807,11 @@ begin
   OpenSettingsTab('geral');
 end;
 
-procedure TMmenuMainForm.OnRecentDblClick(Sender: TObject);
-var
-  Idx: Integer;
+procedure TMmenuMainForm.OpenRecentByIndex(Idx: Integer);
 begin
-  Idx := FRecentsList.ItemIndex;
   if (Idx < 0) or (Idx > High(FRecents)) then Exit;
-
   if FileExists(FRecents[Idx].RootDir + PathDelim + 'production.json') then
-    OpenProductionPath(FRecents[Idx].RootDir, False)
+    OpenProductionPath(FRecents[Idx].RootDir, True, True)
   else
   begin
     MessageDlg('A pasta desta producao nao foi encontrada em:' + LineEnding +
@@ -2814,16 +3821,14 @@ begin
   end;
 end;
 
-procedure TMmenuMainForm.OnLocateMovedRecentClick(Sender: TObject);
+procedure TMmenuMainForm.LocateMovedRecentByIndex(Idx: Integer);
 var
-  Idx: Integer;
   DirDlg: TSelectDirectoryDialog;
   FoundRoot: string;
 begin
-  Idx := FRecentsList.ItemIndex;
   if (Idx < 0) or (Idx > High(FRecents)) then
   begin
-    MessageDlg('Selecione uma producao na lista de recentes.', mtInformation, [mbOK], 0);
+    MessageDlg('Selecione uma producao na lista.', mtInformation, [mbOK], 0);
     Exit;
   end;
   if FRecents[Idx].ProductionId = '' then
@@ -2841,7 +3846,7 @@ begin
     if FindProductionByIdInDir(DirDlg.FileName, FRecents[Idx].ProductionId, FoundRoot) then
     begin
       LogMsg('Producao movida localizada por ID em: ' + FoundRoot);
-      OpenProductionPath(FoundRoot, False);
+      OpenProductionPath(FoundRoot, True, True);
     end
     else
       MessageDlg('Nenhuma producao com ID ' + FRecents[Idx].ProductionId +
@@ -2851,18 +3856,57 @@ begin
   end;
 end;
 
-procedure TMmenuMainForm.OnRemoveRecentClick(Sender: TObject);
+procedure TMmenuMainForm.RemoveRecentByIndex(Idx: Integer);
 var
-  Idx, I: Integer;
+  I: Integer;
 begin
-  Idx := FRecentsList.ItemIndex;
   if (Idx < 0) or (Idx > High(FRecents)) then Exit;
-
   for I := Idx to High(FRecents) - 1 do
     FRecents[I] := FRecents[I + 1];
   SetLength(FRecents, Length(FRecents) - 1);
   RefreshRecentsList;
   SaveConfig;
+end;
+
+procedure TMmenuMainForm.OnRecentDblClick(Sender: TObject);
+begin
+  OpenRecentByIndex(FRecentsList.ItemIndex);
+end;
+
+procedure TMmenuMainForm.OnLocateMovedRecentClick(Sender: TObject);
+begin
+  LocateMovedRecentByIndex(FRecentsList.ItemIndex);
+end;
+
+procedure TMmenuMainForm.OnRemoveRecentClick(Sender: TObject);
+begin
+  if not CheckAdminAccess('remover producao dos recentes') then Exit;
+  RemoveRecentByIndex(FRecentsList.ItemIndex);
+end;
+
+procedure TMmenuMainForm.OnManagerGridDblClick(Sender: TObject);
+begin
+  if FManagerGrid <> nil then
+    OpenRecentByIndex(FManagerGrid.Row - 1);
+end;
+
+procedure TMmenuMainForm.OnManagerOpenSelectedClick(Sender: TObject);
+begin
+  if FManagerGrid <> nil then
+    OpenRecentByIndex(FManagerGrid.Row - 1);
+end;
+
+procedure TMmenuMainForm.OnManagerLocateClick(Sender: TObject);
+begin
+  if FManagerGrid <> nil then
+    LocateMovedRecentByIndex(FManagerGrid.Row - 1);
+end;
+
+procedure TMmenuMainForm.OnManagerRemoveClick(Sender: TObject);
+begin
+  if not CheckAdminAccess('remover producao da lista') then Exit;
+  if FManagerGrid <> nil then
+    RemoveRecentByIndex(FManagerGrid.Row - 1);
 end;
 
 procedure TMmenuMainForm.OnPortalOpenAppClick(Sender: TObject);
@@ -2891,30 +3935,37 @@ end;
 
 procedure TMmenuMainForm.OnPortalViewRevisionsClick(Sender: TObject);
 var
-  AppIdx, I: Integer;
+  AppIdx, I, RealIdx: Integer;
 begin
   AppIdx := (Sender as TComponent).Tag;
   FPageControl.ActivePage := FTabProjects;
   if not FProd.Loaded then Exit;
-  for I := 0 to High(FProd.Projects) do
+  for I := 0 to High(FVisibleProjectIndices) do
   begin
-    if (FProd.Projects[I].SoftwareIndex = AppIdx) and
-       (FProd.Projects[I].SceneId = '') then
+    RealIdx := FVisibleProjectIndices[I];
+    if (FProd.Projects[RealIdx].SoftwareIndex = AppIdx) and
+       (FProd.Projects[RealIdx].SceneId = '') then
     begin
-      FSelectedProjectIndex := I;
+      FSelectedProjectIndex := RealIdx;
       FProjectsGrid.Row := I + 1;
       RefreshSelectedProjectDetails;
-      Break;
+      Exit;
     end;
   end;
+  MessageDlg(MmpAppNames[AppIdx] + ' ainda nao possui revisoes criadas nesta producao.' +
+    LineEnding + 'Abra o aplicativo pelo Portal para gerar a primeira versao.',
+    mtInformation, [mbOK], 0);
 end;
 
 procedure TMmenuMainForm.OnProjectsGridSelection(Sender: TObject; aCol, aRow: Integer);
+var
+  VisIdx: Integer;
 begin
   if not FProd.Loaded then Exit;
-  if (aRow >= 1) and (aRow <= Length(FProd.Projects)) then
+  VisIdx := aRow - 1;
+  if (VisIdx >= 0) and (VisIdx <= High(FVisibleProjectIndices)) then
   begin
-    FSelectedProjectIndex := aRow - 1;
+    FSelectedProjectIndex := FVisibleProjectIndices[VisIdx];
     RefreshSelectedProjectDetails;
   end;
 end;
@@ -2935,8 +3986,8 @@ begin
      (FSelectedProjectIndex > High(FProd.Projects)) then Exit;
 
   Proj := FProd.Projects[FSelectedProjectIndex];
-  if FRevCombo.ItemIndex >= 0 then
-    RevId := FRevCombo.Text
+  if (FRevCombo.ItemIndex >= 0) and (FRevCombo.ItemIndex <= High(Proj.Revisions)) then
+    RevId := Proj.Revisions[FRevCombo.ItemIndex].RevisionId
   else
     RevId := Proj.ActiveRevision;
 
@@ -3045,6 +4096,17 @@ begin
     MessageDlg(ErrMsg, mtError, [mbOK], 0);
 end;
 
+function BuildProdFingerprint(const P: TMmpProduction): string;
+var
+  I: Integer;
+begin
+  Result := P.OverallStatusText + '|' + IntToStr(Length(P.SyncJobs)) + '|' +
+    IntToStr(Length(P.Artifacts)) + '|' + IntToStr(Length(P.MissingLinks));
+  for I := 0 to High(P.Projects) do
+    Result := Result + ';' + P.Projects[I].ProjectId + ':' + P.Projects[I].ActiveRevision +
+      ':' + P.Projects[I].Status + ':' + P.Projects[I].UpdatedAt;
+end;
+
 procedure TMmenuMainForm.OnMonitorTimer(Sender: TObject);
 var
   LoadedProd: TMmpProduction;
@@ -3055,9 +4117,7 @@ begin
   SavedSyncRow := FSyncJobsGrid.Row;
   if LoadProduction(FProd.RootDir, False, LoadedProd) then
   begin
-    if (Length(LoadedProd.SyncJobs) <> Length(FProd.SyncJobs)) or
-       (LoadedProd.OverallStatusText <> FProd.OverallStatusText) or
-       (Length(LoadedProd.Artifacts) <> Length(FProd.Artifacts)) then
+    if BuildProdFingerprint(LoadedProd) <> BuildProdFingerprint(FProd) then
     begin
       FProd := LoadedProd;
       RefreshAllViews;
@@ -3163,6 +4223,7 @@ procedure TMmenuMainForm.OnRebuildCatalogClick(Sender: TObject);
 var
   ErrMsg: string;
 begin
+  if not CheckAdminAccess('reconstruir catalog.json') then Exit;
   if not FProd.Loaded then
   begin
     MessageDlg('Abra ou crie uma producao primeiro.', mtInformation, [mbOK], 0);
@@ -3191,21 +4252,236 @@ end;
 procedure TMmenuMainForm.OnSaveLogClick(Sender: TObject);
 var
   D: TSaveDialog;
+  Lines: TStringList;
+  I: Integer;
 begin
   D := TSaveDialog.Create(Self);
+  Lines := TStringList.Create;
   try
-    D.Title := 'Salvar log operacional do MMenu';
+    D.Title := 'Exportar Log Centralizado do MMenu';
     D.Filter := 'Texto (*.txt)|*.txt|Log (*.log)|*.log';
     D.DefaultExt := 'log';
-    D.FileName := 'mmenu_' + FormatDateTime('yyyymmdd_hhnnss', Now) + '.log';
+    D.FileName := 'mmenu_central_' + FormatDateTime('yyyymmdd_hhnnss', Now) + '.log';
     if D.Execute then
     begin
-      FLogMemo.Lines.SaveToFile(D.FileName);
-      SetStatus('Log salvo em ' + D.FileName, 100);
+      Lines.Add(FLogSummaryLabel.Caption);
+      Lines.Add(StringOfChar('-', 80));
+      for I := 0 to High(FLogEntries) do
+      begin
+        Lines.Add(Format('[#%d] [%s] [%s] [%s] (%s): %s',
+          [FLogEntries[I].Id, FLogEntries[I].Timestamp, FLogEntries[I].AppName,
+           FLogEntries[I].Level, IfThen(FLogEntries[I].Resolved, 'CORRIGIDO', 'PENDENTE'),
+           FLogEntries[I].Message]));
+      end;
+      Lines.SaveToFile(D.FileName);
+      SetStatus('Log centralizado salvo em ' + D.FileName, 100);
     end;
   finally
+    Lines.Free;
     D.Free;
   end;
+end;
+
+function TMmenuMainForm.IsAdminAllowed: Boolean;
+begin
+  if FSettings = nil then Exit(True);
+  if FSettings.AccessMode = amOpen then Exit(True);
+  Result := FHasLoggedUser and (FCurrentUser.Profile = upAdministrador);
+end;
+
+function TMmenuMainForm.CheckAdminAccess(const ActionDesc: string): Boolean;
+begin
+  Result := IsAdminAllowed;
+  if not Result then
+    MessageDlg('Acesso restrito ao perfil Administrador.' + LineEnding +
+      'Operacao bloqueada para o perfil User: ' + ActionDesc + '.',
+      mtWarning, [mbOK], 0);
+end;
+
+function TMmenuMainForm.CurrentSessionUserName: string;
+begin
+  if (FSettings <> nil) and (FSettings.AccessMode = amRestricted) and FHasLoggedUser then
+    Result := FCurrentUser.Username
+  else if (FSettings <> nil) and (Trim(FSettings.UserName) <> '') then
+    Result := FSettings.UserName
+  else
+    Result := 'Aberto';
+end;
+
+procedure TMmenuMainForm.RefreshCentralLogTab;
+var
+  DbPath, AppF, LvlF, SearchF: string;
+  ResF, I, Row, ErrOpen, ResCount: Integer;
+begin
+  if FCentralLogGrid = nil then Exit;
+  if FProd.Loaded then
+    DbPath := MmpProductionDbPath(FProd.RootDir)
+  else
+    DbPath := MmpGlobalCentralLogDbPath;
+
+  AppF := '';
+  if FLogAppFilter.ItemIndex > 0 then AppF := FLogAppFilter.Text;
+  LvlF := '';
+  if FLogLevelFilter.ItemIndex > 0 then LvlF := FLogLevelFilter.Text;
+  case FLogResolvedFilter.ItemIndex of
+    1: ResF := 0;
+    2: ResF := 1;
+  else
+    ResF := -1;
+  end;
+  SearchF := Trim(FLogSearchEdit.Text);
+
+  FLogEntries := MmpDbListCentralLogs(DbPath, AppF, LvlF, SearchF, ResF, 500);
+
+  ErrOpen := 0;
+  ResCount := 0;
+  for I := 0 to High(FLogEntries) do
+  begin
+    if FLogEntries[I].Resolved then
+      Inc(ResCount)
+    else if SameText(FLogEntries[I].Level, 'error') or SameText(FLogEntries[I].Level, 'warn') then
+      Inc(ErrOpen);
+  end;
+
+  FLogSummaryLabel.Caption := Format(
+    'Registros: %d  |  Alertas/Erros em aberto: %d  |  Corrigidos: %d  |  Banco: %s',
+    [Length(FLogEntries), ErrOpen, ResCount, ExtractFileName(DbPath)]);
+
+  if Length(FLogEntries) = 0 then
+  begin
+    FCentralLogGrid.RowCount := 2;
+    for I := 0 to FCentralLogGrid.ColCount - 1 do
+      FCentralLogGrid.Cells[I, 1] := '';
+    Exit;
+  end;
+
+  FCentralLogGrid.RowCount := Length(FLogEntries) + 1;
+  for I := 0 to High(FLogEntries) do
+  begin
+    Row := I + 1;
+    FCentralLogGrid.Cells[0, Row] := IntToStr(FLogEntries[I].Id);
+    FCentralLogGrid.Cells[1, Row] := FLogEntries[I].Timestamp;
+    FCentralLogGrid.Cells[2, Row] := FLogEntries[I].AppName;
+    FCentralLogGrid.Cells[3, Row] := FLogEntries[I].Level;
+    FCentralLogGrid.Cells[4, Row] := FLogEntries[I].RevisionId;
+    if FLogEntries[I].Resolved then
+      FCentralLogGrid.Cells[5, Row] := 'Corrigido'
+    else if SameText(FLogEntries[I].Level, 'error') then
+      FCentralLogGrid.Cells[5, Row] := 'Pendente (ERRO)'
+    else if SameText(FLogEntries[I].Level, 'warn') then
+      FCentralLogGrid.Cells[5, Row] := 'Atencao'
+    else
+      FCentralLogGrid.Cells[5, Row] := 'Registrado';
+    FCentralLogGrid.Cells[6, Row] := FLogEntries[I].Message;
+  end;
+
+  FCentralLogGrid.Row := 1;
+  OnCentralLogGridSelection(FCentralLogGrid, 0, 1);
+end;
+
+procedure TMmenuMainForm.OnCentralLogFilterChange(Sender: TObject);
+begin
+  RefreshCentralLogTab;
+  if Sender <> nil then;
+end;
+
+procedure TMmenuMainForm.OnCentralLogGridSelection(Sender: TObject; aCol, aRow: Integer);
+var
+  Idx: Integer;
+  E: TMmpCentralLogEntry;
+begin
+  Idx := aRow - 1;
+  if (Idx < 0) or (Idx > High(FLogEntries)) then
+  begin
+    FLogMemo.Lines.Clear;
+    Exit;
+  end;
+  E := FLogEntries[Idx];
+  FLogMemo.Lines.Clear;
+  FLogMemo.Lines.Add('ID: #' + IntToStr(E.Id) + ' | Data/Hora: ' + E.Timestamp +
+    ' | App: ' + E.AppName + ' | Nivel: ' + E.Level);
+  if (E.UserName <> '') or (E.RevisionId <> '') then
+    FLogMemo.Lines.Add('Usuario: ' + E.UserName + ' | Revisao: ' + E.RevisionId);
+  FLogMemo.Lines.Add('Mensagem: ' + E.Message);
+  if E.Details <> '' then
+    FLogMemo.Lines.Add('Detalhes: ' + E.Details);
+  if E.Resolved then
+    FLogMemo.Lines.Add('CORRIGIDO por ' + E.ResolvedBy + ' em ' + E.ResolvedAt +
+      IfThen(E.ResolutionNote <> '', ': ' + E.ResolutionNote, ''))
+  else
+    FLogMemo.Lines.Add('Situacao: Pendente / Nao marcado como corrigido.');
+  if Sender <> nil then;
+  if aCol >= 0 then;
+end;
+
+procedure TMmenuMainForm.OnResolveCentralLogClick(Sender: TObject);
+var
+  Idx: Integer;
+  Note, DbPath: string;
+begin
+  Idx := FCentralLogGrid.Row - 1;
+  if (Idx < 0) or (Idx > High(FLogEntries)) then
+  begin
+    MessageDlg('Selecione uma entrada do log primeiro.', mtInformation, [mbOK], 0);
+    Exit;
+  end;
+  Note := FLogEntries[Idx].ResolutionNote;
+  if not InputQuery('Marcar Operacao / Erro como Corrigido',
+    'Descreva a acao ou correcao aplicada:', Note) then
+    Exit;
+  if FProd.Loaded then
+    DbPath := MmpProductionDbPath(FProd.RootDir)
+  else
+    DbPath := MmpGlobalCentralLogDbPath;
+
+  if MmpDbResolveCentralLog(DbPath, FLogEntries[Idx].Id, CurrentSessionUserName, Note, True) then
+  begin
+    RefreshCentralLogTab;
+    RefreshHistoryTab;
+    SetStatus('Log #' + IntToStr(FLogEntries[Idx].Id) + ' marcado como corrigido.', 100);
+  end
+  else
+    MessageDlg('Falha ao atualizar status do log no banco SQLite.', mtError, [mbOK], 0);
+  if Sender <> nil then;
+end;
+
+procedure TMmenuMainForm.OnOpenLogAppClick(Sender: TObject);
+var
+  Idx, AppIdx: Integer;
+begin
+  Idx := FCentralLogGrid.Row - 1;
+  if (Idx < 0) or (Idx > High(FLogEntries)) then
+  begin
+    MessageDlg('Selecione uma entrada do log primeiro.', mtInformation, [mbOK], 0);
+    Exit;
+  end;
+  AppIdx := AppNameToIndex(FLogEntries[Idx].AppName);
+  if (AppIdx >= 1) and (AppIdx <= 6) then
+    LaunchApplication(AppIdx, '', FLogEntries[Idx].RevisionId)
+  else
+    MessageDlg('Entrada pertence ao proprio MMenu.', mtInformation, [mbOK], 0);
+  if Sender <> nil then;
+end;
+
+procedure TMmenuMainForm.OnSwitchUserClick(Sender: TObject);
+var
+  NewUser: TMmpAccessUser;
+begin
+  FSettings.LoadAccessControl;
+  if FSettings.AccessMode <> amRestricted then
+  begin
+    MessageDlg('O MMenu esta em modo Aberto. Ative "Restrito por usuarios" em Configuracoes -> Controle de Acesso.',
+      mtInformation, [mbOK], 0);
+    Exit;
+  end;
+  if PromptMMenuLogin(FSettings, NewUser) then
+  begin
+    FCurrentUser := NewUser;
+    FHasLoggedUser := True;
+    RefreshAllViews;
+    LogMsg('Usuario alterado para: ' + NewUser.Username + ' (' + MmpUserProfileToStr(NewUser.Profile) + ')');
+  end;
+  if Sender <> nil then;
 end;
 
 end.

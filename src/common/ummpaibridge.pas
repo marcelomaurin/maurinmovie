@@ -87,6 +87,9 @@ type
 
 implementation
 
+uses
+  ummpappbase;
+
 function MapAdapterToLLMKind(const BaseUrl, ModelName: string): TAILLMProviderKind;
 var
   U, M: string;
@@ -227,6 +230,8 @@ function TMmpAiBridge.ActiveAdapter: string;
 var
   Prov: TMmpAiProviderCfg;
 begin
+  if FProductionRoot <> '' then
+    FSettings.ReloadIfChanged(FAppEnum);
   FSettings.ResolveProvider('text', FAppEnum, Prov);
   Result := Prov.Adapter;
 end;
@@ -235,19 +240,25 @@ function TMmpAiBridge.IsConfigured: Boolean;
 var
   Prov: TMmpAiProviderCfg;
   Secret: string;
+  LLMKind: TAILLMProviderKind;
 begin
+  if FProductionRoot <> '' then
+    FSettings.ReloadIfChanged(FAppEnum);
   FSettings.ResolveProvider('text', FAppEnum, Prov);
   if not Prov.Enabled then Exit(False);
   if SameText(Prov.Adapter, 'mock') or SameText(Prov.Adapter, 'local-cli') then
     Exit(True);
+  LLMKind := MapAdapterToLLMKind(Prov.BaseUrl, Prov.Model);
   Secret := FSettings.ResolveSecret(Prov.SecretRef);
-  Result := (Secret <> '') or (FLLM.ProviderKind = llmOllama);
+  Result := (Secret <> '') or (LLMKind in [llmOllama, llmLlamaCpp]);
 end;
 
 function TMmpAiBridge.ProviderDisplayName: string;
 var
   Prov: TMmpAiProviderCfg;
 begin
+  if FProductionRoot <> '' then
+    FSettings.ReloadIfChanged(FAppEnum);
   FSettings.ResolveProvider('text', FAppEnum, Prov);
   Result := Prov.Adapter + ' / ' + Prov.Model + ' [via MMenu]';
 end;
@@ -280,6 +291,15 @@ begin
   Result := False;
 end;
 
+function EscapeJsonStr(const S: string): string;
+begin
+  Result := StringReplace(S, '\', '\\', [rfReplaceAll]);
+  Result := StringReplace(Result, '"', '\"', [rfReplaceAll]);
+  Result := StringReplace(Result, #13, ' ', [rfReplaceAll]);
+  Result := StringReplace(Result, #10, ' ', [rfReplaceAll]);
+  Result := StringReplace(Result, #9, ' ', [rfReplaceAll]);
+end;
+
 function TMmpAiBridge.RunMockCompletion(const SystemPrompt, UserPrompt: string): string;
 begin
   if Pos('"scenes"', SystemPrompt) > 0 then
@@ -287,7 +307,7 @@ begin
       '{"scenes":[' +
       '{"heading":"INT. ESTUDIO - NOITE","location":"Estudio","time_of_day":"NOITE","mood":"Misterioso",' +
       '"estimated_duration":45,"characters":"Protagonista","objects":"Lanterna, Carta","costumes":"Casaco escuro",' +
-      '"action":"Baseado no roteiro simulado: ' + StringReplace(Copy(UserPrompt, 1, 80), '"', '''', [rfReplaceAll]) + '",' +
+      '"action":"Baseado no roteiro simulado: ' + EscapeJsonStr(Copy(UserPrompt, 1, 80)) + '",' +
       '"dialogue":"Protagonista: Precisamos validar cada revisao antes de seguir."},' +
       '{"heading":"EXT. PRACA CENTRAL - DIA","location":"Praca Central","time_of_day":"DIA","mood":"Tenso",' +
       '"estimated_duration":60,"characters":"Protagonista, Aliado","objects":"Pasta de documentos","costumes":"Casaco escuro, Jaqueta",' +
@@ -653,6 +673,15 @@ begin
     'Deseja abrir a tela de Configuracoes no MMenu na aba ' + FAppDisplayName + '?',
     mtInformation, [mbYes, mbNo], 0);
   if DlgRes <> mrYes then Exit;
+
+  if IsAppInstanceRunning(maMMenu) then
+  begin
+    FocusAppInstanceWindow(maMMenu);
+    MessageDlg('O MMenu ja esta aberto (permitida apenas 1 instancia).' + LineEnding +
+      'Use a engrenagem no MMenu aberto para ajustar a aba "' + FAppDisplayName + '".',
+      mtInformation, [mbOK], 0);
+    Exit(True);
+  end;
 
   MMenuExe := FindMMenuExecutable;
   if MMenuExe = '' then

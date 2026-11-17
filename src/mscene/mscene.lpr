@@ -16,6 +16,9 @@ begin
   if not RequireMMenuLaunch(maMScene, Args) then
     Halt(EXIT_INVALID_ARGS);
 
+  if not RequireSingleAppInstance(maMScene, Args.Headless) then
+    Halt(EXIT_LOCKED);
+
   RequireDerivedFormResource := False;
   Application.Scaled := True;
   Application.Initialize;
