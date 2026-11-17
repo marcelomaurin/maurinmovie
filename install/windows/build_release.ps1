@@ -1,11 +1,11 @@
 param(
   [string]$Version = $env:VERSION,
-  [ValidatePattern('^\d{3}$')][string]$SetupSeq = '003',
+  [ValidatePattern('^\d{3}$')][string]$SetupSeq = '004',
   [switch]$AllowDirty,
   [switch]$SkipBinUpdate
 )
 $ErrorActionPreference = 'Stop'
-if (-not $Version) { $Version = '0.3.0' }
+if (-not $Version) { $Version = '0.4.0' }
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 Set-Location -LiteralPath $root
 $dist = Join-Path $root 'dist'
@@ -79,6 +79,30 @@ foreach ($target in $targets) {
   Copy-Item -LiteralPath $builtExe -Destination (Join-Path $app ($target[1] + '.exe')) -Force
 }
 
+# Copia bibliotecas OpenSSL Win64 (1.1.1.10 para TFPHTTPClient/opensslsockets + 3.1.3) e SQLite3 Win64 + template zerado
+$sqliteDll = Join-Path $chatgpt 'runtime\database\libs\sqlite\win64\sqlite3.dll'
+if (-not (Test-Path -LiteralPath $sqliteDll)) {
+  throw "Biblioteca SQLite3 Win64 ausente: $sqliteDll"
+}
+Copy-Item -LiteralPath $sqliteDll -Destination $app -Force
+Copy-Item -LiteralPath $sqliteDll -Destination (Join-Path $root 'build\tests') -Force
+if (-not $SkipBinUpdate) {
+  Copy-Item -LiteralPath $sqliteDll -Destination $bin -Force
+}
+
+$emptyDb = Join-Path $root 'db\maurinmovie_empty.db'
+if (-not (Test-Path -LiteralPath $emptyDb)) {
+  throw "Banco zerado template ausente: $emptyDb"
+}
+$appTplDir = Join-Path $app 'templates'
+New-Item -ItemType Directory -Force -Path $appTplDir | Out-Null
+Copy-Item -LiteralPath $emptyDb -Destination (Join-Path $appTplDir 'maurinmovie_empty.db') -Force
+if (-not $SkipBinUpdate) {
+  $binTplDir = Join-Path $bin 'templates'
+  New-Item -ItemType Directory -Force -Path $binTplDir | Out-Null
+  Copy-Item -LiteralPath $emptyDb -Destination (Join-Path $binTplDir 'maurinmovie_empty.db') -Force
+}
+
 # Executa testes automatizados do protocolo MMP v1
 Write-Host "Compilando e executando testes MMP v1..."
 & $env:FPC '-MObjFPC' '-Scghi' '-O1' "-Fu$root\src\common" "-Fu$chatgpt\pacote\packages\lib\x86_64-win64" '-FuC:\lazarus\components\lazutils\lib\x86_64-win64' "-FU$root\build\tests" "-FE$root\build\tests" "$root\tests\test_mmp_protocol.pas"
@@ -86,7 +110,6 @@ if ($LASTEXITCODE -ne 0) { throw 'Falha ao compilar tests\test_mmp_protocol.pas.
 & "$root\build\tests\test_mmp_protocol.exe"
 if ($LASTEXITCODE -ne 0) { throw 'Testes MMP v1 falharam.' }
 
-# Copia bibliotecas OpenSSL Win64 (1.1.1.10 para TFPHTTPClient/opensslsockets + 3.1.3)
 $ssl11Dir = Join-Path $chatgpt 'runtime\OpenSSL\1.1.1.10\x64'
 $ssl3Dir = Join-Path $chatgpt 'runtime\OpenSSL\3.1.3\x64'
 $sslFiles = @(

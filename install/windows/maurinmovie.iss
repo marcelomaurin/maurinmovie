@@ -72,6 +72,10 @@ Source: "..\..\dist\app\msound.exe"; DestDir: "{app}"; Components: tools\msound;
 Source: "..\..\dist\app\mscene.exe"; DestDir: "{app}"; Components: tools\mscene; Flags: ignoreversion
 Source: "..\..\dist\app\mcut.exe"; DestDir: "{app}"; Components: tools\mcut; Flags: ignoreversion
 
+; SQLite3 Win64 e Banco Template Zerado
+Source: "..\..\dist\app\sqlite3.dll"; DestDir: "{app}"; Components: tools\mmenu; Flags: ignoreversion
+Source: "..\..\dist\app\templates\maurinmovie_empty.db"; DestDir: "{app}\templates"; Components: tools\mmenu; Flags: ignoreversion
+
 ; Bibliotecas OpenSSL Win64 ao lado dos executaveis
 Source: "..\..\dist\app\libssl-1_1-x64.dll"; DestDir: "{app}"; Components: extra\ssl; Flags: ignoreversion
 Source: "..\..\dist\app\libcrypto-1_1-x64.dll"; DestDir: "{app}"; Components: extra\ssl; Flags: ignoreversion
