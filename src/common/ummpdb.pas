@@ -457,7 +457,11 @@ begin
       MMP_DB_SCHEMA_VERSION + ''');');
     Tr.Commit;
   except
-    if Tr.Active then Tr.Rollback;
+    on E: Exception do
+    begin
+      if Tr.Active then Tr.Rollback;
+      raise Exception.Create('Falha na migracao do banco SQLite: ' + E.Message);
+    end;
   end;
 end;
 
