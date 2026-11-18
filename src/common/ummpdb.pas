@@ -18,7 +18,7 @@ const
   MMP_DB_FILENAME = 'maurinmovie.db';
   MMP_EMPTY_DB_FILENAME = 'maurinmovie_empty.db';
   MMP_GLOBAL_LOG_DB_FILENAME = 'mmenu_central_logs.db';
-  MMP_DB_SCHEMA_VERSION = '1';
+  MMP_DB_SCHEMA_VERSION = '2';
 
 type
   TMmpCentralLogEntry = record
@@ -150,6 +150,11 @@ function MmpDbUpsertMediaAsset(const ProdRoot: string; const Row: TMmpDbMediaAss
   out ErrMsg: string): Boolean;
 function MmpDbListMediaAssets(const ProdRoot: string; const MediaCategory: string = '';
   const ProjectId: string = ''; const RevisionId: string = ''): TMmpDbMediaAssetArray;
+
+function MmpDbSetVisualEntityApproval(const ProdRoot, ProjectId, RevisionId,
+  EntityId, ApprovalStatus: string; out ErrMsg: string): Boolean;
+function MmpDbGetVisualEntityApproval(const ProdRoot, ProjectId, RevisionId,
+  EntityId: string; out ApprovalStatus: string): Boolean;
 
 function MmpDbUpsertSyncJob(const ProdRoot: string; const Row: TMmpDbSyncJobRow;
   out ErrMsg: string): Boolean;
@@ -303,7 +308,7 @@ end;
 
 procedure EnsureSchemaOnConn(Conn: TSQLite3Connection; Tr: TSQLTransaction);
 const
-  DDL: array[0..11] of string = (
+  DDL: array[0..13] of string = (
     'CREATE TABLE IF NOT EXISTS schema_meta (' +
       'key TEXT PRIMARY KEY, ' +
       'value TEXT NOT NULL);',
@@ -404,6 +409,14 @@ const
       'resolved_at TEXT, ' +
       'resolution_note TEXT);',
 
+    'CREATE TABLE IF NOT EXISTS visual_entity_approvals (' +
+      'project_id TEXT NOT NULL, ' +
+      'revision_id TEXT NOT NULL, ' +
+      'entity_id TEXT NOT NULL, ' +
+      'approval_status TEXT NOT NULL, ' +
+      'updated_at TEXT NOT NULL, ' +
+      'PRIMARY KEY(project_id, revision_id, entity_id));',
+    'CREATE INDEX IF NOT EXISTS idx_visual_approvals_revision ON visual_entity_approvals(project_id, revision_id);',
     'CREATE INDEX IF NOT EXISTS idx_media_prod_cat ON media_assets(production_id, media_category);',
     'CREATE INDEX IF NOT EXISTS idx_media_proj_rev ON media_assets(project_id, revision_id);',
     'CREATE INDEX IF NOT EXISTS idx_logs_ts ON central_logs(ts DESC, id DESC);',
@@ -1162,6 +1175,96 @@ begin
       Q.Close;
     except
       SetLength(Result, 0);
+    end;
+    Q.Free;
+  finally
+    CloseConn(Conn, Tr);
+  end;
+end;
+
+function MmpDbSetVisualEntityApproval(const ProdRoot, ProjectId, RevisionId,
+  EntityId, ApprovalStatus: string; out ErrMsg: string): Boolean;
+var
+  Conn: TSQLite3Connection;
+  Tr: TSQLTransaction;
+  Q: TSQLQuery;
+begin
+  Result := False;
+  ErrMsg := '';
+  if (Trim(ProjectId) = '') or (Trim(RevisionId) = '') or (Trim(EntityId) = '') then
+  begin
+    ErrMsg := 'Projeto, revisao ou entidade invalida.';
+    Exit;
+  end;
+  if not (SameText(ApprovalStatus, 'approved') or SameText(ApprovalStatus, 'rejected') or
+    SameText(ApprovalStatus, 'pending')) then
+  begin
+    ErrMsg := 'Status de aprovacao invalido.';
+    Exit;
+  end;
+  if not OpenConn(MmpProductionDbPath(ProdRoot), Conn, Tr, ErrMsg) then Exit;
+  try
+    EnsureSchemaOnConn(Conn, Tr);
+    Q := TSQLQuery.Create(nil);
+    try
+      Q.DataBase := Conn;
+      Q.Transaction := Tr;
+      Q.SQL.Text := 'INSERT OR REPLACE INTO visual_entity_approvals ' +
+        '(project_id, revision_id, entity_id, approval_status, updated_at) ' +
+        'VALUES (:pid, :rid, :eid, :status, :updated);';
+      BindStr(Q, 'pid', ProjectId);
+      BindStr(Q, 'rid', RevisionId);
+      BindStr(Q, 'eid', EntityId);
+      BindStr(Q, 'status', ApprovalStatus);
+      BindStr(Q, 'updated', DbNowIsoUtc);
+      Q.ExecSQL;
+      Tr.Commit;
+      Result := True;
+    except
+      on E: Exception do
+      begin
+        ErrMsg := E.Message;
+        if Tr.Active then Tr.Rollback;
+      end;
+    end;
+    Q.Free;
+  finally
+    CloseConn(Conn, Tr);
+  end;
+end;
+
+function MmpDbGetVisualEntityApproval(const ProdRoot, ProjectId, RevisionId,
+  EntityId: string; out ApprovalStatus: string): Boolean;
+var
+  Conn: TSQLite3Connection;
+  Tr: TSQLTransaction;
+  Q: TSQLQuery;
+  ErrMsg: string;
+begin
+  Result := False;
+  ApprovalStatus := '';
+  if not FileExists(MmpProductionDbPath(ProdRoot)) then Exit;
+  if not OpenConn(MmpProductionDbPath(ProdRoot), Conn, Tr, ErrMsg) then Exit;
+  try
+    EnsureSchemaOnConn(Conn, Tr);
+    Q := TSQLQuery.Create(nil);
+    try
+      Q.DataBase := Conn;
+      Q.Transaction := Tr;
+      Q.SQL.Text := 'SELECT approval_status FROM visual_entity_approvals ' +
+        'WHERE project_id=:pid AND revision_id=:rid AND entity_id=:eid LIMIT 1;';
+      BindStr(Q, 'pid', ProjectId);
+      BindStr(Q, 'rid', RevisionId);
+      BindStr(Q, 'eid', EntityId);
+      Q.Open;
+      if not Q.EOF then
+      begin
+        ApprovalStatus := Q.Fields[0].AsString;
+        Result := True;
+      end;
+      Q.Close;
+    except
+      Result := False;
     end;
     Q.Free;
   finally
