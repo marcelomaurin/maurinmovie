@@ -6,7 +6,7 @@ interface
 
 uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
-  ComCtrls, Grids, fpjson, jsonparser, imagefilters,
+  ComCtrls, Grids, Menus, fpjson, jsonparser, imagefilters,
   ummpsha256, ummpprotocol, ummpappbase, ummpaibridge;
 
 type
@@ -42,12 +42,24 @@ type
     FSearchEdit: TEdit;
     FKindFilterCombo: TComboBox;
     FEntitiesGrid: TStringGrid;
+    FGridMenu: TPopupMenu;
     FDetailMemo: TMemo;
+    FDescEditMemo: TMemo;
     FPreviewImg: TImage;
     FPreviewOutImg: TImage;
     FViewCombo: TComboBox;
     FLogMemo: TMemo;
     FStatusLabel: TLabel;
+    FProgressOverlay: TPanel;
+    FOverlayTitleLbl: TLabel;
+    FOverlayItemLbl: TLabel;
+    FOverlayPctLbl: TLabel;
+    FOverlayBar: TProgressBar;
+    FOverlayImg: TImage;
+    FBtnStopGen: TButton;
+    FStopRequested: Boolean;
+    FTotalStepsGen: Integer;
+    FDoneStepsGen: Integer;
 
     procedure BuildUI;
     procedure LogMsg(const Msg: string);
@@ -58,17 +70,29 @@ type
     procedure AddEntityIfMissing(const Kind, EntityName, Desc, SceneId: string);
     function EntityFolderName(const Kind: string): string;
     function EntitiesToJson: string;
+    procedure SaveCurrentEntitiesDraft;
     procedure SaveRevision(const NewState: string);
+    procedure GenerateViewsForEntity(EntIdx: Integer; ForceAll, KeepFront: Boolean; OnlyViewIdx: Integer = -1);
 
     procedure OnOpenProdClick(Sender: TObject);
     procedure OnAiConfigClick(Sender: TObject);
     procedure OnIndexScriptClick(Sender: TObject);
     procedure OnGenerateViewsClick(Sender: TObject);
+    procedure OnSaveDescClick(Sender: TObject);
+    procedure OnGridMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
+    procedure OnGenItemAllClick(Sender: TObject);
+    procedure OnGenItemCurrentViewClick(Sender: TObject);
+    procedure OnGenItemSidesFromFrontClick(Sender: TObject);
     procedure OnApplySharpenClick(Sender: TObject);
     procedure OnApproveEntityClick(Sender: TObject);
     procedure OnRejectEntityClick(Sender: TObject);
     procedure OnPublishClick(Sender: TObject);
     procedure OnGridSelection(Sender: TObject; aCol, aRow: Integer);
+    procedure OnGridPrepareCanvas(sender: TObject; aCol, aRow: Integer; aState: TGridDrawState);
+    procedure ShowProgressOverlay(const ATitle: string; ATotalSteps: Integer);
+    procedure UpdateProgressOverlay(const AItemText, APreviewPath: string);
+    procedure HideProgressOverlay;
+    procedure OnStopGenClick(Sender: TObject);
     procedure OnFilterChanged(Sender: TObject);
     procedure OnViewComboChange(Sender: TObject);
   public
@@ -116,7 +140,7 @@ var
   Head, Sidebar, Bottom, FilterBar, RightPanel: TPanel;
   PC: TPageControl;
   TabWork, TabLog: TTabSheet;
-  BtnOpen, BtnAiCfg, BtnPublish, BtnIndex, BtnGenViews, BtnSharpen, BtnApprove, BtnReject: TButton;
+  BtnOpen, BtnAiCfg, BtnPublish, BtnIndex, BtnGenViews, BtnSharpen, BtnApprove, BtnReject, B: TButton;
   L: TLabel;
 begin
   Head := TPanel.Create(Self);
@@ -220,8 +244,26 @@ begin
   FDetailMemo.Parent := Sidebar;
   FDetailMemo.ReadOnly := True;
   FDetailMemo.ScrollBars := ssVertical;
-  FDetailMemo.Anchors := [akLeft, akTop, akRight, akBottom];
-  FDetailMemo.SetBounds(12, 228, 246, 418);
+  FDetailMemo.SetBounds(12, 228, 246, 175);
+
+  L := TLabel.Create(Self);
+  L.Parent := Sidebar;
+  L.Caption := 'Script / Descricao Visual (editavel):';
+  L.Font.Style := [fsBold];
+  L.SetBounds(12, 410, 246, 18);
+
+  FDescEditMemo := TMemo.Create(Self);
+  FDescEditMemo.Parent := Sidebar;
+  FDescEditMemo.ScrollBars := ssVertical;
+  FDescEditMemo.Anchors := [akLeft, akTop, akRight, akBottom];
+  FDescEditMemo.SetBounds(12, 430, 246, 174);
+
+  B := TButton.Create(Self);
+  B.Parent := Sidebar;
+  B.Caption := 'Salvar Script da Entidade';
+  B.Anchors := [akLeft, akRight, akBottom];
+  B.SetBounds(12, 610, 246, 30);
+  B.OnClick := @OnSaveDescClick;
 
   PC := TPageControl.Create(Self);
   PC.Parent := Self;
@@ -327,12 +369,77 @@ begin
   FEntitiesGrid.ColWidths[4] := 95;
   FEntitiesGrid.ColWidths[5] := 240;
   FEntitiesGrid.OnSelection := @OnGridSelection;
+  FEntitiesGrid.OnMouseDown := @OnGridMouseDown;
+  FEntitiesGrid.OnPrepareCanvas := @OnGridPrepareCanvas;
+
+  FGridMenu := TPopupMenu.Create(Self);
+  with FGridMenu.Items do
+  begin
+    Add(TMenuItem.Create(FGridMenu)); Items[0].Caption := 'Gerar Item (4 Vistas)'; Items[0].OnClick := @OnGenItemAllClick;
+    Add(TMenuItem.Create(FGridMenu)); Items[1].Caption := 'Gerar Apenas Vista Atual'; Items[1].OnClick := @OnGenItemCurrentViewClick;
+    Add(TMenuItem.Create(FGridMenu)); Items[2].Caption := 'Gerar Costas/Dir/Esq da Frontal'; Items[2].OnClick := @OnGenItemSidesFromFrontClick;
+  end;
+  FEntitiesGrid.PopupMenu := FGridMenu;
 
   FLogMemo := TMemo.Create(Self);
   FLogMemo.Parent := TabLog;
   FLogMemo.Align := alClient;
   FLogMemo.ReadOnly := True;
   FLogMemo.ScrollBars := ssBoth;
+
+  // Painel suspenso de progresso e preview durante a geracao
+  FProgressOverlay := TPanel.Create(Self);
+  FProgressOverlay.Parent := Self;
+  FProgressOverlay.SetBounds((Width - 460) div 2, (Height - 360) div 2, 460, 360);
+  FProgressOverlay.Anchors := [];
+  FProgressOverlay.BevelOuter := bvRaised;
+  FProgressOverlay.BevelWidth := 2;
+  FProgressOverlay.Color := $00382C22;
+  FProgressOverlay.ParentBackground := False;
+  FProgressOverlay.Visible := False;
+
+  FOverlayTitleLbl := TLabel.Create(FProgressOverlay);
+  FOverlayTitleLbl.Parent := FProgressOverlay;
+  FOverlayTitleLbl.Font.Color := clWhite;
+  FOverlayTitleLbl.Font.Size := 11;
+  FOverlayTitleLbl.Font.Style := [fsBold];
+  FOverlayTitleLbl.SetBounds(16, 12, 428, 22);
+  FOverlayTitleLbl.Caption := 'Gerando imagens...';
+
+  FOverlayItemLbl := TLabel.Create(FProgressOverlay);
+  FOverlayItemLbl.Parent := FProgressOverlay;
+  FOverlayItemLbl.Font.Color := $00D0E8FF;
+  FOverlayItemLbl.SetBounds(16, 38, 428, 20);
+  FOverlayItemLbl.Caption := '';
+
+  FOverlayImg := TImage.Create(FProgressOverlay);
+  FOverlayImg.Parent := FProgressOverlay;
+  FOverlayImg.Stretch := True;
+  FOverlayImg.Proportional := True;
+  FOverlayImg.Center := True;
+  FOverlayImg.SetBounds(16, 64, 428, 200);
+
+  FOverlayBar := TProgressBar.Create(FProgressOverlay);
+  FOverlayBar.Parent := FProgressOverlay;
+  FOverlayBar.Min := 0;
+  FOverlayBar.Max := 100;
+  FOverlayBar.Position := 0;
+  FOverlayBar.SetBounds(16, 274, 340, 22);
+
+  FOverlayPctLbl := TLabel.Create(FProgressOverlay);
+  FOverlayPctLbl.Parent := FProgressOverlay;
+  FOverlayPctLbl.Font.Color := clWhite;
+  FOverlayPctLbl.Font.Style := [fsBold];
+  FOverlayPctLbl.Alignment := taRightJustify;
+  FOverlayPctLbl.AutoSize := False;
+  FOverlayPctLbl.SetBounds(364, 276, 80, 20);
+  FOverlayPctLbl.Caption := '0%';
+
+  FBtnStopGen := TButton.Create(FProgressOverlay);
+  FBtnStopGen.Parent := FProgressOverlay;
+  FBtnStopGen.Caption := 'Parar';
+  FBtnStopGen.SetBounds(170, 310, 120, 34);
+  FBtnStopGen.OnClick := @OnStopGenClick;
 end;
 
 procedure TMvisualMainForm.LogMsg(const Msg: string);
@@ -508,13 +615,19 @@ begin
         for J := 0 to Parts.Count - 1 do
           AddEntityIfMissing('character', Parts[J], 'Personagem em ' + Item.Get('heading', ''), SceneId);
 
+        Parts.Delimiter := ',';
         Parts.DelimitedText := Objs;
         for J := 0 to Parts.Count - 1 do
           AddEntityIfMissing('object', Parts[J], 'Objeto de cena', SceneId);
 
-        Parts.DelimitedText := Costumes;
-        for J := 0 to Parts.Count - 1 do
-          AddEntityIfMissing('costume', Parts[J], 'Figurino vinculado ao roteiro', SceneId);
+        if Trim(Costumes) <> '' then
+        begin
+          Parts.Delimiter := ';';
+          Parts.DelimitedText := Costumes;
+          for J := 0 to Parts.Count - 1 do
+            AddEntityIfMissing('costume', Parts[J], 'Figurino vinculado ao roteiro', SceneId);
+          Parts.Delimiter := ',';
+        end;
       end;
     end;
   finally
@@ -522,8 +635,9 @@ begin
     Obj.Free;
   end;
 
+  SaveCurrentEntitiesDraft;
   RefreshGrid;
-  LogMsg('Etapa 1 concluida (sem imagens): ' + IntToStr(Length(FEntities)) +
+  LogMsg('Etapa 1 concluida e salva: ' + IntToStr(Length(FEntities)) +
     ' entidades indexadas a partir de MScript @ ' + FScriptSourceRevId);
 end;
 
@@ -537,9 +651,192 @@ begin
     Result := 'objetos';
 end;
 
+procedure TMvisualMainForm.ShowProgressOverlay(const ATitle: string; ATotalSteps: Integer);
+begin
+  FStopRequested := False;
+  FTotalStepsGen := ATotalSteps;
+  if FTotalStepsGen < 1 then FTotalStepsGen := 1;
+  FDoneStepsGen := 0;
+  FOverlayTitleLbl.Caption := ATitle;
+  FOverlayItemLbl.Caption := 'Preparando...';
+  FOverlayBar.Position := 0;
+  FOverlayPctLbl.Caption := '0%';
+  FOverlayImg.Picture := nil;
+  FProgressOverlay.SetBounds((ClientWidth - FProgressOverlay.Width) div 2,
+    (ClientHeight - FProgressOverlay.Height) div 2,
+    FProgressOverlay.Width, FProgressOverlay.Height);
+  FProgressOverlay.Visible := True;
+  FProgressOverlay.BringToFront;
+  Application.ProcessMessages;
+end;
+
+procedure TMvisualMainForm.UpdateProgressOverlay(const AItemText, APreviewPath: string);
+var
+  Pct: Integer;
+begin
+  if FOverlayItemLbl <> nil then
+    FOverlayItemLbl.Caption := AItemText;
+  Pct := Round((FDoneStepsGen / FTotalStepsGen) * 100);
+  if Pct > 100 then Pct := 100;
+  if FOverlayBar <> nil then
+    FOverlayBar.Position := Pct;
+  if FOverlayPctLbl <> nil then
+    FOverlayPctLbl.Caption := IntToStr(Pct) + '%';
+  if (FOverlayImg <> nil) and (APreviewPath <> '') and FileExists(APreviewPath) then
+  begin
+    try
+      FOverlayImg.Picture.LoadFromFile(APreviewPath);
+    except
+    end;
+  end;
+  Application.ProcessMessages;
+end;
+
+procedure TMvisualMainForm.HideProgressOverlay;
+begin
+  if FProgressOverlay <> nil then
+    FProgressOverlay.Visible := False;
+  Application.ProcessMessages;
+end;
+
+procedure TMvisualMainForm.OnStopGenClick(Sender: TObject);
+begin
+  FStopRequested := True;
+  if FOverlayItemLbl <> nil then
+    FOverlayItemLbl.Caption := 'Parando apos concluir a imagem atual...';
+  try
+    FAi.ImageAI.Cancel;
+  except
+  end;
+  if Sender <> nil then;
+end;
+
+procedure TMvisualMainForm.OnGridPrepareCanvas(sender: TObject; aCol, aRow: Integer;
+  aState: TGridDrawState);
+var
+  EntId: string;
+  I: Integer;
+  HasPng: Boolean;
+begin
+  if (aRow <= 0) or (aRow >= FEntitiesGrid.RowCount) then Exit;
+  if gdSelected in aState then Exit;
+  EntId := Trim(FEntitiesGrid.Cells[0, aRow]);
+  if EntId = '' then Exit;
+  HasPng := False;
+  for I := 0 to High(FEntities) do
+  begin
+    if SameText(FEntities[I].EntityId, EntId) then
+    begin
+      HasPng := SameText(ExtractFileExt(FEntities[I].FrontRelUri), '.png') or
+                SameText(ExtractFileExt(FEntities[I].BackRelUri), '.png') or
+                SameText(ExtractFileExt(FEntities[I].RightRelUri), '.png') or
+                SameText(ExtractFileExt(FEntities[I].LeftRelUri), '.png');
+      Break;
+    end;
+  end;
+  if HasPng then
+    FEntitiesGrid.Canvas.Brush.Color := $00C8F5CA;
+  if aCol >= 0 then;
+end;
+
+procedure TMvisualMainForm.GenerateViewsForEntity(EntIdx: Integer; ForceAll, KeepFront: Boolean; OnlyViewIdx: Integer);
+var
+  BaseRevDir, Folder, Prefix, SubDir, RelBase, FrontRefPath, Err: string;
+
+  procedure EnsureView(var RelUri: string; const Suffix, ViewLabel, ViewPrompt, RefImg: string; BgColor: TColor; ForceThis: Boolean);
+  var
+    NeedGen: Boolean;
+    FullPrompt, OutPng: string;
+  begin
+    if FStopRequested then Exit;
+    NeedGen := ForceThis or (RelUri = '') or (FAi.IsConfigured and SameText(ExtractFileExt(RelUri), '.bmp'));
+    if not NeedGen then
+    begin
+      Inc(FDoneStepsGen);
+      UpdateProgressOverlay(Format('%s - %s (ja gerado)', [FEntities[EntIdx].Name, ViewLabel]), RefImg);
+      Exit;
+    end;
+
+    UpdateProgressOverlay(Format('Gerando: %s - %s', [FEntities[EntIdx].Name, ViewLabel]), RefImg);
+    if FStopRequested then Exit;
+
+    if FAi.IsConfigured then
+    begin
+      FStatusLabel.Caption := Format('Gerando vista %s (%d/%d): %s...', [ViewLabel, EntIdx + 1, Length(FEntities), FEntities[EntIdx].Name]);
+      Application.ProcessMessages;
+      if RefImg <> '' then
+        FullPrompt := 'Use EXACTLY the same ' + FEntities[EntIdx].Kind + ' appearance, colors, outfit, and proportions from the reference image. ' +
+          FEntities[EntIdx].Kind + ' "' + FEntities[EntIdx].Name + '": ' + FEntities[EntIdx].Description +
+          '. Show ONLY the ' + ViewPrompt + ', clean neutral background.'
+      else
+        FullPrompt := FEntities[EntIdx].Kind + ' "' + FEntities[EntIdx].Name + '": ' +
+          FEntities[EntIdx].Description + ' (' + ViewPrompt + ', cinema, clean neutral background)';
+
+      OutPng := Prefix + '_' + Suffix + '.png';
+      if FAi.GenerateImage(FullPrompt, OutPng, Err, '', 0, 0, RefImg) then
+      begin
+        RelUri := RelBase + '_' + Suffix + '.png';
+        Inc(FDoneStepsGen);
+        SaveCurrentEntitiesDraft;
+        RefreshGrid;
+        UpdateProgressOverlay(Format('Concluido: %s - %s', [FEntities[EntIdx].Name, ViewLabel]), OutPng);
+        Exit;
+      end
+      else
+        LogMsg('Falha IA [' + FEntities[EntIdx].Name + ' / ' + ViewLabel + ']: ' + Err);
+    end;
+
+    SavePlaceholderBitmap(Prefix + '_' + Suffix + '.bmp',
+      FEntities[EntIdx].Name + ' [' + UpperCase(ViewLabel) + ']', FEntities[EntIdx].Description,
+      'ID: ' + FEntities[EntIdx].EntityId + ' | Tipo: ' + FEntities[EntIdx].Kind, BgColor);
+    RelUri := RelBase + '_' + Suffix + '.bmp';
+    Inc(FDoneStepsGen);
+    SaveCurrentEntitiesDraft;
+    UpdateProgressOverlay(Format('Concluido: %s - %s', [FEntities[EntIdx].Name, ViewLabel]), Prefix + '_' + Suffix + '.bmp');
+  end;
+
+begin
+  if FStopRequested or (EntIdx < 0) or (EntIdx > High(FEntities)) then Exit;
+  FAi.ReloadIfChanged;
+  BaseRevDir := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim + FCurrentRevId;
+  Folder := EntityFolderName(FEntities[EntIdx].Kind);
+  SubDir := BaseRevDir + PathDelim + 'images' + PathDelim + Folder;
+  ForceDirectories(SubDir);
+  RelBase := 'images/' + Folder + '/' + FEntities[EntIdx].EntityId;
+  Prefix := SubDir + PathDelim + FEntities[EntIdx].EntityId;
+
+  if (OnlyViewIdx < 0) or (OnlyViewIdx = 0) then
+  begin
+    if not KeepFront then
+      EnsureView(FEntities[EntIdx].FrontRelUri, 'front', 'Frontal',
+        'FRONT VIEW (vista frontal, facing camera directly)', '', $00403830, ForceAll);
+  end;
+  if FStopRequested then Exit;
+
+  FrontRefPath := '';
+  if (FEntities[EntIdx].FrontRelUri <> '') and SameText(ExtractFileExt(FEntities[EntIdx].FrontRelUri), '.png') then
+  begin
+    FrontRefPath := BaseRevDir + PathDelim + StringReplace(FEntities[EntIdx].FrontRelUri, '/', PathDelim, [rfReplaceAll]);
+    if not FileExists(FrontRefPath) then FrontRefPath := '';
+  end;
+
+  if (OnlyViewIdx < 0) or (OnlyViewIdx = 1) then
+    EnsureView(FEntities[EntIdx].BackRelUri, 'back', 'Costas',
+      'BACK VIEW (vista traseira / de costas, 180 degrees turned away from camera)', FrontRefPath, $00384030, ForceAll or (OnlyViewIdx = 1));
+  if FStopRequested then Exit;
+
+  if (OnlyViewIdx < 0) or (OnlyViewIdx = 2) then
+    EnsureView(FEntities[EntIdx].RightRelUri, 'right', 'Direita',
+      'RIGHT SIDE PROFILE VIEW (perfil lateral direito, facing right, 90 degrees)', FrontRefPath, $00303848, ForceAll or (OnlyViewIdx = 2));
+  if FStopRequested then Exit;
+
+  if (OnlyViewIdx < 0) or (OnlyViewIdx = 3) then
+    EnsureView(FEntities[EntIdx].LeftRelUri, 'left', 'Esquerda',
+      'LEFT SIDE PROFILE VIEW (perfil lateral esquerdo, facing left, 90 degrees)', FrontRefPath, $00483038, ForceAll or (OnlyViewIdx = 3));
+end;
+
 procedure TMvisualMainForm.OnGenerateViewsClick(Sender: TObject);
 var
-  BaseRevDir, Folder, Prefix, SubDir, RelBase, PromptTxt, Resp, Err: string;
   I: Integer;
 begin
   if Length(FEntities) = 0 then
@@ -548,62 +845,117 @@ begin
     Exit;
   end;
 
-  BaseRevDir := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim + FCurrentRevId;
-  for I := 0 to High(FEntities) do
-  begin
-    Folder := EntityFolderName(FEntities[I].Kind);
-    SubDir := BaseRevDir + PathDelim + 'images' + PathDelim + Folder;
-    ForceDirectories(SubDir);
-    RelBase := 'images/' + Folder + '/' + FEntities[I].EntityId;
-    Prefix := SubDir + PathDelim + FEntities[I].EntityId;
+  if (FSelectedIdx >= 0) and (FSelectedIdx <= High(FEntities)) and (FDescEditMemo <> nil) then
+    FEntities[FSelectedIdx].Description := Trim(FDescEditMemo.Text);
 
-    if FAi.IsConfigured and (I = 0) then
+  ShowProgressOverlay('Etapa 2: Gerando Vistas Padronizadas', Length(FEntities) * 4);
+  try
+    for I := 0 to High(FEntities) do
     begin
-      PromptTxt := 'Descreva brevemente caracteristicas visuais para storyboard: ' +
-        FEntities[I].Kind + ' "' + FEntities[I].Name + '" (' + FEntities[I].Description + ')';
-      if FAi.Ask('Responda em ate 1 frase curta em portugues.', PromptTxt, Resp, Err) then
-        FEntities[I].Description := Resp;
+      if FStopRequested then Break;
+      GenerateViewsForEntity(I, False, False);
     end;
-
-    if FEntities[I].FrontRelUri = '' then
-    begin
-      if not FAi.GenerateImage(FEntities[I].Kind + ' "' + FEntities[I].Name + '": ' +
-        FEntities[I].Description + ' (vista frontal, cinema)', Prefix + '_front.png', Err) then
-      begin
-        SavePlaceholderBitmap(Prefix + '_front.bmp',
-          FEntities[I].Name + ' [FRONTAL]', FEntities[I].Description,
-          'ID: ' + FEntities[I].EntityId + ' | Tipo: ' + FEntities[I].Kind, $00403830);
-        FEntities[I].FrontRelUri := RelBase + '_front.bmp';
-      end
-      else
-        FEntities[I].FrontRelUri := RelBase + '_front.png';
-    end;
-    if FEntities[I].BackRelUri = '' then
-    begin
-      SavePlaceholderBitmap(Prefix + '_back.bmp',
-        FEntities[I].Name + ' [COSTAS]', FEntities[I].Description,
-        'ID: ' + FEntities[I].EntityId, $00384030);
-      FEntities[I].BackRelUri := RelBase + '_back.bmp';
-    end;
-    if FEntities[I].RightRelUri = '' then
-    begin
-      SavePlaceholderBitmap(Prefix + '_right.bmp',
-        FEntities[I].Name + ' [DIREITA]', FEntities[I].Description,
-        'ID: ' + FEntities[I].EntityId, $00303848);
-      FEntities[I].RightRelUri := RelBase + '_right.bmp';
-    end;
-    if FEntities[I].LeftRelUri = '' then
-    begin
-      SavePlaceholderBitmap(Prefix + '_left.bmp',
-        FEntities[I].Name + ' [ESQUERDA]', FEntities[I].Description,
-        'ID: ' + FEntities[I].EntityId, $00483038);
-      FEntities[I].LeftRelUri := RelBase + '_left.bmp';
-    end;
+  finally
+    HideProgressOverlay;
   end;
 
+  SaveCurrentEntitiesDraft;
   RefreshGrid;
   RefreshSelectedEntity;
-  LogMsg('Etapa 2 concluida: vistas frontal/costas/direita/esquerda geradas (aguardando aprovacao).');
+  if FStopRequested then
+  begin
+    FStatusLabel.Caption := 'Geracao interrompida. Itens concluidos foram salvos.';
+    LogMsg('Geracao interrompida pelo usuario. Os itens concluidos foram salvos e serao pulados ao retomar.');
+  end
+  else
+  begin
+    FStatusLabel.Caption := 'Etapa 2 concluida.';
+    LogMsg('Etapa 2 concluida: vistas frontal/costas/direita/esquerda geradas e salvas (aguardando aprovacao).');
+  end;
+end;
+
+procedure TMvisualMainForm.OnSaveDescClick(Sender: TObject);
+begin
+  if (FSelectedIdx < 0) or (FSelectedIdx > High(FEntities)) then Exit;
+  FEntities[FSelectedIdx].Description := Trim(FDescEditMemo.Text);
+  SaveCurrentEntitiesDraft;
+  RefreshSelectedEntity;
+  LogMsg('Script/descricao da entidade "' + FEntities[FSelectedIdx].Name + '" salvo.');
+end;
+
+procedure TMvisualMainForm.OnGridMouseDown(Sender: TObject; Button: TMouseButton;
+  Shift: TShiftState; X, Y: Integer);
+var
+  Col, Row: Longint;
+begin
+  if Button = mbRight then
+  begin
+    FEntitiesGrid.MouseToCell(X, Y, Col, Row);
+    if (Row >= 1) and (Row < FEntitiesGrid.RowCount) then
+    begin
+      FEntitiesGrid.Row := Row;
+      OnGridSelection(FEntitiesGrid, Col, Row);
+    end;
+  end;
+  if Shift = [] then;
+end;
+
+procedure TMvisualMainForm.OnGenItemAllClick(Sender: TObject);
+begin
+  if (FSelectedIdx < 0) or (FSelectedIdx > High(FEntities)) then Exit;
+  if FDescEditMemo <> nil then
+    FEntities[FSelectedIdx].Description := Trim(FDescEditMemo.Text);
+  ShowProgressOverlay('Gerando Item: ' + FEntities[FSelectedIdx].Name, 4);
+  try
+    GenerateViewsForEntity(FSelectedIdx, True, False, -1);
+  finally
+    HideProgressOverlay;
+  end;
+  SaveCurrentEntitiesDraft;
+  FStatusLabel.Caption := 'Item "' + FEntities[FSelectedIdx].Name + '" gerado (4 vistas).';
+  RefreshGrid;
+  RefreshSelectedEntity;
+  LogMsg('Item "' + FEntities[FSelectedIdx].Name + '" regerado (4 vistas).');
+end;
+
+procedure TMvisualMainForm.OnGenItemCurrentViewClick(Sender: TObject);
+var
+  VIdx: Integer;
+begin
+  if (FSelectedIdx < 0) or (FSelectedIdx > High(FEntities)) then Exit;
+  if FDescEditMemo <> nil then
+    FEntities[FSelectedIdx].Description := Trim(FDescEditMemo.Text);
+  VIdx := FViewCombo.ItemIndex;
+  if VIdx < 0 then VIdx := 0;
+  ShowProgressOverlay('Gerando Vista: ' + FEntities[FSelectedIdx].Name, 1);
+  try
+    GenerateViewsForEntity(FSelectedIdx, VIdx = 0, VIdx <> 0, VIdx);
+  finally
+    HideProgressOverlay;
+  end;
+  SaveCurrentEntitiesDraft;
+  FStatusLabel.Caption := 'Vista atual de "' + FEntities[FSelectedIdx].Name + '" regerada.';
+  RefreshGrid;
+  RefreshSelectedEntity;
+  LogMsg('Vista "' + FViewCombo.Text + '" de "' + FEntities[FSelectedIdx].Name + '" regerada.');
+end;
+
+procedure TMvisualMainForm.OnGenItemSidesFromFrontClick(Sender: TObject);
+begin
+  if (FSelectedIdx < 0) or (FSelectedIdx > High(FEntities)) then Exit;
+  if FDescEditMemo <> nil then
+    FEntities[FSelectedIdx].Description := Trim(FDescEditMemo.Text);
+  ShowProgressOverlay('Gerando Vistas da Frontal: ' + FEntities[FSelectedIdx].Name, 3);
+  try
+    GenerateViewsForEntity(FSelectedIdx, True, True, -1);
+  finally
+    HideProgressOverlay;
+  end;
+  SaveCurrentEntitiesDraft;
+  FStatusLabel.Caption := 'Vistas Costas/Dir/Esq geradas a partir da Frontal para "' + FEntities[FSelectedIdx].Name + '".';
+  RefreshGrid;
+  RefreshSelectedEntity;
+  LogMsg('Vistas laterais/costas geradas a partir da imagem frontal para "' + FEntities[FSelectedIdx].Name + '".');
 end;
 
 procedure TMvisualMainForm.OnApplySharpenClick(Sender: TObject);
@@ -694,10 +1046,15 @@ var
 begin
   FDetailMemo.Lines.Clear;
   FPreviewImg.Picture := nil;
-  if (FSelectedIdx < 0) or (FSelectedIdx > High(FEntities)) then Exit;
+  if (FSelectedIdx < 0) or (FSelectedIdx > High(FEntities)) then
+  begin
+    if FDescEditMemo <> nil then FDescEditMemo.Text := '';
+    Exit;
+  end;
 
   with FEntities[FSelectedIdx] do
   begin
+    if FDescEditMemo <> nil then FDescEditMemo.Text := Description;
     FDetailMemo.Lines.Add('ID: ' + EntityId);
     FDetailMemo.Lines.Add('Tipo: ' + Kind + ' | Status: ' + ApprovalStatus);
     FDetailMemo.Lines.Add('Nome: ' + Name);
@@ -757,6 +1114,17 @@ begin
   end;
 end;
 
+procedure TMvisualMainForm.SaveCurrentEntitiesDraft;
+var
+  IdxDir: string;
+begin
+  if (not FProd.Loaded) or (FProjectDir = '') or (FCurrentRevId = '') then Exit;
+  IdxDir := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim +
+    FCurrentRevId + PathDelim + 'indexes';
+  ForceDirectories(IdxDir);
+  AtomicWriteTextFile(IdxDir + PathDelim + 'entities.json', EntitiesToJson, False);
+end;
+
 procedure TMvisualMainForm.SaveRevision(const NewState: string);
 var
   PrepRev, RevDir, NewRev, ErrMsg, OldRevDir: string;
@@ -793,7 +1161,10 @@ var
     Arts[ArtCount].ArtifactId := GenerateMmpId('a');
     Arts[ArtCount].Kind := Kind;
     Arts[ArtCount].RelUri := RelUri;
-    Arts[ArtCount].MimeType := 'image/bmp';
+    if SameText(ExtractFileExt(RelUri), '.png') then
+      Arts[ArtCount].MimeType := 'image/png'
+    else
+      Arts[ArtCount].MimeType := 'image/bmp';
     Arts[ArtCount].Status := StatusStr;
   end;
 begin

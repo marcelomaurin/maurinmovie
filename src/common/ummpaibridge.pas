@@ -54,7 +54,8 @@ type
     // Imagem / Storyboard / Biblioteca Visual
     function GenerateImage(const Prompt, OutputFile: string;
       out ErrorMsg: string; const NegativePrompt: string = '';
-      WidthPx: Integer = 0; HeightPx: Integer = 0): Boolean;
+      WidthPx: Integer = 0; HeightPx: Integer = 0;
+      const SourceImage: string = ''): Boolean;
 
     // Som: Fala (TTS), Clonagem de Voz e Efeitos Sonoros (SFX) / Trilha
     function SynthesizeSpeech(const Text, OutputFile: string;
@@ -439,9 +440,14 @@ end;
 
 function TMmpAiBridge.GenerateImage(const Prompt, OutputFile: string;
   out ErrorMsg: string; const NegativePrompt: string; WidthPx,
-  HeightPx: Integer): Boolean;
+  HeightPx: Integer; const SourceImage: string): Boolean;
+const
+  OpenAIImgFallbacks: array[0..3] of string = (
+    'gpt-image-1-mini', 'gpt-image-1.5', 'chatgpt-image-latest', 'gpt-image-2'
+  );
 var
   Prov: TMmpAiProviderCfg;
+  ModelFallback: string;
 begin
   Result := False;
   ErrorMsg := '';
@@ -463,11 +469,52 @@ begin
   FImage.Model := Prov.Model;
   FImage.Token := FSettings.ResolveSecret(Prov.SecretRef);
   FImage.NegativePrompt := NegativePrompt;
+  FImage.SourceImage := SourceImage;
   if WidthPx > 0 then FImage.Width := WidthPx else if Prov.Width > 0 then FImage.Width := Prov.Width else FImage.Width := 1024;
   if HeightPx > 0 then FImage.Height := HeightPx else if Prov.Height > 0 then FImage.Height := Prov.Height else FImage.Height := 1024;
+
+  // Normaliza dimensoes aceitas pela OpenAI (evita HTTP 400 com 1280x720)
+  if FImage.ProviderKind = imgOpenAI then
+  begin
+    if Pos('dall-e-3', LowerCase(FImage.Model)) > 0 then
+    begin
+      if FImage.Width > FImage.Height then begin FImage.Width := 1792; FImage.Height := 1024; end
+      else if FImage.Height > FImage.Width then begin FImage.Width := 1024; FImage.Height := 1792; end
+      else begin FImage.Width := 1024; FImage.Height := 1024; end;
+    end
+    else if Pos('dall-e-2', LowerCase(FImage.Model)) > 0 then
+    begin
+      FImage.Width := 1024;
+      FImage.Height := 1024;
+    end
+    else if (Pos('gpt-image', LowerCase(FImage.Model)) > 0) or
+            (Pos('chatgpt-image', LowerCase(FImage.Model)) > 0) then
+    begin
+      if FImage.Width > FImage.Height then begin FImage.Width := 1536; FImage.Height := 1024; end
+      else if FImage.Height > FImage.Width then begin FImage.Width := 1024; FImage.Height := 1536; end
+      else begin FImage.Width := 1024; FImage.Height := 1024; end;
+    end;
+  end;
+
   FImage.Timeout := Max(60000, Prov.TimeoutSec * 1000);
 
   Result := FImage.Generate(Prompt, OutputFile);
+  if (not Result) and (FImage.ProviderKind = imgOpenAI) and
+     ((Pos('does not exist', FImage.LastError) > 0) or
+      (Pos('must be verified', FImage.LastError) > 0) or
+      (Pos('"param": "model"', FImage.LastError) > 0)) then
+  begin
+    for ModelFallback in OpenAIImgFallbacks do
+    begin
+      if SameText(FImage.Model, ModelFallback) then Continue;
+      FImage.Model := ModelFallback;
+      if FImage.Width > FImage.Height then begin FImage.Width := 1536; FImage.Height := 1024; end
+      else if FImage.Height > FImage.Width then begin FImage.Width := 1024; FImage.Height := 1536; end
+      else begin FImage.Width := 1024; FImage.Height := 1024; end;
+      Result := FImage.Generate(Prompt, OutputFile);
+      if Result then Break;
+    end;
+  end;
   if not Result then
     ErrorMsg := FImage.LastError;
 end;
