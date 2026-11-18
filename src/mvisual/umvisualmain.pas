@@ -1126,7 +1126,8 @@ begin
   IdxDir := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim +
     FCurrentRevId + PathDelim + 'indexes';
   ForceDirectories(IdxDir);
-  AtomicWriteTextFile(IdxDir + PathDelim + 'entities.json', EntitiesToJson, False);
+  if not AtomicWriteTextFile(IdxDir + PathDelim + 'entities.json', EntitiesToJson, False) then
+    raise Exception.Create('Falha ao salvar entities.json em ' + IdxDir);
 end;
 
 procedure TMvisualMainForm.SaveRevision(const NewState: string);
@@ -1228,36 +1229,62 @@ end;
 
 procedure TMvisualMainForm.OnApproveEntityClick(Sender: TObject);
 var
-  ErrMsg: string;
+  ErrMsg, VerifiedStatus, PreviousStatus: string;
 begin
   if (FSelectedIdx < 0) or (FSelectedIdx > High(FEntities)) then Exit;
-  if not MmpDbSetVisualEntityApproval(FProd.RootDir, FProj.ProjectId,
-    FCurrentRevId, FEntities[FSelectedIdx].EntityId, 'approved', ErrMsg) then
-  begin
-    MessageDlg('Falha ao gravar aprovacao no banco: ' + ErrMsg, mtError, [mbOK], 0);
-    Exit;
+  PreviousStatus := FEntities[FSelectedIdx].ApprovalStatus;
+  try
+    if not MmpDbSetVisualEntityApproval(FProd.RootDir, FProj.ProjectId,
+      FCurrentRevId, FEntities[FSelectedIdx].EntityId, 'approved', ErrMsg) then
+      raise Exception.Create(ErrMsg);
+    if not MmpDbGetVisualEntityApproval(FProd.RootDir, FProj.ProjectId,
+      FCurrentRevId, FEntities[FSelectedIdx].EntityId, VerifiedStatus) or
+      (not SameText(VerifiedStatus, 'approved')) then
+      raise Exception.Create('Leitura de confirmacao do SQLite nao retornou approved.');
+    FEntities[FSelectedIdx].ApprovalStatus := 'approved';
+    SaveCurrentEntitiesDraft;
+    RefreshGrid;
+    LogMsg('APROVACAO CONFIRMADA no SQLite ' + MmpProductionDbPath(FProd.RootDir) +
+      ' | revisao ' + FCurrentRevId + ' | entidade ' + FEntities[FSelectedIdx].EntityId);
+  except
+    on E: Exception do
+    begin
+      FEntities[FSelectedIdx].ApprovalStatus := PreviousStatus;
+      RefreshGrid;
+      LogMsg('ERRO AO APROVAR ' + FEntities[FSelectedIdx].EntityId + ': ' + E.Message);
+      MessageDlg('Erro ao salvar aprovacao: ' + E.Message, mtError, [mbOK], 0);
+    end;
   end;
-  FEntities[FSelectedIdx].ApprovalStatus := 'approved';
-  SaveCurrentEntitiesDraft;
-  RefreshGrid;
-  LogMsg('Entidade aprovada e gravada no SQLite: ' + FEntities[FSelectedIdx].Name);
 end;
 
 procedure TMvisualMainForm.OnRejectEntityClick(Sender: TObject);
 var
-  ErrMsg: string;
+  ErrMsg, VerifiedStatus, PreviousStatus: string;
 begin
   if (FSelectedIdx < 0) or (FSelectedIdx > High(FEntities)) then Exit;
-  if not MmpDbSetVisualEntityApproval(FProd.RootDir, FProj.ProjectId,
-    FCurrentRevId, FEntities[FSelectedIdx].EntityId, 'rejected', ErrMsg) then
-  begin
-    MessageDlg('Falha ao gravar rejeicao no banco: ' + ErrMsg, mtError, [mbOK], 0);
-    Exit;
+  PreviousStatus := FEntities[FSelectedIdx].ApprovalStatus;
+  try
+    if not MmpDbSetVisualEntityApproval(FProd.RootDir, FProj.ProjectId,
+      FCurrentRevId, FEntities[FSelectedIdx].EntityId, 'rejected', ErrMsg) then
+      raise Exception.Create(ErrMsg);
+    if not MmpDbGetVisualEntityApproval(FProd.RootDir, FProj.ProjectId,
+      FCurrentRevId, FEntities[FSelectedIdx].EntityId, VerifiedStatus) or
+      (not SameText(VerifiedStatus, 'rejected')) then
+      raise Exception.Create('Leitura de confirmacao do SQLite nao retornou rejected.');
+    FEntities[FSelectedIdx].ApprovalStatus := 'rejected';
+    SaveCurrentEntitiesDraft;
+    RefreshGrid;
+    LogMsg('REJEICAO CONFIRMADA no SQLite ' + MmpProductionDbPath(FProd.RootDir) +
+      ' | revisao ' + FCurrentRevId + ' | entidade ' + FEntities[FSelectedIdx].EntityId);
+  except
+    on E: Exception do
+    begin
+      FEntities[FSelectedIdx].ApprovalStatus := PreviousStatus;
+      RefreshGrid;
+      LogMsg('ERRO AO REJEITAR ' + FEntities[FSelectedIdx].EntityId + ': ' + E.Message);
+      MessageDlg('Erro ao salvar rejeicao: ' + E.Message, mtError, [mbOK], 0);
+    end;
   end;
-  FEntities[FSelectedIdx].ApprovalStatus := 'rejected';
-  SaveCurrentEntitiesDraft;
-  RefreshGrid;
-  LogMsg('Entidade rejeitada e gravada no SQLite: ' + FEntities[FSelectedIdx].Name);
 end;
 
 procedure TMvisualMainForm.OnPublishClick(Sender: TObject);
