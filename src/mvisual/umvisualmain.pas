@@ -78,6 +78,7 @@ type
     procedure OnAiConfigClick(Sender: TObject);
     procedure OnIndexScriptClick(Sender: TObject);
     procedure OnGenerateViewsClick(Sender: TObject);
+    procedure OnValidateStageClick(Sender: TObject);
     procedure OnSaveDescClick(Sender: TObject);
     procedure OnGridMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
     procedure OnGenItemAllClick(Sender: TObject);
@@ -140,7 +141,7 @@ var
   Head, Sidebar, Bottom, FilterBar, RightPanel: TPanel;
   PC: TPageControl;
   TabWork, TabLog: TTabSheet;
-  BtnOpen, BtnAiCfg, BtnPublish, BtnIndex, BtnGenViews, BtnSharpen, BtnApprove, BtnReject, B: TButton;
+  BtnOpen, BtnAiCfg, BtnPublish, BtnIndex, BtnGenViews, BtnValidateStage, BtnSharpen, BtnApprove, BtnReject, B: TButton;
   L: TLabel;
 begin
   Head := TPanel.Create(Self);
@@ -234,17 +235,24 @@ begin
   BtnGenViews.SetBounds(12, 160, 246, 34);
   BtnGenViews.OnClick := @OnGenerateViewsClick;
 
+  BtnValidateStage := TButton.Create(Self);
+  BtnValidateStage.Parent := Sidebar;
+  BtnValidateStage.Caption := 'Validar Etapa (Liberar MBoard)';
+  BtnValidateStage.Font.Style := [fsBold];
+  BtnValidateStage.SetBounds(12, 202, 246, 34);
+  BtnValidateStage.OnClick := @OnValidateStageClick;
+
   L := TLabel.Create(Self);
   L.Parent := Sidebar;
   L.Caption := 'Detalhes da entidade / ocorrencias:';
   L.Font.Style := [fsBold];
-  L.SetBounds(12, 206, 246, 18);
+  L.SetBounds(12, 244, 246, 18);
 
   FDetailMemo := TMemo.Create(Self);
   FDetailMemo.Parent := Sidebar;
   FDetailMemo.ReadOnly := True;
   FDetailMemo.ScrollBars := ssVertical;
-  FDetailMemo.SetBounds(12, 228, 246, 175);
+  FDetailMemo.SetBounds(12, 266, 246, 137);
 
   L := TLabel.Create(Self);
   L.Parent := Sidebar;
@@ -1230,6 +1238,8 @@ end;
 procedure TMvisualMainForm.OnApproveEntityClick(Sender: TObject);
 var
   ErrMsg, VerifiedStatus, PreviousStatus: string;
+  I: Integer;
+  AllApproved: Boolean;
 begin
   if (FSelectedIdx < 0) or (FSelectedIdx > High(FEntities)) then Exit;
   PreviousStatus := FEntities[FSelectedIdx].ApprovalStatus;
@@ -1246,6 +1256,19 @@ begin
     RefreshGrid;
     LogMsg('APROVACAO CONFIRMADA no SQLite ' + MmpProductionDbPath(FProd.RootDir) +
       ' | revisao ' + FCurrentRevId + ' | entidade ' + FEntities[FSelectedIdx].EntityId);
+
+    AllApproved := Length(FEntities) > 0;
+    for I := 0 to High(FEntities) do
+      if not SameText(FEntities[I].ApprovalStatus, 'approved') then
+      begin
+        AllApproved := False;
+        Break;
+      end;
+    if AllApproved then
+    begin
+      SaveRevision('approved');
+      LogMsg('Todos os itens aprovados! Revisao visual publicada automaticamente (MBoard liberado).');
+    end;
   except
     on E: Exception do
     begin
@@ -1295,6 +1318,90 @@ begin
     Exit;
   end;
   SaveRevision('approved');
+end;
+
+procedure TMvisualMainForm.OnValidateStageClick(Sender: TObject);
+var
+  I, PendingCount, MissingImgCount: Integer;
+  RevDir, FrontPath, ErrMsg, CheckStatus: string;
+begin
+  if not FProd.Loaded then
+  begin
+    MessageDlg('Abra uma producao primeiro.', mtWarning, [mbOK], 0);
+    Exit;
+  end;
+  if Length(FEntities) = 0 then
+  begin
+    MessageDlg('Nao ha entidades indexadas para validar. Execute a Etapa 1 primeiro.', mtWarning, [mbOK], 0);
+    Exit;
+  end;
+
+  PendingCount := 0;
+  MissingImgCount := 0;
+  CheckStatus := '';
+  RevDir := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim + FCurrentRevId;
+  for I := 0 to High(FEntities) do
+  begin
+    if not SameText(FEntities[I].ApprovalStatus, 'approved') then
+      Inc(PendingCount);
+    FrontPath := '';
+    if FEntities[I].FrontRelUri <> '' then
+      FrontPath := RevDir + PathDelim + StringReplace(FEntities[I].FrontRelUri, '/', PathDelim, [rfReplaceAll]);
+    if (FrontPath = '') or (not FileExists(FrontPath)) then
+      Inc(MissingImgCount);
+  end;
+
+  if PendingCount > 0 then
+  begin
+    if MessageDlg('Existem ' + IntToStr(PendingCount) + ' entidade(s) ainda nao aprovadas.' + LineEnding +
+      'Deseja aprovar todas e validar a etapa MVisual agora?', mtConfirmation, [mbYes, mbNo], 0) <> mrYes then
+      Exit;
+
+    for I := 0 to High(FEntities) do
+    begin
+      if not SameText(FEntities[I].ApprovalStatus, 'approved') then
+      begin
+        if not MmpDbSetVisualEntityApproval(FProd.RootDir, FProj.ProjectId, FCurrentRevId,
+          FEntities[I].EntityId, 'approved', ErrMsg) then
+        begin
+          MessageDlg('Erro ao aprovar entidade ' + FEntities[I].EntityId + ' no SQLite: ' + ErrMsg, mtError, [mbOK], 0);
+          Exit;
+        end;
+        if not MmpDbGetVisualEntityApproval(FProd.RootDir, FProj.ProjectId, FCurrentRevId,
+          FEntities[I].EntityId, CheckStatus) or (not SameText(CheckStatus, 'approved')) then
+        begin
+          MessageDlg('Falha ao confirmar aprovacao no SQLite para ' + FEntities[I].EntityId, mtError, [mbOK], 0);
+          Exit;
+        end;
+        FEntities[I].ApprovalStatus := 'approved';
+      end;
+    end;
+    SaveCurrentEntitiesDraft;
+    RefreshGrid;
+  end;
+
+  if MissingImgCount > 0 then
+  begin
+    if MessageDlg('Existem ' + IntToStr(MissingImgCount) + ' entidade(s) sem vista frontal gerada no disco.' + LineEnding +
+      'Deseja validar a etapa e liberar o MBoard mesmo assim?', mtWarning, [mbYes, mbNo], 0) <> mrYes then
+      Exit;
+  end;
+
+  SaveRevision('approved');
+  if MmpProjectHasActivity(FProj) then
+  begin
+    LogMsg('Etapa MVisual VALIDADA! Revisao ' + FCurrentRevId + ' publicada. 3 - MBoard desbloqueado no MMenu.');
+    MessageDlg('Etapa MVisual validada com sucesso!' + LineEnding +
+      'Revisao publicada: ' + FCurrentRevId + LineEnding +
+      'O 3 - MBoard esta liberado no MMenu (clique em Atualizar no MMenu se ele ja estiver aberto).',
+      mtInformation, [mbOK], 0);
+  end
+  else
+  begin
+    LogMsg('AVISO: Revisao salva (' + FCurrentRevId + '), mas MmpProjectHasActivity ainda retornou False.');
+    MessageDlg('Revisao ' + FCurrentRevId + ' salva, mas o protocolo ainda nao acusou atividade no projeto.',
+      mtWarning, [mbOK], 0);
+  end;
 end;
 
 procedure TMvisualMainForm.OnGridSelection(Sender: TObject; aCol, aRow: Integer);
