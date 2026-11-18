@@ -1226,6 +1226,7 @@ procedure TMvisualMainForm.OnApproveEntityClick(Sender: TObject);
 begin
   if (FSelectedIdx < 0) or (FSelectedIdx > High(FEntities)) then Exit;
   FEntities[FSelectedIdx].ApprovalStatus := 'approved';
+  SaveCurrentEntitiesDraft;
   RefreshGrid;
 end;
 
@@ -1233,6 +1234,7 @@ procedure TMvisualMainForm.OnRejectEntityClick(Sender: TObject);
 begin
   if (FSelectedIdx < 0) or (FSelectedIdx > High(FEntities)) then Exit;
   FEntities[FSelectedIdx].ApprovalStatus := 'rejected';
+  SaveCurrentEntitiesDraft;
   RefreshGrid;
 end;
 
