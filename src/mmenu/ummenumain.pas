@@ -131,6 +131,7 @@ type
     FSyncJobsGrid: TStringGrid;
     FBtnGoToFailedApp: TButton;
     FBtnCancelTx: TButton;
+    FBtnResumeTx: TButton;
     FMissingGrid: TStringGrid;
     FBtnRelinkMissing: TButton;
     FBtnAuditHashes: TButton;
@@ -257,6 +258,7 @@ type
 
     procedure OnGoToResponsibleAppClick(Sender: TObject);
     procedure OnCancelSyncClick(Sender: TObject);
+    procedure OnResumeSyncClick(Sender: TObject);
     procedure OnAuditWithHashesClick(Sender: TObject);
     procedure OnRelinkMissingClick(Sender: TObject);
     procedure OnMonitorTimer(Sender: TObject);
@@ -1743,6 +1745,13 @@ begin
   FBtnCancelTx.Anchors := [akTop, akRight];
   FBtnCancelTx.SetBounds(736, 8, 158, 30);
   FBtnCancelTx.OnClick := @OnCancelSyncClick;
+
+  FBtnResumeTx := TButton.Create(Self);
+  FBtnResumeTx.Parent := TopBar;
+  FBtnResumeTx.Caption := 'Retomar transacao';
+  FBtnResumeTx.Anchors := [akTop, akRight];
+  FBtnResumeTx.SetBounds(902, 8, 158, 30);
+  FBtnResumeTx.OnClick := @OnResumeSyncClick;
 
   FSyncJobsGrid := TStringGrid.Create(Self);
   FSyncJobsGrid.Parent := FTabSync;
@@ -4105,6 +4114,64 @@ begin
   end
   else
     MessageDlg(ErrMsg, mtError, [mbOK], 0);
+end;
+
+{ docs/specs/00-comum 7.3: "Retomar" executa <origem> --headless
+  --resume-transaction <tx>. Hoje so o MBoard orquestra cascatas. }
+procedure TMmenuMainForm.OnResumeSyncClick(Sender: TObject);
+var
+  RowIdx, Code: Integer;
+  Job: TMmpSyncJob;
+  TxPath, Origin, ErrMsg, TxStatus: string;
+begin
+  if (not FProd.Loaded) or (Length(FProd.SyncJobs) = 0) then Exit;
+  RowIdx := FSyncJobsGrid.Row - 1;
+  if (RowIdx < 0) or (RowIdx > High(FProd.SyncJobs)) then RowIdx := 0;
+  Job := FProd.SyncJobs[RowIdx];
+  if Job.TransactionId = '' then
+  begin
+    MessageDlg('O item selecionado nao pertence a uma transacao de cascata.', mtInformation, [mbOK], 0);
+    Exit;
+  end;
+  TxPath := IncludeTrailingPathDelimiter(FProd.RootDir) + 'shared' + PathDelim + 'transactions' +
+    PathDelim + Job.TransactionId + '.json';
+  TxStatus := MmpJsonFileGet(TxPath, 'status');
+  if SameText(TxStatus, 'complete') or SameText(TxStatus, 'cancelled') then
+  begin
+    MessageDlg('A transacao ' + Job.TransactionId + ' ja esta ' + TxStatus + '.', mtInformation, [mbOK], 0);
+    Exit;
+  end;
+  Origin := Job.OriginApp;
+  if not SameText(Origin, 'MBoard') then
+  begin
+    MessageDlg('A transacao ' + Job.TransactionId + ' foi iniciada pelo ' + Origin + ', que ainda nao ' +
+      'retoma cascatas sem janela. Abra o ' + Job.TargetApp + ' para processar o pedido.',
+      mtInformation, [mbOK], 0);
+    Exit;
+  end;
+  Screen.Cursor := crHourGlass;
+  try
+    Code := MmpRunHeadlessResume(maMBoard, FProd.RootDir, Job.TransactionId, ErrMsg);
+  finally
+    Screen.Cursor := crDefault;
+  end;
+  OpenProductionPath(FProd.RootDir, False);
+  TxStatus := MmpJsonFileGet(TxPath, 'status');
+  if Code = EXIT_OK then
+  begin
+    LogMsg('Transacao retomada e concluida: ' + Job.TransactionId);
+    MessageDlg('Transacao ' + Job.TransactionId + ' retomada: ' + TxStatus + '.', mtInformation, [mbOK], 0);
+  end
+  else
+  begin
+    if Code = EXIT_LOCKED then
+      ErrMsg := 'O MBoard esta aberto; feche-o e tente de novo.'
+    else if ErrMsg = '' then
+      ErrMsg := 'O MBoard terminou com codigo ' + IntToStr(Code) + '. Veja os erros da transacao.';
+    LogMsg('Retomada da transacao ' + Job.TransactionId + ' falhou: ' + ErrMsg);
+    MessageDlg('A transacao ' + Job.TransactionId + ' nao foi concluida (' + TxStatus + '):' +
+      LineEnding + ErrMsg, mtWarning, [mbOK], 0);
+  end;
 end;
 
 function BuildProdFingerprint(const P: TMmpProduction): string;

@@ -22,6 +22,12 @@ begin
   RequireDerivedFormResource := False;
   Application.Scaled := True;
   Application.Initialize;
+  { retomada de cascata sem mostrar a janela }
+  if Args.Headless then
+  begin
+    ExitCode := RunMBoardHeadlessResume(Args);
+    Halt(ExitCode);
+  end;
   Application.CreateForm(TMboardMainForm, mboardMainForm);
   Application.Run;
 end.

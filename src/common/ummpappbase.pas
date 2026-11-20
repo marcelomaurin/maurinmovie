@@ -90,6 +90,29 @@ function MmpFindAppExecutable(App: TMMApp): string;
 function MmpRunHeadlessEvent(App: TMMApp; const ProdRoot, ProjectId, EventFile: string;
   out ErrText: string): Integer;
 
+{ Executa <app> --headless --resume-transaction <tx> (retomada de cascata). }
+function MmpRunHeadlessResume(App: TMMApp; const ProdRoot, TransactionId: string;
+  out ErrText: string): Integer;
+
+{ Cria o evento de um estagio seguinte de uma transacao ja existente
+  (mesmo transaction_id e root_event_id), com requested_change.type =
+  'source.update', e registra o event_id/revision_before no estagio. }
+function MmpEmitStageEvent(const ProdRoot, TransactionId, RootEventId, OriginApp,
+  TargetApp, TargetProjectId, SourceRevision, Summary, AffectedIdsCsv: string;
+  out EventId, EventFile: string): Boolean;
+
+{ Grava o estado final de um evento (published/failed). Publicado: vai para
+  shared/events/archive (docs/specs/00-comum 7.2, regras 5 e 6). }
+function MmpFinishEventFile(const ProdRoot, EventFile, NewStatus, NewRevision,
+  ErrText: string): Boolean;
+
+{ Arquivos de evento ainda abertos (nem publicados nem cancelados) na caixa
+  de entrada do aplicativo: shared/events/inbox/<AppName>/*.json. }
+procedure MmpListOpenInboxEvents(const ProdRoot, AppName: string; Files: TStrings);
+
+{ Le um campo de texto de um JSON (primeiro nivel); '' se nao existir. }
+function MmpJsonFileGet(const FilePath, Key: string): string;
+
 { Area de rascunho mutavel do projeto (docs/specs/00-comum 5.1): projects/NN-app/work/draft.
   Revisoes publicadas em revisions/rNNNN sao imutaveis; todo arquivo gerado ou
   editado antes de publicar deve ir para esta pasta. }
@@ -1103,6 +1126,228 @@ begin
     end;
   finally
     P.Free;
+  end;
+end;
+
+function MmpRunHeadlessResume(App: TMMApp; const ProdRoot, TransactionId: string;
+  out ErrText: string): Integer;
+var
+  Exe: string;
+  P: TProcess;
+begin
+  Result := -1;
+  ErrText := '';
+  Exe := MmpFindAppExecutable(App);
+  if Exe = '' then
+  begin
+    ErrText := 'Executavel de ' + MMAppNames[App] + ' nao encontrado.';
+    Exit;
+  end;
+  P := TProcess.Create(nil);
+  try
+    P.Executable := Exe;
+    P.Parameters.Add('--launcher');
+    P.Parameters.Add('mmenu');
+    P.Parameters.Add('--mmenu-version');
+    P.Parameters.Add(MAURINMOVIE_VERSION);
+    P.Parameters.Add('--production');
+    P.Parameters.Add(ProdRoot);
+    P.Parameters.Add('--headless');
+    P.Parameters.Add('--resume-transaction');
+    P.Parameters.Add(TransactionId);
+    P.Options := [poWaitOnExit, poNoConsole];
+    try
+      P.Execute;
+      Result := P.ExitStatus;
+    except
+      on E: Exception do
+      begin
+        ErrText := 'Falha ao iniciar ' + MMAppNames[App] + ': ' + E.Message;
+        Result := -1;
+      end;
+    end;
+  finally
+    P.Free;
+  end;
+end;
+
+function MmpJsonFileGet(const FilePath, Key: string): string;
+var
+  Content: string;
+  Data: TJSONData;
+begin
+  Result := '';
+  if not ReadTextFileUtf8(FilePath, Content) then Exit;
+  try
+    Data := GetJSON(Content);
+  except
+    Exit;
+  end;
+  try
+    if (Data is TJSONObject) and (TJSONObject(Data).Find(Key) <> nil) and
+       (TJSONObject(Data).Find(Key).JSONType in [jtString, jtNumber, jtBoolean]) then
+      Result := TJSONObject(Data).Find(Key).AsString;
+  finally
+    Data.Free;
+  end;
+end;
+
+procedure SetJsonStr(Obj: TJSONObject; const Key, Value: string);
+begin
+  if Obj.IndexOfName(Key) >= 0 then Obj.Delete(Key);
+  Obj.Add(Key, Value);
+end;
+
+function MmpEmitStageEvent(const ProdRoot, TransactionId, RootEventId, OriginApp,
+  TargetApp, TargetProjectId, SourceRevision, Summary, AffectedIdsCsv: string;
+  out EventId, EventFile: string): Boolean;
+var
+  Obj, ReqObj, ResObj, TxObj, StageObj: TJSONObject;
+  AffArr, Arr: TJSONArray;
+  Parts: TStringArray;
+  Part, NowIso, TxPath, Content: string;
+  Data: TJSONData;
+  I: Integer;
+begin
+  Result := False;
+  NowIso := CurrentIsoUtc;
+  EventId := GenerateMmpId('evt');
+  EventFile := IncludeTrailingPathDelimiter(ProdRoot) + 'shared' + PathDelim + 'events' +
+    PathDelim + 'inbox' + PathDelim + TargetApp + PathDelim + EventId + '.json';
+  ForceDirectories(ExtractFileDir(EventFile));
+  Obj := TJSONObject.Create;
+  try
+    Obj.Add('schema', MMP_SCHEMA_EVENT);
+    Obj.Add('event_id', EventId);
+    Obj.Add('transaction_id', TransactionId);
+    Obj.Add('root_event_id', RootEventId);
+    Obj.Add('production_id', ReadProductionIdFromRoot(ProdRoot));
+    Obj.Add('origin_app', OriginApp);
+    Obj.Add('target_app', TargetApp);
+    Obj.Add('project_id', TargetProjectId);
+    Obj.Add('source_revision', SourceRevision);
+    ReqObj := TJSONObject.Create;
+    ReqObj.Add('type', 'source.update');
+    ReqObj.Add('summary', Summary);
+    Obj.Add('requested_change', ReqObj);
+    AffArr := TJSONArray.Create;
+    Parts := AffectedIdsCsv.Split([',']);
+    for Part in Parts do
+      if Trim(Part) <> '' then AffArr.Add(Trim(Part));
+    Obj.Add('affected_ids', AffArr);
+    Obj.Add('stage', TargetApp);
+    Obj.Add('idempotency_key', EventId + ':' + TargetApp);
+    Obj.Add('status', 'queued');
+    Obj.Add('attempts', 0);
+    ResObj := TJSONObject.Create;
+    ResObj.Add('new_revision', '');
+    ResObj.Add('error', '');
+    Obj.Add('result', ResObj);
+    Obj.Add('error', '');
+    Obj.Add('created_at', NowIso);
+    Result := AtomicWriteTextFile(EventFile, Obj.FormatJSON, False);
+  finally
+    Obj.Free;
+  end;
+  if not Result then Exit;
+
+  { registra o evento no estagio da transacao }
+  TxPath := IncludeTrailingPathDelimiter(ProdRoot) + 'shared' + PathDelim + 'transactions' +
+    PathDelim + TransactionId + '.json';
+  if not ReadTextFileUtf8(TxPath, Content) then Exit;
+  try
+    Data := GetJSON(Content);
+  except
+    Exit;
+  end;
+  try
+    if not (Data is TJSONObject) then Exit;
+    TxObj := TJSONObject(Data);
+    if not (TxObj.Find('stages') is TJSONArray) then Exit;
+    Arr := TJSONArray(TxObj.Find('stages'));
+    for I := 0 to Arr.Count - 1 do
+      if (Arr.Items[I] is TJSONObject) and
+         SameText(TJSONObject(Arr.Items[I]).Get('application', ''), TargetApp) then
+      begin
+        StageObj := TJSONObject(Arr.Items[I]);
+        SetJsonStr(StageObj, 'event_id', EventId);
+        SetJsonStr(StageObj, 'status', 'in_progress');
+        SetJsonStr(StageObj, 'revision_before', SourceRevision);
+      end;
+    SetJsonStr(TxObj, 'updated_at', NowIso);
+    AtomicWriteTextFile(TxPath, TxObj.FormatJSON, True);
+  finally
+    Data.Free;
+  end;
+  AppendJsonLogLine(ProdRoot, OriginApp, 'info',
+    'Evento ' + EventId + ' (transacao ' + TransactionId + ') emitido para ' + TargetApp);
+end;
+
+function MmpFinishEventFile(const ProdRoot, EventFile, NewStatus, NewRevision,
+  ErrText: string): Boolean;
+var
+  Content, ArchivePath: string;
+  Data: TJSONData;
+  EvtObj, ResObj: TJSONObject;
+begin
+  Result := False;
+  if not ReadTextFileUtf8(EventFile, Content) then Exit;
+  try
+    Data := GetJSON(Content);
+  except
+    Exit;
+  end;
+  try
+    if not (Data is TJSONObject) then Exit;
+    EvtObj := TJSONObject(Data);
+    SetJsonStr(EvtObj, 'status', NewStatus);
+    if EvtObj.IndexOfName('attempts') >= 0 then
+      EvtObj.Integers['attempts'] := EvtObj.Get('attempts', 0) + 1
+    else
+      EvtObj.Add('attempts', 1);
+    if EvtObj.Find('result') is TJSONObject then
+      ResObj := TJSONObject(EvtObj.Find('result'))
+    else
+    begin
+      if EvtObj.IndexOfName('result') >= 0 then EvtObj.Delete('result');
+      ResObj := TJSONObject.Create;
+      EvtObj.Add('result', ResObj);
+    end;
+    SetJsonStr(ResObj, 'new_revision', NewRevision);
+    SetJsonStr(ResObj, 'error', ErrText);
+    SetJsonStr(EvtObj, 'error', ErrText);
+    SetJsonStr(EvtObj, 'updated_at', CurrentIsoUtc);
+    if SameText(NewStatus, 'published') then
+    begin
+      ArchivePath := IncludeTrailingPathDelimiter(ProdRoot) + 'shared' + PathDelim +
+        'events' + PathDelim + 'archive' + PathDelim + ExtractFileName(EventFile);
+      Result := AtomicWriteTextFile(ArchivePath, EvtObj.FormatJSON, False);
+      if Result then DeleteFile(EventFile);
+    end
+    else
+      Result := AtomicWriteTextFile(EventFile, EvtObj.FormatJSON, False);
+  finally
+    Data.Free;
+  end;
+end;
+
+procedure MmpListOpenInboxEvents(const ProdRoot, AppName: string; Files: TStrings);
+var
+  Dir, St: string;
+  SR: TSearchRec;
+begin
+  Files.Clear;
+  Dir := IncludeTrailingPathDelimiter(ProdRoot) + 'shared' + PathDelim + 'events' + PathDelim +
+    'inbox' + PathDelim + AppName + PathDelim;
+  if FindFirst(Dir + '*.json', faAnyFile, SR) = 0 then
+  try
+    repeat
+      St := LowerCase(MmpJsonFileGet(Dir + SR.Name, 'status'));
+      if (St <> 'published') and (St <> 'cancelled') and (St <> 'complete') then
+        Files.Add(Dir + SR.Name);
+    until FindNext(SR) <> 0;
+  finally
+    FindClose(SR);
   end;
 end;
 

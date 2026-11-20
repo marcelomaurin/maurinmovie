@@ -51,6 +51,8 @@ type
     FPreviewImg: TImage;
     FLogMemo: TMemo;
     FStatusLabel: TLabel;
+    FInboxLabel: TLabel;
+    FInboxFiles: TStringList;
 
     procedure BuildUI;
     procedure LogMsg(const Msg: string);
@@ -69,6 +71,8 @@ type
     function SceneVideoFile(const SceneId: string): string;
     procedure WatchLink(ToPrevious: Boolean);
     procedure RestoreSceneState;
+    procedure RefreshInbox;
+    function SceneEventFile(const SceneId: string): string;
     procedure CopyRelToRevision(const RelUri, RevDir: string);
     procedure OnWatchSegmentClick(Sender: TObject);
     procedure OnWatchSceneClick(Sender: TObject);
@@ -108,6 +112,7 @@ begin
   Constraints.MinHeight := 620;
 
   FAi := TMmpAiBridge.Create('MScene');
+  FInboxFiles := TStringList.Create;
   FDecoder := TAIH264Decoder.Create(Self);
   FDecoder.OnFrame := @OnDecoderFrame;
   FPrevSceneLinkStatus := 'sem_cena_anterior';
@@ -125,6 +130,7 @@ destructor TMsceneMainForm.Destroy;
 begin
   FDecoder.Stop;
   FAi.Free;
+  FInboxFiles.Free;
   inherited Destroy;
 end;
 
@@ -219,6 +225,11 @@ begin
     'abertura e fechamento do MBoard com movimento de camera, falas e ambiencia do MSound. ' +
     '"Ver" monta os ultimos e os primeiros segundos das duas cenas para conferir a ligacao.';
 
+  FInboxLabel := TLabel.Create(Self); FInboxLabel.Parent := Sidebar; FInboxLabel.WordWrap := True;
+  FInboxLabel.AutoSize := False; FInboxLabel.SetBounds(12, 530, 246, 120);
+  FInboxLabel.Font.Style := [fsBold]; FInboxLabel.Font.Color := $000060C0;
+  FInboxLabel.Caption := '';
+
   PC := TPageControl.Create(Self); PC.Parent := Self; PC.Align := alClient; MmpPrepareAligned(PC);
   TabWork := TTabSheet.Create(PC); TabWork.PageControl := PC; MmpPrepareTabSheet(TabWork); TabWork.Caption := 'Sub-blocos && Montagem da Cena';
   TabLog := TTabSheet.Create(PC); TabLog.PageControl := PC; MmpPrepareTabSheet(TabLog); TabLog.Caption := 'Log Operacional';
@@ -283,6 +294,7 @@ begin
     [FScriptProj.ActiveRevision, FVisualProj.ActiveRevision,
      FBoardProj.ActiveRevision, FSoundProj.ActiveRevision]);
 
+  RefreshInbox;
   PopulateSceneList;
   LogMsg('Producao carregada em MScene. Selecione uma cena para trabalhar.');
 end;
@@ -483,6 +495,7 @@ begin
   FPrevLinkLabel.Caption := 'Anterior: ' + FPrevSceneLinkStatus;
   FNextLinkLabel.Caption := 'Proxima: ' + FNextSceneLinkStatus;
   RefreshSegmentsGrid;
+  RefreshInbox;
 end;
 
 procedure TMsceneMainForm.RefreshSegmentsGrid;
@@ -1123,6 +1136,90 @@ begin
   WatchLink(False);
 end;
 
+{ Pedidos abertos na caixa do MScene (docs/specs/00-comum 7.2-2): hoje sao
+  as solicitacoes de correcao do MCut. A confirmacao e salvar a cena. }
+procedure TMsceneMainForm.RefreshInbox;
+var
+  I, N: Integer;
+  Txt, Sid, Summary, Content: string;
+  Data: TJSONData;
+begin
+  if FInboxFiles = nil then Exit;
+  FInboxFiles.Clear;
+  if not FProd.Loaded then Exit;
+  MmpListOpenInboxEvents(FProd.RootDir, 'MScene', FInboxFiles);
+  N := FInboxFiles.Count;
+  if N = 0 then
+  begin
+    FInboxLabel.Caption := '';
+    Exit;
+  end;
+  Txt := Format('%d pedido(s) de correcao do MCut:', [N]);
+  for I := 0 to FInboxFiles.Count - 1 do
+  begin
+    Sid := ''; Summary := '';
+    if ReadTextFileUtf8(FInboxFiles[I], Content) then
+    try
+      Data := GetJSON(Content);
+      try
+        if (Data is TJSONObject) then
+        begin
+          if (TJSONObject(Data).Find('affected_ids') is TJSONArray) and
+             (TJSONArray(TJSONObject(Data).Find('affected_ids')).Count > 0) then
+            Sid := TJSONArray(TJSONObject(Data).Find('affected_ids')).Strings[0];
+          if TJSONObject(Data).FindPath('requested_change.summary') <> nil then
+            Summary := TJSONObject(Data).FindPath('requested_change.summary').AsString;
+        end;
+      finally
+        Data.Free;
+      end;
+    except
+    end;
+    Txt := Txt + LineEnding + '- ' + Sid + ': ' + Summary;
+  end;
+  if SceneEventFile(FCurrentSceneId) <> '' then
+    Txt := Txt + LineEnding + 'Salvar Cena registra o atendimento.';
+  FInboxLabel.Caption := Txt;
+end;
+
+function TMsceneMainForm.SceneEventFile(const SceneId: string): string;
+var
+  I: Integer;
+  Content, ProjId: string;
+  Data: TJSONData;
+  Arr: TJSONArray;
+  J: Integer;
+  Hit: Boolean;
+begin
+  Result := '';
+  if (SceneId = '') or (FInboxFiles = nil) then Exit;
+  ProjId := MmpJsonFileGet(FSceneProjectDir + PathDelim + 'project.json', 'project_id');
+  for I := 0 to FInboxFiles.Count - 1 do
+  begin
+    if not ReadTextFileUtf8(FInboxFiles[I], Content) then Continue;
+    Hit := False;
+    try
+      Data := GetJSON(Content);
+      try
+        if Data is TJSONObject then
+        begin
+          if (ProjId <> '') and SameText(TJSONObject(Data).Get('project_id', ''), ProjId) then Hit := True;
+          if TJSONObject(Data).Find('affected_ids') is TJSONArray then
+          begin
+            Arr := TJSONArray(TJSONObject(Data).Find('affected_ids'));
+            for J := 0 to Arr.Count - 1 do
+              if SameText(Arr.Strings[J], SceneId) then Hit := True;
+          end;
+        end;
+      finally
+        Data.Free;
+      end;
+    except
+    end;
+    if Hit then Exit(FInboxFiles[I]);
+  end;
+end;
+
 procedure TMsceneMainForm.CopyRelToRevision(const RelUri, RevDir: string);
 var
   SrcF, DstF: string;
@@ -1166,7 +1263,7 @@ end;
 
 procedure TMsceneMainForm.OnSaveSceneProjectClick(Sender: TObject);
 var
-  SceneProjPath, PrepRev, RevDir, NewRev, ErrMsg, FinalState, OldRevDir: string;
+  SceneProjPath, PrepRev, RevDir, NewRev, ErrMsg, FinalState, OldRevDir, EvtFile, EvtId, TxId: string;
   Srcs: array of TMmpSourceRef;
   Arts: array of TMmpArtifactInput;
   RevInfo: TMmpRevisionInfo;
@@ -1227,12 +1324,25 @@ begin
   else
     FinalState := 'finalizada';
 
+  EvtFile := SceneEventFile(FCurrentSceneId);
+  EvtId := '';
+  if EvtFile <> '' then EvtId := MmpJsonFileGet(EvtFile, 'event_id');
   if PublishProjectRevision(FProd.ProductionId, SceneProjPath, 'MScene',
-    FSceneRevId, FinalState, '', Srcs, Arts, NewRev, ErrMsg, PrepRev) then
+    FSceneRevId, FinalState, EvtId, Srcs, Arts, NewRev, ErrMsg, PrepRev) then
   begin
     FSceneRevId := NewRev;
     MmpClearDraftDir(FSceneProjectDir);
     LogMsg('Projeto da cena ' + FCurrentSceneId + ' salvo na revisao ' + NewRev + ' [' + FinalState + ']');
+    { pedido de correcao do MCut atendido: evento publicado e estagio concluido }
+    if EvtFile <> '' then
+    begin
+      TxId := MmpJsonFileGet(EvtFile, 'transaction_id');
+      MmpFinishEventFile(FProd.RootDir, EvtFile, 'published', NewRev, '');
+      if TxId <> '' then
+        MmpUpdateTransactionStage(FProd.RootDir, TxId, 'MScene', 'complete', NewRev, '');
+      LogMsg('Pedido de correcao ' + EvtId + ' atendido na revisao ' + NewRev + '.');
+      RefreshInbox;
+    end;
   end
   else
   begin

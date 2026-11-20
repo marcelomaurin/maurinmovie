@@ -7,7 +7,7 @@ interface
 uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
   ComCtrls, Grids, Menus, fpjson, jsonparser, imagefilters,
-  ummpsha256, ummpprotocol, ummpappbase, ummpaibridge, ummpdb;
+  mmpcommon, ummpsha256, ummpprotocol, ummpappbase, ummpaibridge, ummpdb;
 
 type
   TVisualEntity = record
@@ -61,8 +61,12 @@ type
     FTotalStepsGen: Integer;
     FDoneStepsGen: Integer;
 
+    FHeadlessError: string;
+    FChangeEventId: string;
     procedure BuildUI;
     procedure LogMsg(const Msg: string);
+    { MessageDlg na interface; no modo sem janela vira erro registrado }
+    procedure Notify(const Msg: string; Kind: TMsgDlgType);
     procedure LoadProductionAndRevision(const ProdRoot, ProjId, RevId: string);
     procedure LoadEntitiesFromRevision(const RevId: string);
     procedure RefreshGrid;
@@ -104,10 +108,17 @@ type
   public
     constructor Create(TheOwner: TComponent); override;
     destructor Destroy; override;
+    { Evento source.update da cascata: reindexa a partir da revisao ativa do
+      roteiro e publica com change_event_id. Devolve codigo de saida. }
+    function ApplySourceUpdate(const EventId: string; out NewRev, Err: string): Integer;
   end;
 
 var
   mvisualMainForm: TMvisualMainForm;
+  { verdadeiro quando o programa roda com --headless (sem mostrar janela) }
+  GMVisualHeadless: Boolean = False;
+
+function RunMVisualHeadlessEvent(const Args: TMMLaunchArgs): Integer;
 
 implementation
 
@@ -455,6 +466,122 @@ begin
   FBtnStopGen.OnClick := @OnStopGenClick;
 end;
 
+procedure TMvisualMainForm.Notify(const Msg: string; Kind: TMsgDlgType);
+begin
+  if GMVisualHeadless then
+  begin
+    if Kind in [mtError, mtWarning] then FHeadlessError := Msg;
+    WriteCliLine(Msg);
+  end
+  else
+    MessageDlg(Msg, Kind, [mbOK], 0);
+end;
+
+function TMvisualMainForm.ApplySourceUpdate(const EventId: string; out NewRev, Err: string): Integer;
+var
+  Idx, Orphans, I: Integer;
+begin
+  NewRev := '';
+  Err := '';
+  FHeadlessError := '';
+  if not FProd.Loaded then
+  begin
+    Err := 'Producao ou projeto do MVisual nao encontrado.';
+    Exit(EXIT_NOT_FOUND);
+  end;
+  { regra 7.2-2: nao sobrescrever trabalho em andamento }
+  if MmpHasDraft(FProjectDir) then
+  begin
+    Err := 'O MVisual tem rascunho nao publicado; abra o MVisual, publique ou descarte e use Retomar.';
+    Exit(EXIT_EVENT_AMBIGUOUS);
+  end;
+  Idx := FScriptRevCombo.Items.IndexOf(FScriptProj.ActiveRevision);
+  if Idx < 0 then
+  begin
+    Err := 'Revisao ativa do MScript nao encontrada.';
+    Exit(EXIT_NOT_FOUND);
+  end;
+  FScriptRevCombo.ItemIndex := Idx;
+  OnIndexScriptClick(nil);
+  if FHeadlessError <> '' then
+  begin
+    Err := FHeadlessError;
+    MmpClearDraftDir(FProjectDir);
+    Exit(EXIT_EVENT_AMBIGUOUS);
+  end;
+  Orphans := 0;
+  for I := 0 to High(FEntities) do
+    if Trim(FEntities[I].SceneIdsCsv) = '' then Inc(Orphans);
+  FChangeEventId := EventId;
+  SaveRevision('published');
+  FChangeEventId := '';
+  if FHeadlessError <> '' then
+  begin
+    Err := FHeadlessError;
+    Exit(EXIT_EVENT_RETRYABLE);
+  end;
+  NewRev := FCurrentRevId;
+  WriteCliLine(Format('MVisual reindexado a partir do MScript %s: %d entidades (%d sem cena), revisao %s.',
+    [FScriptProj.ActiveRevision, Length(FEntities), Orphans, NewRev]));
+  Result := EXIT_OK;
+end;
+
+function RunMVisualHeadlessEvent(const Args: TMMLaunchArgs): Integer;
+var
+  Prod: TMmpProduction;
+  Proj: TMmpProjectRef;
+  ProjDir, RevId, ErrMsg, EvtId, NewRev: string;
+  I: Integer;
+  F: TMvisualMainForm;
+begin
+  Result := EXIT_UNEXPECTED_ERROR;
+  if (Args.Production = '') or (Args.EventFile = '') then
+  begin
+    WriteCliLine('Uso headless: mvisual --production <pasta> --headless --event <arquivo>');
+    Exit(EXIT_INVALID_ARGS);
+  end;
+  if not FileExists(Args.EventFile) then Exit(EXIT_NOT_FOUND);
+  EvtId := MmpJsonFileGet(Args.EventFile, 'event_id');
+  if EvtId = '' then
+  begin
+    WriteCliLine('[ERRO] Evento sem event_id.');
+    Exit(EXIT_INVALID_ARGS);
+  end;
+  if not ResolveAppProject(Args.Production, 2, Args.ProjectId, '', Prod, Proj, ProjDir, RevId, ErrMsg) then
+  begin
+    WriteCliLine(ErrMsg);
+    MmpFinishEventFile(Args.Production, Args.EventFile, 'failed', '', ErrMsg);
+    Exit(EXIT_NOT_FOUND);
+  end;
+  { idempotencia (regra 7.2-3) }
+  for I := 0 to High(Proj.Revisions) do
+    if SameText(Proj.Revisions[I].ChangeEventId, EvtId) then
+    begin
+      WriteCliLine('Evento ' + EvtId + ' ja aplicado em ' + Proj.Revisions[I].RevisionId);
+      MmpFinishEventFile(Prod.RootDir, Args.EventFile, 'published', Proj.Revisions[I].RevisionId, '');
+      Exit(EXIT_OK);
+    end;
+
+  GMVisualHeadless := True;
+  F := TMvisualMainForm.Create(nil);
+  try
+    Result := F.ApplySourceUpdate(EvtId, NewRev, ErrMsg);
+  finally
+    F.Free;
+  end;
+  if Result = EXIT_OK then
+  begin
+    MmpFinishEventFile(Prod.RootDir, Args.EventFile, 'published', NewRev, '');
+    AppendJsonLogLine(Prod.RootDir, 'MVisual', 'info', 'Evento ' + EvtId + ' aplicado -> ' + NewRev);
+  end
+  else
+  begin
+    WriteCliLine('[ERRO] ' + ErrMsg);
+    MmpFinishEventFile(Prod.RootDir, Args.EventFile, 'failed', '', ErrMsg);
+    AppendJsonLogLine(Prod.RootDir, 'MVisual', 'error', 'Evento ' + EvtId + ': ' + ErrMsg);
+  end;
+end;
+
 procedure TMvisualMainForm.LogMsg(const Msg: string);
 begin
   if FLogMemo <> nil then
@@ -473,7 +600,7 @@ begin
   if not ResolveAppProject(ProdRoot, 2, ProjId, RevId, FProd, FProj,
     FProjectDir, FCurrentRevId, ErrMsg) then
   begin
-    MessageDlg(ErrMsg, mtError, [mbOK], 0);
+    Notify(ErrMsg, mtError);
     Exit;
   end;
 
@@ -607,7 +734,7 @@ var
 begin
   if not FProd.Loaded then
   begin
-    MessageDlg('Abra uma producao primeiro.', mtWarning, [mbOK], 0);
+    Notify('Abra uma producao primeiro.', mtWarning);
     Exit;
   end;
 
@@ -619,15 +746,14 @@ begin
 
   if not FileExists(ScriptJsonPath) then
   begin
-    MessageDlg('Arquivo scripts/roteiro.json nao encontrado na revisao ' + FScriptSourceRevId +
-      ' do MScript. Salve/valide o roteiro no MScript primeiro.', mtWarning, [mbOK], 0);
+    Notify('Arquivo scripts/roteiro.json nao encontrado na revisao ' + FScriptSourceRevId +
+      ' do MScript. Salve/valide o roteiro no MScript primeiro.', mtWarning);
     Exit;
   end;
   if not IsScriptRevisionApproved(FScriptSourceRevId) then
   begin
-    MessageDlg('A revisao ' + FScriptSourceRevId + ' do MScript ainda nao foi validada.' + LineEnding +
-      'O MVisual so importa revisoes aprovadas do roteiro (valide no MScript primeiro).',
-      mtWarning, [mbOK], 0);
+    Notify('A revisao ' + FScriptSourceRevId + ' do MScript ainda nao foi validada.' + LineEnding +
+      'O MVisual so importa revisoes aprovadas do roteiro (valide no MScript primeiro).', mtWarning);
     Exit;
   end;
 
@@ -635,6 +761,10 @@ begin
   Data := GetJSON(Content);
   if not (Data is TJSONObject) then begin Data.Free; Exit; end;
   Obj := TJSONObject(Data);
+  { a lista de cenas de cada entidade e recalculada a partir do roteiro
+    (uma entidade que saiu de uma cena deixa de apontar para ela) }
+  for I := 0 to High(FEntities) do
+    FEntities[I].SceneIdsCsv := '';
   Parts := TStringList.Create;
   try
     Parts.Delimiter := ',';
@@ -1257,7 +1387,7 @@ begin
     EntitiesToJson, False) then
   begin
     MmpDiscardUnpublishedRevisionDir(RevDir);
-    MessageDlg('Falha ao gravar indexes/entities.json.', mtError, [mbOK], 0);
+    Notify('Falha ao gravar indexes/entities.json.', mtError);
     Exit;
   end;
 
@@ -1278,7 +1408,7 @@ begin
     Srcs[0].ManifestSha256 := RevInfo.ManifestSha256;
 
   if PublishProjectRevision(FProd.ProductionId, FProj.ProjectFilePath, 'MVisual',
-    FCurrentRevId, NewState, '', Srcs, Arts, NewRev, ErrMsg, PrepRev) then
+    FCurrentRevId, NewState, FChangeEventId, Srcs, Arts, NewRev, ErrMsg, PrepRev) then
   begin
     MmpClearDraftDir(FProjectDir);
     LogMsg('Nova revisao visual publicada: ' + NewRev + ' [' + NewState + ']');
@@ -1287,7 +1417,7 @@ begin
   else
   begin
     MmpDiscardUnpublishedRevisionDir(RevDir);
-    MessageDlg(ErrMsg, mtError, [mbOK], 0);
+    Notify(ErrMsg, mtError);
   end;
 end;
 

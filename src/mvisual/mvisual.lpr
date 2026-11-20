@@ -22,6 +22,12 @@ begin
   RequireDerivedFormResource := False;
   Application.Scaled := True;
   Application.Initialize;
+  { cascata: aplica o evento sem mostrar a janela e encerra }
+  if Args.Headless then
+  begin
+    ExitCode := RunMVisualHeadlessEvent(Args);
+    Halt(ExitCode);
+  end;
   Application.CreateForm(TMvisualMainForm, mvisualMainForm);
   Application.Run;
 end.

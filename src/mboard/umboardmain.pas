@@ -64,8 +64,12 @@ type
     FLogMemo: TMemo;
     FStatusLabel: TLabel;
 
+    FHeadlessError: string;
     procedure BuildUI;
     procedure LogMsg(const Msg: string);
+    procedure Notify(const Msg: string; Kind: TMsgDlgType);
+    procedure SaveBoardsDraft;
+    procedure RefreshSourceProjects;
     procedure LoadProductionAndRevision(const ProdRoot, ProjId, RevId: string);
     procedure LoadBoardsFromRevision(const RevId: string);
     procedure RefreshBoardsGrid;
@@ -86,12 +90,19 @@ type
     procedure OnEmitCascadeClick(Sender: TObject);
     procedure OnBoardsGridSelection(Sender: TObject; aCol, aRow: Integer);
   public
+    { Executa os estagios pendentes da transacao de cascata (MScript ->
+      MVisual -> MBoard). Summary descreve o resultado de cada estagio. }
+    function ContinueCascade(const TxId: string; out Summary: string): Boolean;
     constructor Create(TheOwner: TComponent); override;
     destructor Destroy; override;
   end;
 
 var
   mboardMainForm: TMboardMainForm;
+  GMBoardHeadless: Boolean = False;
+
+{ mboard --headless --resume-transaction <tx>: retoma a cascata sem janela. }
+function RunMBoardHeadlessResume(const Args: TMMLaunchArgs): Integer;
 
 implementation
 
@@ -337,7 +348,7 @@ begin
   if not ResolveAppProject(ProdRoot, 3, ProjId, RevId, FProd, FProj,
     FProjectDir, FCurrentRevId, ErrMsg) then
   begin
-    MessageDlg(ErrMsg, mtError, [mbOK], 0);
+    Notify(ErrMsg, mtError);
     Exit;
   end;
 
@@ -365,8 +376,13 @@ var
   I, J: Integer;
 begin
   SetLength(FBoards, 0);
-  Path := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim +
-    RevId + PathDelim + 'storyboard' + PathDelim + 'scenes.json';
+  { ajustes ainda nao publicados ficam no rascunho (work/draft) }
+  Path := MmpDraftFilePath(FProjectDir, 'storyboard/scenes.json');
+  if FileExists(Path) then
+    LogMsg('Rascunho nao publicado restaurado (work/draft).')
+  else
+    Path := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim +
+      RevId + PathDelim + 'storyboard' + PathDelim + 'scenes.json';
   if not FileExists(Path) then Exit;
   if not ReadTextFileUtf8(Path, Content) then Exit;
   Data := GetJSON(Content);
@@ -507,6 +523,7 @@ begin
     Obj.Free;
   end;
 
+  SaveBoardsDraft;
   RefreshBoardsGrid;
   LogMsg('Etapa 1: Storyboard gerado para ' + IntToStr(Length(FBoards)) + ' cenas (aguardando revisao).');
 end;
@@ -759,7 +776,7 @@ begin
     BoardsToJson, False) then
   begin
     MmpDiscardUnpublishedRevisionDir(RevDir);
-    MessageDlg('Falha ao gravar storyboard/scenes.json.', mtError, [mbOK], 0);
+    Notify('Falha ao gravar storyboard/scenes.json.', mtError);
     Exit;
   end;
 
@@ -803,7 +820,7 @@ begin
   else
   begin
     MmpDiscardUnpublishedRevisionDir(RevDir);
-    MessageDlg(ErrMsg, mtError, [mbOK], 0);
+    Notify(ErrMsg, mtError);
   end;
 end;
 
@@ -955,6 +972,7 @@ begin
   FBoards[FSelectedBoard].DialogueText := FDialogueMemo.Text;
   FBoards[FSelectedBoard].DirectionNotes := FNotesMemo.Text;
   FBoards[FSelectedBoard].Status := 'edited';
+  SaveBoardsDraft;
   RefreshBoardsGrid;
   LogMsg('Ajuste em rascunho aplicado no storyboard (MScript/MVisual ainda inalterados).');
 end;
@@ -963,6 +981,7 @@ procedure TMboardMainForm.OnApproveBoardClick(Sender: TObject);
 begin
   if (FSelectedBoard < 0) or (FSelectedBoard > High(FBoards)) then Exit;
   FBoards[FSelectedBoard].Status := 'approved';
+  SaveBoardsDraft;
   RefreshBoardsGrid;
 end;
 
@@ -978,17 +997,16 @@ end;
 
 procedure TMboardMainForm.OnEmitCascadeClick(Sender: TObject);
 var
-  EvtId, TxId, Desc, OpsJson, AffectedCsv, EvtFile, RunErr, NewScriptRev: string;
-  OpCount, Code: Integer;
-  ScriptProjAfter: TMmpProjectRef;
-  ProdAfter: TMmpProduction;
+  EvtId, TxId, Desc, OpsJson, AffectedCsv, Summary: string;
+  OpCount: Integer;
+  Ok: Boolean;
 begin
   if not FProd.Loaded then Exit;
   OpCount := BuildCascadeOperations(OpsJson, AffectedCsv);
   if OpCount = 0 then
   begin
     MessageDlg('Nenhum ajuste editorial a propagar.' + LineEnding +
-      'Edite falas, acao ou duracao de um storyboard (botao Aplicar ajuste) antes de sincronizar.',
+      'Selecione um storyboard, edite falas, acao ou duracao e clique em "Salvar Ajuste (Rascunho)" antes de sincronizar.',
       mtInformation, [mbOK], 0);
     Exit;
   end;
@@ -998,6 +1016,10 @@ begin
     IntToStr(OpCount) + ' alteracao(oes) em ' + AffectedCsv + '.' + LineEnding +
     'Descreva a alteracao para MScript -> MVisual -> MBoard:', Desc) then
     Exit;
+
+  { os ajustes ficam no rascunho: se a cascata parar, "Retomar" no MMenu
+    continua de onde parou sem perder as edicoes }
+  SaveBoardsDraft;
 
   { Evento script.patch com operacoes estruturadas; fonte = revisao do roteiro. }
   if not EmitSyncEventEx(FProd.RootDir, 'MBoard', 'MScript', FScriptProj.ProjectId,
@@ -1009,39 +1031,286 @@ begin
   end;
   LogMsg('Evento de cascata ' + EvtId + ' (transacao ' + TxId + ') registrado para MScript.');
 
-  { Estagio 1: aplica o patch no MScript sem abrir a janela (modo headless). }
-  EvtFile := IncludeTrailingPathDelimiter(FProd.RootDir) + 'shared' + PathDelim + 'events' +
-    PathDelim + 'inbox' + PathDelim + 'MScript' + PathDelim + EvtId + '.json';
-  Code := MmpRunHeadlessEvent(maMScript, FProd.RootDir, FScriptProj.ProjectId, EvtFile, RunErr);
-  if Code = EXIT_OK then
+  Screen.Cursor := crHourGlass;
+  try
+    Ok := ContinueCascade(TxId, Summary);
+  finally
+    Screen.Cursor := crDefault;
+  end;
+  if Ok then
+    MessageDlg('Sincronizacao ' + TxId + ' concluida:' + LineEnding + Summary, mtInformation, [mbOK], 0)
+  else
+    MessageDlg('A sincronizacao ' + TxId + ' parou:' + LineEnding + Summary + LineEnding +
+      'Corrija a causa e use "Retomar transacao" em Sincronizacoes no MMenu.', mtWarning, [mbOK], 0);
+end;
+
+procedure TMboardMainForm.Notify(const Msg: string; Kind: TMsgDlgType);
+begin
+  if GMBoardHeadless then
   begin
-    NewScriptRev := '';
-    if LoadProduction(FProd.RootDir, False, ProdAfter) and
-       FindProjectByApp(ProdAfter, 1, ScriptProjAfter) then
-      NewScriptRev := ScriptProjAfter.ActiveRevision;
-    MmpUpdateTransactionStage(FProd.RootDir, TxId, 'MScript', 'complete', NewScriptRev, '');
-    LogMsg('MScript aplicou o patch: nova revisao ' + NewScriptRev +
-      '. Estagios MVisual e MBoard pendentes (atualizar fontes nesses aplicativos).');
-    MessageDlg('Sincronizacao ' + TxId + ':' + LineEnding +
-      '- MScript: nova revisao ' + NewScriptRev + ' publicada.' + LineEnding +
-      '- MVisual e MBoard: pendentes (abra cada um e atualize a partir da nova revisao).' + LineEnding +
-      LineEnding + 'A transacao so sera marcada como completa quando todos os estagios publicarem.',
-      mtInformation, [mbOK], 0);
+    if Kind in [mtError, mtWarning] then FHeadlessError := Msg;
+    WriteCliLine(Msg);
   end
   else
+    MessageDlg(Msg, Kind, [mbOK], 0);
+end;
+
+procedure TMboardMainForm.SaveBoardsDraft;
+begin
+  if not FProd.Loaded then Exit;
+  AtomicWriteTextFile(MmpDraftFilePath(FProjectDir, 'storyboard/scenes.json'), BoardsToJson, False);
+end;
+
+{ Relê a producao para enxergar revisoes publicadas por outros programas
+  (sem recarregar os storyboards em memoria). }
+procedure TMboardMainForm.RefreshSourceProjects;
+var
+  P: TMmpProduction;
+  Own: TMmpProjectRef;
+begin
+  if not LoadProduction(FProd.RootDir, False, P) then Exit;
+  FProd := P;
+  FindProjectByApp(FProd, 1, FScriptProj);
+  FindProjectByApp(FProd, 2, FVisualProj);
+  if FindProjectByApp(FProd, 3, Own) then FProj := Own;
+end;
+
+function StageExitText(Code: Integer; const App, RunErr: string): string;
+begin
+  if Code < 0 then Result := RunErr
+  else if Code = EXIT_LOCKED then
+    Result := App + ' esta aberto (instancia unica); feche-o e use Retomar no MMenu.'
+  else if Code = EXIT_EVENT_AMBIGUOUS then
+    Result := 'Alteracao ambigua, fonte desatualizada ou rascunho aberto em ' + App +
+      '; exige decisao humana (codigo 7).'
+  else
+    Result := App + ' terminou com codigo ' + IntToStr(Code) + '.';
+end;
+
+function TMboardMainForm.ContinueCascade(const TxId: string; out Summary: string): Boolean;
+var
+  TxPath, Content, RootEvt, App, StStatus, EvtId, EvtFile, Archived, RunErr, NewRev,
+    AffCsv, Desc: string;
+  Data: TJSONData;
+  TxObj, St: TJSONObject;
+  Stages, Aff: TJSONArray;
+  I, J, Code: Integer;
+  Lines: TStringList;
+  Already: Boolean;
+
+  procedure StageFail(const Msg: string);
   begin
-    if Code < 0 then
-      // RunErr ja descreve a falha ao localizar/iniciar o executavel
-    else if Code = EXIT_LOCKED then
-      RunErr := 'MScript esta aberto (instancia unica); feche-o e use Retomar no MMenu.'
-    else if Code = EXIT_EVENT_AMBIGUOUS then
-      RunErr := 'Alteracao ambigua ou fonte desatualizada; exige decisao humana (codigo 7).'
+    MmpUpdateTransactionStage(FProd.RootDir, TxId, App, 'failed', '', Msg);
+    Lines.Add('- ' + App + ': FALHOU - ' + Msg);
+    LogMsg('FALHA na sincronizacao ' + TxId + ' (' + App + '): ' + Msg);
+  end;
+
+  procedure StageOk(const Rev, Note: string);
+  begin
+    MmpUpdateTransactionStage(FProd.RootDir, TxId, App, 'complete', Rev, '');
+    Lines.Add('- ' + App + ': revisao ' + Rev + Note);
+    LogMsg('Sincronizacao ' + TxId + ': ' + App + ' -> ' + Rev + Note);
+  end;
+
+begin
+  Result := False;
+  Summary := '';
+  if not FProd.Loaded then Exit;
+  TxPath := IncludeTrailingPathDelimiter(FProd.RootDir) + 'shared' + PathDelim + 'transactions' +
+    PathDelim + TxId + '.json';
+  if not ReadTextFileUtf8(TxPath, Content) then
+  begin
+    Summary := 'Transacao ' + TxId + ' nao encontrada.';
+    Exit;
+  end;
+  Data := GetJSON(Content);
+  Lines := TStringList.Create;
+  try
+    if not (Data is TJSONObject) or not (TJSONObject(Data).Find('stages') is TJSONArray) then
+    begin
+      Summary := 'Transacao ' + TxId + ' invalida.';
+      Exit;
+    end;
+    TxObj := TJSONObject(Data);
+    RootEvt := TxObj.Get('root_event_id', '');
+    Stages := TJSONArray(TxObj.Find('stages'));
+    AffCsv := '';
+    Desc := 'Atualizacao de fontes da cascata ' + TxId;
+
+    for I := 0 to Stages.Count - 1 do
+    begin
+      if not (Stages.Items[I] is TJSONObject) then Continue;
+      St := TJSONObject(Stages.Items[I]);
+      App := St.Get('application', '');
+      StStatus := St.Get('status', '');
+      EvtId := St.Get('event_id', '');
+      if SameText(StStatus, 'complete') then
+      begin
+        Lines.Add('- ' + App + ': ja concluido (' + St.Get('revision_after', '') + ')');
+        Continue;
+      end;
+
+      if SameText(App, 'MScript') then
+      begin
+        { afetados e resumo vem do evento raiz }
+        EvtFile := IncludeTrailingPathDelimiter(FProd.RootDir) + 'shared' + PathDelim + 'events' +
+          PathDelim + 'inbox' + PathDelim + 'MScript' + PathDelim + EvtId + '.json';
+        Archived := IncludeTrailingPathDelimiter(FProd.RootDir) + 'shared' + PathDelim + 'events' +
+          PathDelim + 'archive' + PathDelim + EvtId + '.json';
+        if not FileExists(EvtFile) and FileExists(Archived) then EvtFile := Archived;
+        if FileExists(EvtFile) and ReadTextFileUtf8(EvtFile, Content) then
+        begin
+          FreeAndNil(Data);
+          Data := GetJSON(Content);
+          if Data is TJSONObject then
+          begin
+            if TJSONObject(Data).FindPath('requested_change.summary') <> nil then
+              Desc := TJSONObject(Data).FindPath('requested_change.summary').AsString;
+            if TJSONObject(Data).Find('affected_ids') is TJSONArray then
+            begin
+              Aff := TJSONArray(TJSONObject(Data).Find('affected_ids'));
+              for J := 0 to Aff.Count - 1 do
+              begin
+                if AffCsv <> '' then AffCsv := AffCsv + ',';
+                AffCsv := AffCsv + Aff.Strings[J];
+              end;
+            end;
+          end;
+          { Data agora e o evento; a transacao e relida abaixo }
+          FreeAndNil(Data);
+          ReadTextFileUtf8(TxPath, Content);
+          Data := GetJSON(Content);
+          TxObj := TJSONObject(Data);
+          Stages := TJSONArray(TxObj.Find('stages'));
+        end;
+        if SameText(EvtFile, Archived) then
+        begin
+          RefreshSourceProjects;
+          StageOk(FScriptProj.ActiveRevision, ' (evento ja aplicado)');
+          Continue;
+        end;
+        if not FileExists(EvtFile) then
+        begin
+          StageFail('evento ' + EvtId + ' nao encontrado na caixa do MScript');
+          Exit;
+        end;
+        Code := MmpRunHeadlessEvent(maMScript, FProd.RootDir, FScriptProj.ProjectId, EvtFile, RunErr);
+        if Code <> EXIT_OK then
+        begin
+          StageFail(StageExitText(Code, 'MScript', RunErr));
+          Exit;
+        end;
+        RefreshSourceProjects;
+        StageOk(FScriptProj.ActiveRevision, '');
+      end
+
+      else if SameText(App, 'MVisual') then
+      begin
+        RefreshSourceProjects;
+        Already := False;
+        for J := 0 to High(FVisualProj.Revisions) do
+          if (EvtId <> '') and SameText(FVisualProj.Revisions[J].ChangeEventId, EvtId) then
+            Already := True;
+        if Already then
+        begin
+          StageOk(FVisualProj.ActiveRevision, ' (evento ja aplicado)');
+          Continue;
+        end;
+        EvtFile := '';
+        if EvtId <> '' then
+        begin
+          EvtFile := IncludeTrailingPathDelimiter(FProd.RootDir) + 'shared' + PathDelim + 'events' +
+            PathDelim + 'inbox' + PathDelim + 'MVisual' + PathDelim + EvtId + '.json';
+          if not FileExists(EvtFile) then EvtFile := '';
+        end;
+        if EvtFile = '' then
+          if not MmpEmitStageEvent(FProd.RootDir, TxId, RootEvt, 'MBoard', 'MVisual',
+            FVisualProj.ProjectId, FVisualProj.ActiveRevision,
+            Desc + ' (roteiro ' + FScriptProj.ActiveRevision + ')', AffCsv, EvtId, EvtFile) then
+          begin
+            StageFail('nao foi possivel registrar o evento para o MVisual');
+            Exit;
+          end;
+        Code := MmpRunHeadlessEvent(maMVisual, FProd.RootDir, FVisualProj.ProjectId, EvtFile, RunErr);
+        if Code <> EXIT_OK then
+        begin
+          if RunErr = '' then RunErr := MmpJsonFileGet(EvtFile, 'error');
+          if (Code = EXIT_EVENT_AMBIGUOUS) and (MmpJsonFileGet(EvtFile, 'error') <> '') then
+            StageFail(MmpJsonFileGet(EvtFile, 'error'))
+          else
+            StageFail(StageExitText(Code, 'MVisual', RunErr));
+          Exit;
+        end;
+        RefreshSourceProjects;
+        StageOk(FVisualProj.ActiveRevision, '');
+      end
+
+      else if SameText(App, 'MBoard') then
+      begin
+        RefreshSourceProjects;
+        Already := False;
+        for J := 0 to High(FProj.Revisions) do
+          if SameText(FProj.Revisions[J].ChangeEventId, RootEvt) then
+          begin
+            Already := True;
+            NewRev := FProj.Revisions[J].RevisionId;
+          end;
+        if not Already then
+        begin
+          { estagio proprio: o storyboard passa a apontar para as novas
+            revisoes do roteiro e da biblioteca visual }
+          FScriptRevId := FScriptProj.ActiveRevision;
+          FVisualRevId := FVisualProj.ActiveRevision;
+          FHeadlessError := '';
+          if AllBoardsApproved then SaveRevision('approved', RootEvt)
+          else SaveRevision('published', RootEvt);
+          if FHeadlessError <> '' then
+          begin
+            StageFail(FHeadlessError);
+            Exit;
+          end;
+          NewRev := FCurrentRevId;
+        end;
+        StageOk(NewRev, '');
+      end
+      else
+        Lines.Add('- ' + App + ': estagio nao automatizado; abra o ' + App + '.');
+    end;
+    Result := True;
+  finally
+    Summary := Lines.Text;
+    Lines.Free;
+    Data.Free;
+  end;
+end;
+
+function RunMBoardHeadlessResume(const Args: TMMLaunchArgs): Integer;
+var
+  F: TMboardMainForm;
+  Summary: string;
+begin
+  if (Args.Production = '') or (Args.ResumeTxId = '') then
+  begin
+    WriteCliLine('Uso headless: mboard --production <pasta> --headless --resume-transaction <tx>');
+    Exit(EXIT_INVALID_ARGS);
+  end;
+  GMBoardHeadless := True;
+  F := TMboardMainForm.Create(nil);
+  try
+    if not F.FProd.Loaded then
+    begin
+      WriteCliLine('[ERRO] Producao ou projeto do MBoard nao encontrado.');
+      Exit(EXIT_NOT_FOUND);
+    end;
+    if F.ContinueCascade(Args.ResumeTxId, Summary) then
+      Result := EXIT_OK
     else
-      RunErr := 'MScript terminou com codigo ' + IntToStr(Code) + '.';
-    MmpUpdateTransactionStage(FProd.RootDir, TxId, 'MScript', 'failed', '', RunErr);
-    LogMsg('FALHA na sincronizacao ' + TxId + ' (MScript): ' + RunErr);
-    MessageDlg('A sincronizacao ' + TxId + ' parou em MScript:' + LineEnding + RunErr + LineEnding +
-      'Nada foi marcado como concluido.', mtWarning, [mbOK], 0);
+      Result := EXIT_EVENT_RETRYABLE;
+    WriteCliLine(Summary);
+    AppendJsonLogLine(F.FProd.RootDir, 'MBoard', 'info',
+      'Retomada da transacao ' + Args.ResumeTxId + ': ' + StringReplace(Trim(Summary), LineEnding, ' | ', [rfReplaceAll]));
+  finally
+    F.Free;
   end;
 end;
 
