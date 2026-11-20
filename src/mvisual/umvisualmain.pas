@@ -65,6 +65,8 @@ type
     procedure LogMsg(const Msg: string);
     procedure LoadProductionAndRevision(const ProdRoot, ProjId, RevId: string);
     procedure LoadEntitiesFromRevision(const RevId: string);
+    function DraftDir: string;
+    function FindViewFile(const RelUri: string): string;
     procedure RefreshGrid;
     procedure RefreshSelectedEntity;
     procedure AddEntityIfMissing(const Kind, EntityName, Desc, SceneId: string);
@@ -495,6 +497,19 @@ begin
   LogMsg('Producao carregada em MVisual.');
 end;
 
+function TMvisualMainForm.DraftDir: string;
+begin
+  Result := FProjectDir + PathDelim + 'work' + PathDelim + FCurrentRevId;
+end;
+
+function TMvisualMainForm.FindViewFile(const RelUri: string): string;
+begin
+  if ResolveSafePath(DraftDir, RelUri, Result) and FileExists(Result) then Exit;
+  if ResolveSafePath(FProjectDir + PathDelim + 'revisions' + PathDelim + FCurrentRevId,
+    RelUri, Result) and FileExists(Result) then Exit;
+  Result := '';
+end;
+
 procedure TMvisualMainForm.LoadEntitiesFromRevision(const RevId: string);
 var
   Path, Content: string;
@@ -502,17 +517,24 @@ var
   Obj, Item: TJSONObject;
   Arr: TJSONArray;
   I: Integer;
-  DbStatus: string;
+  DbStatus, DraftFile: string;
+  FromDraft: Boolean;
 begin
   SetLength(FEntities, 0);
   Path := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim +
     RevId + PathDelim + 'indexes' + PathDelim + 'entities.json';
+  DraftFile := DraftDir + PathDelim + 'indexes' + PathDelim + 'entities.json';
+  FromDraft := FileExists(DraftFile);
+  if FromDraft then Path := DraftFile;
   if not FileExists(Path) then Exit;
   if not ReadTextFileUtf8(Path, Content) then Exit;
   Data := GetJSON(Content);
   if not (Data is TJSONObject) then begin Data.Free; Exit; end;
   Obj := TJSONObject(Data);
   try
+    FScriptSourceRevId := Obj.Get('source_script_revision', FScriptSourceRevId);
+    if FromDraft then
+      FScriptRevCombo.ItemIndex := FScriptRevCombo.Items.IndexOf(FScriptSourceRevId);
     if Obj.Find('entities') is TJSONArray then
     begin
       Arr := TJSONArray(Obj.Find('entities'));
@@ -527,7 +549,7 @@ begin
         FEntities[I].Description := Item.Get('description', '');
         FEntities[I].SceneIdsCsv := Item.Get('scenes_csv', '');
         FEntities[I].ApprovalStatus := Item.Get('approval_status', 'pending');
-        if MmpDbGetVisualEntityApproval(FProd.RootDir, FProj.ProjectId,
+        if not FromDraft and MmpDbGetVisualEntityApproval(FProd.RootDir, FProj.ProjectId,
           RevId, FEntities[I].EntityId, DbStatus) then
           FEntities[I].ApprovalStatus := DbStatus;
         FEntities[I].FrontRelUri := Item.Get('front_uri', '');
@@ -761,7 +783,7 @@ var
     FullPrompt, OutPng: string;
   begin
     if FStopRequested then Exit;
-    NeedGen := ForceThis or (RelUri = '') or (FAi.IsConfigured and SameText(ExtractFileExt(RelUri), '.bmp'));
+    NeedGen := ForceThis or (FindViewFile(RelUri) = '');
     if not NeedGen then
     begin
       Inc(FDoneStepsGen);
@@ -810,7 +832,7 @@ var
 begin
   if FStopRequested or (EntIdx < 0) or (EntIdx > High(FEntities)) then Exit;
   FAi.ReloadIfChanged;
-  BaseRevDir := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim + FCurrentRevId;
+  BaseRevDir := DraftDir;
   Folder := EntityFolderName(FEntities[EntIdx].Kind);
   SubDir := BaseRevDir + PathDelim + 'images' + PathDelim + Folder;
   ForceDirectories(SubDir);
@@ -828,8 +850,7 @@ begin
   FrontRefPath := '';
   if (FEntities[EntIdx].FrontRelUri <> '') and SameText(ExtractFileExt(FEntities[EntIdx].FrontRelUri), '.png') then
   begin
-    FrontRefPath := BaseRevDir + PathDelim + StringReplace(FEntities[EntIdx].FrontRelUri, '/', PathDelim, [rfReplaceAll]);
-    if not FileExists(FrontRefPath) then FrontRefPath := '';
+    FrontRefPath := FindViewFile(FEntities[EntIdx].FrontRelUri);
   end;
 
   if (OnlyViewIdx < 0) or (OnlyViewIdx = 1) then
@@ -976,8 +997,7 @@ var
   Filter: TSharpenFilter;
 begin
   if (FSelectedIdx < 0) or (FSelectedIdx > High(FEntities)) then Exit;
-  Path := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim +
-    FCurrentRevId + PathDelim + StringReplace(FEntities[FSelectedIdx].FrontRelUri, '/', PathDelim, [rfReplaceAll]);
+  Path := FindViewFile(FEntities[FSelectedIdx].FrontRelUri);
   if not FileExists(Path) then
   begin
     MessageDlg('Gere as vistas primeiro.', mtInformation, [mbOK], 0);
@@ -991,7 +1011,11 @@ begin
     Filter.OutputImage := FPreviewOutImg;
     Filter.Apply;
     FPreviewImg.Picture.Assign(FPreviewOutImg.Picture);
+    if not ResolveSafePath(DraftDir, FEntities[FSelectedIdx].FrontRelUri, Path) or
+      not ForceDirectories(ExtractFileDir(Path)) then
+      raise Exception.Create('Não foi possível preparar a imagem do rascunho.');
     FPreviewImg.Picture.SaveToFile(Path);
+    SaveCurrentEntitiesDraft;
     LogMsg('Filtro TSharpenFilter (openai_image) aplicado em ' + ExtractFileName(Path));
   finally
     Filter.Free;
@@ -1083,8 +1107,7 @@ begin
 
     if RelUri <> '' then
     begin
-      FullPath := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim +
-        FCurrentRevId + PathDelim + StringReplace(RelUri, '/', PathDelim, [rfReplaceAll]);
+      FullPath := FindViewFile(RelUri);
       if FileExists(FullPath) then
         FPreviewImg.Picture.LoadFromFile(FullPath);
     end;
@@ -1131,8 +1154,7 @@ var
   IdxDir: string;
 begin
   if (not FProd.Loaded) or (FProjectDir = '') or (FCurrentRevId = '') then Exit;
-  IdxDir := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim +
-    FCurrentRevId + PathDelim + 'indexes';
+  IdxDir := DraftDir + PathDelim + 'indexes';
   ForceDirectories(IdxDir);
   if not AtomicWriteTextFile(IdxDir + PathDelim + 'entities.json', EntitiesToJson, False) then
     raise Exception.Create('Falha ao salvar entities.json em ' + IdxDir);
@@ -1140,7 +1162,7 @@ end;
 
 procedure TMvisualMainForm.SaveRevision(const NewState: string);
 var
-  PrepRev, RevDir, NewRev, ErrMsg, OldRevDir: string;
+  PrepRev, RevDir, NewRev, ErrMsg: string;
   Srcs: array of TMmpSourceRef;
   Arts: array of TMmpArtifactInput;
   RevInfo: TMmpRevisionInfo;
@@ -1152,7 +1174,8 @@ var
     FS1, FS2: TFileStream;
   begin
     if RelUri = '' then Exit;
-    SrcFile := OldRevDir + PathDelim + StringReplace(RelUri, '/', PathDelim, [rfReplaceAll]);
+    SrcFile := FindViewFile(RelUri);
+    if SrcFile = '' then raise Exception.Create('Vista ausente: ' + RelUri);
     DstFile := RevDir + PathDelim + StringReplace(RelUri, '/', PathDelim, [rfReplaceAll]);
     if FileExists(SrcFile) and not SameText(SrcFile, DstFile) then
     begin
@@ -1183,12 +1206,17 @@ var
 begin
   if not FProd.Loaded then Exit;
   if not PrepareNextRevisionDir(FProj.ProjectFilePath, PrepRev, RevDir) then Exit;
-  OldRevDir := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim + FCurrentRevId;
 
-  AtomicWriteTextFile(RevDir + PathDelim + 'indexes' + PathDelim + 'entities.json',
-    EntitiesToJson, False);
+  if not AtomicWriteTextFile(RevDir + PathDelim + 'indexes' + PathDelim + 'entities.json',
+    EntitiesToJson, False) then
+    raise Exception.Create('Não foi possível publicar o índice visual.');
 
-  SetLength(Arts, 0);
+  SetLength(Arts, 1);
+  Arts[0].ArtifactId := GenerateMmpId('a_index');
+  Arts[0].Kind := 'visual.entity.index';
+  Arts[0].RelUri := 'indexes/entities.json';
+  Arts[0].MimeType := 'application/json';
+  Arts[0].Status := NewState;
   for I := 0 to High(FEntities) do
   begin
     CopyAndAddView(FEntities[I].FrontRelUri, 'visual.' + FEntities[I].Kind + '.reference', FEntities[I].ApprovalStatus);
@@ -1245,10 +1273,10 @@ begin
   PreviousStatus := FEntities[FSelectedIdx].ApprovalStatus;
   try
     if not MmpDbSetVisualEntityApproval(FProd.RootDir, FProj.ProjectId,
-      FCurrentRevId, FEntities[FSelectedIdx].EntityId, 'approved', ErrMsg) then
+      FCurrentRevId + ':work', FEntities[FSelectedIdx].EntityId, 'approved', ErrMsg) then
       raise Exception.Create(ErrMsg);
     if not MmpDbGetVisualEntityApproval(FProd.RootDir, FProj.ProjectId,
-      FCurrentRevId, FEntities[FSelectedIdx].EntityId, VerifiedStatus) or
+      FCurrentRevId + ':work', FEntities[FSelectedIdx].EntityId, VerifiedStatus) or
       (not SameText(VerifiedStatus, 'approved')) then
       raise Exception.Create('Leitura de confirmacao do SQLite nao retornou approved.');
     FEntities[FSelectedIdx].ApprovalStatus := 'approved';
@@ -1288,10 +1316,10 @@ begin
   PreviousStatus := FEntities[FSelectedIdx].ApprovalStatus;
   try
     if not MmpDbSetVisualEntityApproval(FProd.RootDir, FProj.ProjectId,
-      FCurrentRevId, FEntities[FSelectedIdx].EntityId, 'rejected', ErrMsg) then
+      FCurrentRevId + ':work', FEntities[FSelectedIdx].EntityId, 'rejected', ErrMsg) then
       raise Exception.Create(ErrMsg);
     if not MmpDbGetVisualEntityApproval(FProd.RootDir, FProj.ProjectId,
-      FCurrentRevId, FEntities[FSelectedIdx].EntityId, VerifiedStatus) or
+      FCurrentRevId + ':work', FEntities[FSelectedIdx].EntityId, VerifiedStatus) or
       (not SameText(VerifiedStatus, 'rejected')) then
       raise Exception.Create('Leitura de confirmacao do SQLite nao retornou rejected.');
     FEntities[FSelectedIdx].ApprovalStatus := 'rejected';
@@ -1323,7 +1351,7 @@ end;
 procedure TMvisualMainForm.OnValidateStageClick(Sender: TObject);
 var
   I, PendingCount, MissingImgCount: Integer;
-  RevDir, FrontPath, ErrMsg, CheckStatus: string;
+  FrontPath, ErrMsg, CheckStatus: string;
 begin
   if not FProd.Loaded then
   begin
@@ -1339,14 +1367,13 @@ begin
   PendingCount := 0;
   MissingImgCount := 0;
   CheckStatus := '';
-  RevDir := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim + FCurrentRevId;
   for I := 0 to High(FEntities) do
   begin
     if not SameText(FEntities[I].ApprovalStatus, 'approved') then
       Inc(PendingCount);
     FrontPath := '';
     if FEntities[I].FrontRelUri <> '' then
-      FrontPath := RevDir + PathDelim + StringReplace(FEntities[I].FrontRelUri, '/', PathDelim, [rfReplaceAll]);
+      FrontPath := FindViewFile(FEntities[I].FrontRelUri);
     if (FrontPath = '') or (not FileExists(FrontPath)) then
       Inc(MissingImgCount);
   end;
@@ -1361,13 +1388,13 @@ begin
     begin
       if not SameText(FEntities[I].ApprovalStatus, 'approved') then
       begin
-        if not MmpDbSetVisualEntityApproval(FProd.RootDir, FProj.ProjectId, FCurrentRevId,
+        if not MmpDbSetVisualEntityApproval(FProd.RootDir, FProj.ProjectId, FCurrentRevId + ':work',
           FEntities[I].EntityId, 'approved', ErrMsg) then
         begin
           MessageDlg('Erro ao aprovar entidade ' + FEntities[I].EntityId + ' no SQLite: ' + ErrMsg, mtError, [mbOK], 0);
           Exit;
         end;
-        if not MmpDbGetVisualEntityApproval(FProd.RootDir, FProj.ProjectId, FCurrentRevId,
+        if not MmpDbGetVisualEntityApproval(FProd.RootDir, FProj.ProjectId, FCurrentRevId + ':work',
           FEntities[I].EntityId, CheckStatus) or (not SameText(CheckStatus, 'approved')) then
         begin
           MessageDlg('Falha ao confirmar aprovacao no SQLite para ' + FEntities[I].EntityId, mtError, [mbOK], 0);

@@ -7,7 +7,7 @@ interface
 uses
   Classes, SysUtils, StrUtils, Math, Types, Forms, Controls, Graphics, Dialogs,
   StdCtrls, ExtCtrls, ComCtrls, Grids, Menus, LCLProc, Process, IniFiles,
-  mmpcommon, mmpsettings, ummpdb, ummpprotocol, ummpappbase, ummenusettings;
+  mmpcommon, mmpsettings, ummpdb, ummpprotocol, ummpappbase, ummenusettings, ummpcascade;
 
 const
   // Paleta Azul & Branco (formato BGR do LCL: $00BBGGRR)
@@ -1732,7 +1732,7 @@ begin
 
   FBtnGoToFailedApp := TButton.Create(Self);
   FBtnGoToFailedApp.Parent := TopBar;
-  FBtnGoToFailedApp.Caption := 'Ir para aplicativo responsavel';
+  FBtnGoToFailedApp.Caption := 'Retomar sincronização';
   FBtnGoToFailedApp.Anchors := [akTop, akRight];
   FBtnGoToFailedApp.SetBounds(504, 8, 224, 30);
   FBtnGoToFailedApp.OnClick := @OnGoToResponsibleAppClick;
@@ -4030,7 +4030,8 @@ procedure TMmenuMainForm.OnGoToResponsibleAppClick(Sender: TObject);
 var
   RowIdx, AppIdx, I: Integer;
   Job: TMmpSyncJob;
-  ProjId, RevId: string;
+  ProjId, RevId, TxFile, ScriptExe, Detail: string;
+  CompletedStep: Boolean;
 begin
   if (not FProd.Loaded) or (Length(FProd.SyncJobs) = 0) then
   begin
@@ -4043,6 +4044,23 @@ begin
     RowIdx := 0;
 
   Job := FProd.SyncJobs[RowIdx];
+  if (Job.TransactionId <> '') and
+    ResolveSafePath(FProd.RootDir, 'shared/transactions/' + Job.TransactionId + '.json', TxFile) and
+    IsEditorialCascade(TxFile) then
+  begin
+    ScriptExe := FAppPaths[1];
+    if (ScriptExe = '') or not FileExists(ScriptExe) then ScriptExe := FindExecutable('MScript');
+    CompletedStep := AdvanceEditorialCascade(FProd, TxFile, ScriptExe, AppIdx, Detail);
+    LogMsg(Detail);
+    OpenProductionPath(FProd.RootDir, False);
+    if not CompletedStep then MessageDlg(Detail, mtWarning, [mbOK], 0)
+    else
+    begin
+      MessageDlg(Detail, mtInformation, [mbOK], 0);
+      if AppIdx > 0 then LaunchApplication(AppIdx, '', '');
+    end;
+    Exit;
+  end;
   AppIdx := AppNameToIndex(Job.TargetApp);
   if AppIdx < 1 then
     AppIdx := AppNameToIndex(Job.Stage);
@@ -4077,7 +4095,7 @@ procedure TMmenuMainForm.OnCancelSyncClick(Sender: TObject);
 var
   RowIdx: Integer;
   Job: TMmpSyncJob;
-  ErrMsg: string;
+  ErrMsg, TxFile: string;
 begin
   if (not FProd.Loaded) or (Length(FProd.SyncJobs) = 0) then Exit;
   RowIdx := FSyncJobsGrid.Row - 1;
@@ -4087,6 +4105,9 @@ begin
     'Revisoes ja publicadas permanecerao intactas.',
     mtConfirmation, [mbYes, mbNo], 0) <> mrYes then Exit;
 
+  if (Job.TransactionId <> '') and ResolveSafePath(FProd.RootDir,
+    'shared/transactions/' + Job.TransactionId + '.json', TxFile) and IsEditorialCascade(TxFile) then
+    Job.SourceFile := TxFile;
   if CancelSyncTransaction(Job.SourceFile, ErrMsg) then
   begin
     LogMsg('Transacao/evento cancelado: ' + Job.EventId);

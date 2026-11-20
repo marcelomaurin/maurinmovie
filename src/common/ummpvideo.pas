@@ -12,6 +12,16 @@ type
     TransitionSec: Double;
   end;
 
+type
+  TMmpAudioClip = record
+    FileName: string;
+    SourceStartMs, StartMs, EndMs, VolumePercent: Integer;
+  end;
+
+function RenderMmpAudio(const Ffmpeg, OutputFile: string;
+  const Clips: array of TMmpAudioClip; DurationMs, SampleRate, Channels: Integer;
+  out ErrorMsg: string): Boolean;
+
 function ProbeMmpVideo(const Ffprobe, FileName: string; out Duration: Double;
   out HasAudio: Boolean; out ErrorMsg: string): Boolean;
 function RenderMmpVideo(const Ffmpeg, Ffprobe, OutputFile: string;
@@ -54,6 +64,69 @@ end;
 function MediaNumber(Value: Double): string;
 begin
   Result := FloatToStr(Value, MediaFormat);
+end;
+
+function RenderMmpAudio(const Ffmpeg, OutputFile: string;
+  const Clips: array of TMmpAudioClip; DurationMs, SampleRate, Channels: Integer;
+  out ErrorMsg: string): Boolean;
+var
+  Args: TStringList;
+  Params: array of string;
+  Layout, Graph, Links, N, TempFile, Output: string;
+  I: Integer;
+begin
+  Result := False;
+  ErrorMsg := '';
+  if (DurationMs <= 0) or (SampleRate < 8000) or (SampleRate > 192000) or
+    not (Channels in [1, 2]) or FileExists(OutputFile) then
+  begin
+    ErrorMsg := 'Configuração ou destino do WAV inválido.';
+    Exit;
+  end;
+  if not ForceDirectories(ExtractFileDir(ExpandFileName(OutputFile))) then
+  begin
+    ErrorMsg := 'Não foi possível criar a pasta do WAV.';
+    Exit;
+  end;
+  if Channels = 2 then Layout := 'stereo' else Layout := 'mono';
+  TempFile := ChangeFileExt(OutputFile, '.partial.wav');
+  Args := TStringList.Create;
+  try
+    Args.AddStrings(['-hide_banner', '-nostdin', '-v', 'error', '-y', '-f', 'lavfi',
+      '-i', 'anullsrc=r=' + IntToStr(SampleRate) + ':cl=' + Layout]);
+    Graph := '[0:a]atrim=end_sample=' + IntToStr(Int64(DurationMs) * SampleRate div 1000) + '[bed];';
+    Links := '[bed]';
+    for I := 0 to High(Clips) do
+      with Clips[I] do
+      begin
+        if not FileExists(FileName) or (SourceStartMs < 0) or (StartMs < 0) or
+          (EndMs <= StartMs) or (EndMs > DurationMs) or
+          (VolumePercent < 0) or (VolumePercent > 200) then
+        begin
+          ErrorMsg := Format('Evento de áudio inválido (%d).', [I + 1]);
+          Exit;
+        end;
+        N := IntToStr(I + 1);
+        Args.AddStrings(['-ss', MediaNumber(SourceStartMs / 1000), '-i', FileName]);
+        Graph := Graph + '[' + N + ':a:0]aresample=' + IntToStr(SampleRate) +
+          ',aformat=sample_fmts=fltp:channel_layouts=' + Layout +
+          ',atrim=duration=' + MediaNumber((EndMs - StartMs) / 1000) +
+          ',asetpts=PTS-STARTPTS,volume=' + MediaNumber(VolumePercent / 100) +
+          ',adelay=' + IntToStr(StartMs) + ':all=1[e' + N + '];';
+        Links := Links + '[e' + N + ']';
+      end;
+    Graph := Graph + Links + 'amix=inputs=' + IntToStr(Length(Clips) + 1) +
+      ':duration=first:normalize=0[out]';
+    Args.AddStrings(['-filter_complex', Graph, '-map', '[out]', '-c:a', 'pcm_s16le', TempFile]);
+    SetLength(Params, Args.Count);
+    for I := 0 to Args.Count - 1 do Params[I] := Args[I];
+    if not RunMediaTool(Ffmpeg, Params, Output, ErrorMsg) then Exit;
+    Result := RenameFile(TempFile, OutputFile);
+    if not Result then ErrorMsg := 'Não foi possível gravar ' + OutputFile;
+  finally
+    Args.Free;
+    if FileExists(TempFile) then DeleteFile(TempFile);
+  end;
 end;
 
 function ProbeMmpVideo(const Ffprobe, FileName: string; out Duration: Double;

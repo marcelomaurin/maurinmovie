@@ -1075,7 +1075,7 @@ begin
 
   ReqData := Obj.Find('requested_change');
   if ReqData is TJSONObject then
-    Job.RequestedChange := TJSONObject(ReqData).Get('type', 'patch')
+    Job.RequestedChange := TJSONObject(ReqData).Get('summary', TJSONObject(ReqData).Get('type', 'patch'))
   else if ReqData <> nil then
     Job.RequestedChange := ReqData.AsString;
 
@@ -1183,7 +1183,7 @@ end;
 
 procedure ScanSyncJobs(var Prod: TMmpProduction);
 var
-  I: Integer;
+  I, J: Integer;
 begin
   LoadSyncJobsFromFile(Prod, Prod.RootDir + PathDelim + 'projects' + PathDelim +
     MmpAppFolders[0] + PathDelim + 'sync_jobs.json');
@@ -1198,6 +1198,16 @@ begin
       PathDelim + 'inbox' + PathDelim + MmpAppNames[I]);
   ScanJsonFilesInDir(Prod, Prod.RootDir + PathDelim + 'shared' + PathDelim + 'events' +
     PathDelim + 'archive');
+
+  for I := 0 to High(Prod.SyncJobs) do
+    if (Prod.SyncJobs[I].Status = 'cancelled') and
+      (ExtractFileName(ExtractFileDir(Prod.SyncJobs[I].SourceFile)) = 'transactions') then
+      for J := 0 to High(Prod.SyncJobs) do
+        if (Prod.SyncJobs[J].TransactionId = Prod.SyncJobs[I].TransactionId) and
+          (Prod.SyncJobs[J].Status <> 'published') and
+          (Prod.SyncJobs[J].Status <> 'approved') and
+          (Prod.SyncJobs[J].Status <> 'complete') then
+          Prod.SyncJobs[J].Status := 'cancelled';
 end;
 
 procedure AuditSourcesAndArtifacts(var Prod: TMmpProduction; CheckHashes: Boolean);

@@ -7,7 +7,8 @@ interface
 uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
   ComCtrls, Grids, fpjson, jsonparser, imagefilters,
-  ummpprotocol, ummpappbase, ummpaibridge;
+  ummpprotocol, ummpappbase, ummpaibridge, ummpdialogue, ummpsha256,
+  mmpsettings, mmpcommon, FileUtil;
 
 type
   TBoardSegment = record
@@ -24,6 +25,7 @@ type
 
   TSceneBoard = record
     BoardId: string;
+    ReferenceAssetId, ReferenceSha: string;
     SceneId: string;
     OrderIdx: Integer;
     Heading: string;
@@ -71,6 +73,10 @@ type
     procedure RefreshBoardsGrid;
     procedure RefreshSelectedBoard;
     procedure RefreshSegmentsGrid;
+    function FindSceneReference(const SceneId: string; out ArtifactId: string): string;
+    function FindFrame(const RelUri: string): string;
+    function GenerateFrame(const Prompt, ReferencePath, AssetId: string; out RelUri: string): Boolean;
+    function ValidBoard(const Board: TSceneBoard): Boolean;
     function BoardsToJson: string;
     procedure SaveRevision(const NewState, ChangeEventId: string);
 
@@ -371,6 +377,8 @@ begin
   if not (Data is TJSONObject) then begin Data.Free; Exit; end;
   Obj := TJSONObject(Data);
   try
+    FScriptRevId := Obj.Get('script_revision', FScriptRevId);
+    FVisualRevId := Obj.Get('visual_revision', FVisualRevId);
     if Obj.Find('scene_boards') is TJSONArray then
     begin
       BArr := TJSONArray(Obj.Find('scene_boards'));
@@ -379,6 +387,8 @@ begin
       begin
         BObj := TJSONObject(BArr.Items[I]);
         FBoards[I].BoardId := BObj.Get('board_id', '');
+        FBoards[I].ReferenceAssetId := BObj.Get('visual_reference_asset_id', '');
+        FBoards[I].ReferenceSha := BObj.Get('visual_reference_sha256', '');
         FBoards[I].SceneId := BObj.Get('scene_id', '');
         FBoards[I].OrderIdx := BObj.Get('order', I + 1);
         FBoards[I].Heading := BObj.Get('heading', '');
@@ -416,13 +426,114 @@ begin
   end;
 end;
 
+function TMboardMainForm.FindFrame(const RelUri: string): string;
+begin
+  Result := '';
+  if ResolveSafePath(FProjectDir + PathDelim + 'work', RelUri, Result) and FileExists(Result) then Exit;
+  if ResolveSafePath(FProjectDir + PathDelim + 'revisions' + PathDelim + FCurrentRevId,
+    RelUri, Result) and FileExists(Result) then Exit;
+  Result := '';
+end;
+
+function TMboardMainForm.FindSceneReference(const SceneId: string; out ArtifactId: string): string;
+var
+  Rev: TMmpRevisionInfo;
+  TextValue: string;
+  Data: TJSONData;
+  Items: TJSONArray;
+  Item: TJSONObject;
+  I, J, Pass: Integer;
+begin
+  Result := '';
+  ArtifactId := '';
+  if not FindRevisionInProject(FVisualProj, FVisualRevId, Rev) then Exit;
+  if not ReadTextFileUtf8(ExtractFileDir(Rev.ManifestPath) + PathDelim +
+    'indexes' + PathDelim + 'entities.json', TextValue) then Exit;
+  Data := GetJSON(TextValue);
+  try
+    if not (Data.FindPath('entities') is TJSONArray) then Exit;
+    Items := TJSONArray(Data.FindPath('entities'));
+    for Pass := 0 to 1 do
+      for I := 0 to Items.Count - 1 do
+      begin
+        Item := Items.Objects[I];
+        if ((Pass = 0) and (Item.Get('kind', '') <> 'location')) or
+          (Item.Get('approval_status', '') <> 'approved') or
+          (Pos(',' + SceneId + ',', ',' + StringReplace(Item.Get('scenes_csv', ''),
+            ', ', ',', [rfReplaceAll]) + ',') = 0) then Continue;
+        for J := 0 to High(Rev.Artifacts) do
+          with Rev.Artifacts[J] do
+            if (Uri = Item.Get('front_uri', '')) and (Status = 'approved') and
+              (Sha256 <> '') and FileExists(ResolvedPath) and SameText(SHA256File(ResolvedPath), Sha256) then
+            begin
+              ArtifactId := Rev.Artifacts[J].ArtifactId;
+              Exit(ResolvedPath);
+            end;
+      end;
+  finally
+    Data.Free;
+  end;
+end;
+
+function TMboardMainForm.GenerateFrame(const Prompt, ReferencePath, AssetId: string;
+  out RelUri: string): Boolean;
+var
+  Provider: TMmpAiProviderCfg;
+  OutputFile, Err: string;
+begin
+  Result := False;
+  FAi.ReloadIfChanged;
+  FAi.Settings.ResolveProvider('image', maMBoard, Provider);
+  RelUri := 'images/quadros/' + AssetId;
+  if Provider.Enabled and (SameText(Provider.Adapter, 'mock') or FAi.Settings.OfflineMode) then
+  begin
+    RelUri := RelUri + '.bmp';
+    ResolveSafePath(FProjectDir + PathDelim + 'work', RelUri, OutputFile);
+    Result := SavePlaceholderBitmap(OutputFile, 'Storyboard simulado', Prompt, AssetId, $00383044);
+  end
+  else
+  begin
+    RelUri := RelUri + '.png';
+    ResolveSafePath(FProjectDir + PathDelim + 'work', RelUri, OutputFile);
+    if ForceDirectories(ExtractFileDir(OutputFile)) then
+      Result := FAi.GenerateImage(Prompt, OutputFile, Err, '', 0, 0, ReferencePath) and FileExists(OutputFile);
+    if not Result then LogMsg('Falha ao gerar quadro: ' + Err);
+  end;
+  if not Result then RelUri := '';
+end;
+
+function TMboardMainForm.ValidBoard(const Board: TSceneBoard): Boolean;
+var
+  I: Integer;
+  Total: Int64;
+begin
+  Result := False;
+  if (Board.DurationSec < 1) or (Length(Board.Segments) = 0) or
+    (FindFrame(Board.OpeningUri) = '') or (FindFrame(Board.ClosingUri) = '') or
+    (Board.Segments[0].OpeningAssetId <> Board.OpeningAssetId) or
+    (Board.Segments[High(Board.Segments)].ClosingAssetId <> Board.ClosingAssetId) then Exit;
+  Total := 0;
+  for I := 0 to High(Board.Segments) do
+    with Board.Segments[I] do
+    begin
+      if (DurationSec < 1) or (FindFrame(OpeningUri) = '') or (FindFrame(ClosingUri) = '') then Exit;
+      if I > 0 then
+        if (OpeningAssetId <> Board.Segments[I - 1].ClosingAssetId) or
+          (OpeningUri <> Board.Segments[I - 1].ClosingUri) then Exit;
+      Inc(Total, DurationSec);
+    end;
+  Result := Total = Board.DurationSec;
+end;
+
 procedure TMboardMainForm.OnGenerateFromSourcesClick(Sender: TObject);
 var
-  ScriptPath, Content, BaseRevDir, QuadDir, OpenRel, CloseRel, Resp, Err: string;
+  ScriptPath, Content, OpenRel, CloseRel, ReferencePath, ContinuityRef: string;
   Data: TJSONData;
   Obj, SItem: TJSONObject;
   Arr: TJSONArray;
-  I: Integer;
+  I, J: Integer;
+  PreviousBoards: array of TSceneBoard;
+  ReferenceShaValue: string;
 begin
   if not FProd.Loaded then
   begin
@@ -430,7 +541,7 @@ begin
     Exit;
   end;
   ScriptPath := ExtractFileDir(FScriptProj.ProjectFilePath) + PathDelim + 'revisions' +
-    PathDelim + FScriptRevId + PathDelim + 'scripts' + PathDelim + 'roteiro.json';
+    PathDelim + FScriptProj.ActiveRevision + PathDelim + 'scripts' + PathDelim + 'roteiro.json';
   if not FileExists(ScriptPath) then
   begin
     MessageDlg('Roteiro nao encontrado em MScript @ ' + FScriptRevId, mtWarning, [mbOK], 0);
@@ -443,10 +554,11 @@ begin
   try
     if not (Obj.Find('scenes') is TJSONArray) then Exit;
     Arr := TJSONArray(Obj.Find('scenes'));
+    PreviousBoards := FBoards;
+    FBoards := nil;
     SetLength(FBoards, Arr.Count);
-    BaseRevDir := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim + FCurrentRevId;
-    QuadDir := BaseRevDir + PathDelim + 'images' + PathDelim + 'quadros';
-    ForceDirectories(QuadDir);
+    FScriptRevId := FScriptProj.ActiveRevision;
+    FVisualRevId := FVisualProj.ActiveRevision;
 
     for I := 0 to Arr.Count - 1 do
     begin
@@ -460,29 +572,39 @@ begin
       FBoards[I].DirectionNotes := SItem.Get('action', '');
       FBoards[I].Status := 'generated';
 
-      if FAi.IsConfigured and (I = 0) then
-      begin
-        if FAi.Ask('Gere uma orientacao curta de enquadramento de camera.',
-          FBoards[I].Heading + ': ' + FBoards[I].DirectionNotes, Resp, Err) then
-          FBoards[I].DirectionNotes := FBoards[I].DirectionNotes + LineEnding + '[IA] ' + Resp;
-      end;
-
+      ReferencePath := FindSceneReference(FBoards[I].SceneId, FBoards[I].ReferenceAssetId);
+      ReferenceShaValue := '';
+      if ReferencePath <> '' then ReferenceShaValue := SHA256File(ReferencePath);
+      FBoards[I].ReferenceSha := ReferenceShaValue;
+      for J := 0 to High(PreviousBoards) do
+        if (PreviousBoards[J].SceneId = FBoards[I].SceneId) and
+          (PreviousBoards[J].Heading = FBoards[I].Heading) and
+          (PreviousBoards[J].DurationSec = FBoards[I].DurationSec) and
+          (PreviousBoards[J].DirectionNotes = FBoards[I].DirectionNotes) and
+          (PreviousBoards[J].DialogueText = FBoards[I].DialogueText) and
+          (PreviousBoards[J].ReferenceSha = ReferenceShaValue) and
+          (PreviousBoards[J].Status = 'approved') and ValidBoard(PreviousBoards[J]) then
+        begin
+          PreviousBoards[J].ReferenceAssetId := FBoards[I].ReferenceAssetId;
+          PreviousBoards[J].OrderIdx := FBoards[I].OrderIdx;
+          FBoards[I] := PreviousBoards[J];
+          Break;
+        end;
+      if FBoards[I].Status = 'approved' then Continue;
+      if ReferencePath = '' then LogMsg('Cena sem imagem de referência aprovada: ' + FBoards[I].SceneId);
       FBoards[I].OpeningAssetId := GenerateMmpId('a_qopen');
       FBoards[I].ClosingAssetId := GenerateMmpId('a_qclose');
-      OpenRel := 'images/quadros/' + FBoards[I].SceneId + '_open.bmp';
-      CloseRel := 'images/quadros/' + FBoards[I].SceneId + '_close.bmp';
+      if not GenerateFrame('Quadro inicial: ' + FBoards[I].Heading + ' | ' +
+        FBoards[I].DirectionNotes, ReferencePath, FBoards[I].OpeningAssetId, OpenRel) then
+        FBoards[I].Status := 'failed';
+      ContinuityRef := FindFrame(OpenRel);
+      if ContinuityRef = '' then ContinuityRef := ReferencePath;
+      if not GenerateFrame('Quadro final. Preserve a identidade e mostre o resultado da ação: ' +
+        FBoards[I].Heading + ' | ' + FBoards[I].DirectionNotes, ContinuityRef,
+        FBoards[I].ClosingAssetId, CloseRel) then
+        FBoards[I].Status := 'failed';
       FBoards[I].OpeningUri := OpenRel;
       FBoards[I].ClosingUri := CloseRel;
-
-      if not FAi.GenerateImage('Storyboard inicial: ' + FBoards[I].Heading + ' - ' +
-        FBoards[I].DirectionNotes,
-        BaseRevDir + PathDelim + StringReplace(OpenRel, '/', PathDelim, [rfReplaceAll]), Err) then
-        SavePlaceholderBitmap(BaseRevDir + PathDelim + StringReplace(OpenRel, '/', PathDelim, [rfReplaceAll]),
-          FBoards[I].Heading + ' [INICIO]', FBoards[I].DirectionNotes,
-          'Asset: ' + FBoards[I].OpeningAssetId, $00383044);
-      SavePlaceholderBitmap(BaseRevDir + PathDelim + StringReplace(CloseRel, '/', PathDelim, [rfReplaceAll]),
-        FBoards[I].Heading + ' [FIM]', FBoards[I].DialogueText,
-        'Asset: ' + FBoards[I].ClosingAssetId, $002C3D34);
 
       SetLength(FBoards[I].Segments, 1);
       FBoards[I].Segments[0].SegmentId := GenerateMmpId('sg');
@@ -505,59 +627,71 @@ end;
 
 procedure TMboardMainForm.OnSubdivideClick(Sender: TObject);
 var
-  CountStr, BaseRevDir, MidId, MidRel: string;
+  CountStr, MidId, MidRel: string;
   N, I, SegDur, Rem: Integer;
+  Parts: array of TBoardSegment;
+  Lines: TMmpDialogueLines;
 begin
   if (FSelectedBoard < 0) or (FSelectedBoard > High(FBoards)) then Exit;
   CountStr := '2';
   if not InputQuery('Subdividir Cena em Segmentos', 'Quantidade de segmentos:', CountStr) then Exit;
-  N := StrToIntDef(CountStr, 2);
-  if N < 1 then N := 1;
-  if N > 60 then N := 60;
-
-  BaseRevDir := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim + FCurrentRevId;
+  if not TryStrToInt(CountStr, N) or (N < 1) or (N > 60) or
+    (N > FBoards[FSelectedBoard].DurationSec) then
+  begin
+    MessageDlg('Informe de 1 a 60 segmentos, com pelo menos um segundo por segmento.',
+      mtWarning, [mbOK], 0);
+    Exit;
+  end;
+  Lines := ParseMmpDialogue(FBoards[FSelectedBoard].DialogueText);
   SegDur := FBoards[FSelectedBoard].DurationSec div N;
   Rem := FBoards[FSelectedBoard].DurationSec mod N;
-  SetLength(FBoards[FSelectedBoard].Segments, N);
+  SetLength(Parts, N);
 
   for I := 0 to N - 1 do
   begin
-    FBoards[FSelectedBoard].Segments[I].SegmentId := GenerateMmpId('sg');
-    FBoards[FSelectedBoard].Segments[I].OrderIdx := I + 1;
-    FBoards[FSelectedBoard].Segments[I].DurationSec := SegDur;
+    Parts[I].SegmentId := GenerateMmpId('sg');
+    Parts[I].OrderIdx := I + 1;
+    Parts[I].DurationSec := SegDur;
     if I = N - 1 then
-      FBoards[FSelectedBoard].Segments[I].DurationSec := SegDur + Rem;
+      Parts[I].DurationSec := SegDur + Rem;
 
     if I = 0 then
     begin
-      FBoards[FSelectedBoard].Segments[I].OpeningAssetId := FBoards[FSelectedBoard].OpeningAssetId;
-      FBoards[FSelectedBoard].Segments[I].OpeningUri := FBoards[FSelectedBoard].OpeningUri;
+      Parts[I].OpeningAssetId := FBoards[FSelectedBoard].OpeningAssetId;
+      Parts[I].OpeningUri := FBoards[FSelectedBoard].OpeningUri;
     end
     else
     begin
       // Continuidade exata: o asset inicial do segmento i eh exatamente o final do segmento i-1
-      FBoards[FSelectedBoard].Segments[I].OpeningAssetId := FBoards[FSelectedBoard].Segments[I - 1].ClosingAssetId;
-      FBoards[FSelectedBoard].Segments[I].OpeningUri := FBoards[FSelectedBoard].Segments[I - 1].ClosingUri;
+      Parts[I].OpeningAssetId := Parts[I - 1].ClosingAssetId;
+      Parts[I].OpeningUri := Parts[I - 1].ClosingUri;
     end;
 
     if I = N - 1 then
     begin
-      FBoards[FSelectedBoard].Segments[I].ClosingAssetId := FBoards[FSelectedBoard].ClosingAssetId;
-      FBoards[FSelectedBoard].Segments[I].ClosingUri := FBoards[FSelectedBoard].ClosingUri;
+      Parts[I].ClosingAssetId := FBoards[FSelectedBoard].ClosingAssetId;
+      Parts[I].ClosingUri := FBoards[FSelectedBoard].ClosingUri;
     end
     else
     begin
       MidId := GenerateMmpId('a_qmid');
-      MidRel := 'images/quadros/' + FBoards[FSelectedBoard].SceneId + '_mid_' + IntToStr(I + 1) + '.bmp';
-      SavePlaceholderBitmap(BaseRevDir + PathDelim + StringReplace(MidRel, '/', PathDelim, [rfReplaceAll]),
-        FBoards[FSelectedBoard].Heading + ' [TRANSICAO ' + IntToStr(I + 1) + ']',
-        'Quadro de fronteira compartilhado', 'Asset: ' + MidId, $003A3A28);
-      FBoards[FSelectedBoard].Segments[I].ClosingAssetId := MidId;
-      FBoards[FSelectedBoard].Segments[I].ClosingUri := MidRel;
+      if not GenerateFrame(Format('Quadro de transição %d/%d: %s | %s',
+        [I + 1, N, FBoards[FSelectedBoard].Heading, FBoards[FSelectedBoard].DirectionNotes]),
+        FindFrame(Parts[I].OpeningUri), MidId, MidRel) then
+      begin
+        MessageDlg('Falha ao gerar a fronteira. A divisão anterior foi preservada.',
+          mtError, [mbOK], 0);
+        Exit;
+      end;
+      Parts[I].ClosingAssetId := MidId;
+      Parts[I].ClosingUri := MidRel;
     end;
-    FBoards[FSelectedBoard].Segments[I].NotesText := 'Segmento ' + IntToStr(I + 1) + '/' + IntToStr(N);
+    Parts[I].DialogueText := MmpDialoguePortion(Lines, I, N);
+    Parts[I].NotesText := 'Segmento ' + IntToStr(I + 1) + '/' + IntToStr(N);
   end;
 
+  FBoards[FSelectedBoard].Segments := Parts;
+  FBoards[FSelectedBoard].Status := 'generated';
   RefreshBoardsGrid;
   RefreshSegmentsGrid;
   LogMsg('Cena subdividida em ' + IntToStr(N) + ' segmentos com continuidade exata por asset_id.');
@@ -593,7 +727,7 @@ end;
 
 procedure TMboardMainForm.RefreshSelectedBoard;
 var
-  P1, P2, RevDir: string;
+  P1, P2: string;
 begin
   FOpenImg.Picture := nil;
   FCloseImg.Picture := nil;
@@ -606,9 +740,8 @@ begin
   FDialogueMemo.Text := FBoards[FSelectedBoard].DialogueText;
   FNotesMemo.Text := FBoards[FSelectedBoard].DirectionNotes;
 
-  RevDir := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim + FCurrentRevId;
-  P1 := RevDir + PathDelim + StringReplace(FBoards[FSelectedBoard].OpeningUri, '/', PathDelim, [rfReplaceAll]);
-  P2 := RevDir + PathDelim + StringReplace(FBoards[FSelectedBoard].ClosingUri, '/', PathDelim, [rfReplaceAll]);
+  P1 := FindFrame(FBoards[FSelectedBoard].OpeningUri);
+  P2 := FindFrame(FBoards[FSelectedBoard].ClosingUri);
   if FileExists(P1) then FOpenImg.Picture.LoadFromFile(P1);
   if FileExists(P2) then FCloseImg.Picture.LoadFromFile(P2);
   RefreshSegmentsGrid;
@@ -657,6 +790,8 @@ begin
     begin
       BObj := TJSONObject.Create;
       BObj.Add('board_id', FBoards[I].BoardId);
+      BObj.Add('visual_reference_asset_id', FBoards[I].ReferenceAssetId);
+      BObj.Add('visual_reference_sha256', FBoards[I].ReferenceSha);
       BObj.Add('scene_id', FBoards[I].SceneId);
       BObj.Add('order', FBoards[I].OrderIdx);
       BObj.Add('heading', FBoards[I].Heading);
@@ -695,7 +830,7 @@ end;
 
 procedure TMboardMainForm.SaveRevision(const NewState, ChangeEventId: string);
 var
-  PrepRev, RevDir, OldRevDir, NewRev, ErrMsg: string;
+  PrepRev, RevDir, NewRev, ErrMsg: string;
   Srcs: array of TMmpSourceRef;
   Arts: array of TMmpArtifactInput;
   RevInfo: TMmpRevisionInfo;
@@ -704,26 +839,11 @@ var
   procedure CopyAndAddFrame(const Aid, SceneId, SegId, RelUri, StatusStr: string);
   var
     SrcF, DstF: string;
-    FS1, FS2: TFileStream;
   begin
-    if RelUri = '' then Exit;
-    SrcF := OldRevDir + PathDelim + StringReplace(RelUri, '/', PathDelim, [rfReplaceAll]);
-    DstF := RevDir + PathDelim + StringReplace(RelUri, '/', PathDelim, [rfReplaceAll]);
-    if FileExists(SrcF) and not SameText(SrcF, DstF) then
-    begin
-      ForceDirectories(ExtractFileDir(DstF));
-      FS1 := TFileStream.Create(SrcF, fmOpenRead or fmShareDenyNone);
-      try
-        FS2 := TFileStream.Create(DstF, fmCreate);
-        try
-          FS2.CopyFrom(FS1, 0);
-        finally
-          FS2.Free;
-        end;
-      finally
-        FS1.Free;
-      end;
-    end;
+    SrcF := FindFrame(RelUri);
+    if (SrcF = '') or not ResolveSafePath(RevDir, RelUri, DstF) or
+      not ForceDirectories(ExtractFileDir(DstF)) or not CopyFile(SrcF, DstF) then
+      raise Exception.Create('Não foi possível publicar o quadro ' + Aid + '.');
     ArtCount := Length(Arts);
     SetLength(Arts, ArtCount + 1);
     Arts[ArtCount].ArtifactId := Aid;
@@ -731,16 +851,24 @@ var
     Arts[ArtCount].SceneId := SceneId;
     Arts[ArtCount].SegmentId := SegId;
     Arts[ArtCount].RelUri := RelUri;
-    Arts[ArtCount].MimeType := 'image/bmp';
+    if SameText(ExtractFileExt(RelUri), '.png') then Arts[ArtCount].MimeType := 'image/png'
+    else Arts[ArtCount].MimeType := 'image/bmp';
     Arts[ArtCount].Status := StatusStr;
   end;
 begin
   if not FProd.Loaded then Exit;
+  if Length(FBoards) = 0 then Exit;
+  for I := 0 to High(FBoards) do
+    if (FBoards[I].Status <> 'approved') or not ValidBoard(FBoards[I]) then
+    begin
+      MessageDlg('Revise e aprove os quadros e os tempos de cada cena antes de publicar.',
+        mtWarning, [mbOK], 0);
+      Exit;
+    end;
   if not PrepareNextRevisionDir(FProj.ProjectFilePath, PrepRev, RevDir) then Exit;
-  OldRevDir := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim + FCurrentRevId;
-
-  AtomicWriteTextFile(RevDir + PathDelim + 'storyboard' + PathDelim + 'scenes.json',
-    BoardsToJson, False);
+  if not AtomicWriteTextFile(RevDir + PathDelim + 'storyboard' + PathDelim + 'scenes.json',
+    BoardsToJson, False) then
+    raise Exception.Create('Não foi possível publicar os dados do storyboard.');
 
   SetLength(Arts, 1);
   Arts[0].ArtifactId := GenerateMmpId('a');
@@ -803,11 +931,22 @@ begin
 end;
 
 procedure TMboardMainForm.OnApplyEditClick(Sender: TObject);
+var
+  I: Integer;
+  Lines: TMmpDialogueLines;
 begin
   if (FSelectedBoard < 0) or (FSelectedBoard > High(FBoards)) then Exit;
-  FBoards[FSelectedBoard].DurationSec := StrToIntDef(FDurEdit.Text, 30);
+  FBoards[FSelectedBoard].DurationSec := StrToIntDef(FDurEdit.Text, FBoards[FSelectedBoard].DurationSec);
   FBoards[FSelectedBoard].DialogueText := FDialogueMemo.Text;
   FBoards[FSelectedBoard].DirectionNotes := FNotesMemo.Text;
+  if Length(FBoards[FSelectedBoard].Segments) = 1 then
+  begin
+    FBoards[FSelectedBoard].Segments[0].DurationSec := FBoards[FSelectedBoard].DurationSec;
+  end;
+  Lines := ParseMmpDialogue(FBoards[FSelectedBoard].DialogueText);
+  for I := 0 to High(FBoards[FSelectedBoard].Segments) do
+    FBoards[FSelectedBoard].Segments[I].DialogueText := MmpDialoguePortion(Lines, I,
+      Length(FBoards[FSelectedBoard].Segments));
   FBoards[FSelectedBoard].Status := 'edited';
   RefreshBoardsGrid;
   LogMsg('Ajuste em rascunho aplicado no storyboard (MScript/MVisual ainda inalterados).');
@@ -816,6 +955,12 @@ end;
 procedure TMboardMainForm.OnApproveBoardClick(Sender: TObject);
 begin
   if (FSelectedBoard < 0) or (FSelectedBoard > High(FBoards)) then Exit;
+  if not ValidBoard(FBoards[FSelectedBoard]) then
+  begin
+    MessageDlg('Confira a continuidade dos quadros e a soma das durações. ' +
+      'Se o tempo da cena mudou, subdivida novamente.', mtWarning, [mbOK], 0);
+    Exit;
+  end;
   FBoards[FSelectedBoard].Status := 'approved';
   RefreshBoardsGrid;
 end;
@@ -828,20 +973,73 @@ end;
 
 procedure TMboardMainForm.OnEmitCascadeClick(Sender: TObject);
 var
-  EvtId, Desc: string;
-begin
-  if not FProd.Loaded then Exit;
-  Desc := 'Ajuste editorial aprovado no MBoard';
-  if not InputQuery('Sincronizacao em Cascata', 'Descreva a alteracao para MScript -> MVisual -> MBoard:', Desc) then
-    Exit;
+  EvtId, Content, ScriptPath, SceneId: string;
+  Data: TJSONData;
+  Scenes, Ops: TJSONArray;
+  Scene: TJSONObject;
+  I: Integer;
 
-  if EmitSyncEvent(FProd.RootDir, 'MBoard', 'MScript', FScriptProj.ProjectId,
-    FCurrentRevId, Desc, 'MScript', 'queued', '', EvtId) then
+  procedure RecordChange(const Name, Previous, Edited: string);
+  var
+    Op: TJSONObject;
   begin
-    SaveRevision('approved', EvtId);
-    LogMsg('Evento de cascata emitido (' + EvtId + ') em shared/sync/ para MScript.');
-    MessageDlg('Evento de sincronizacao ' + EvtId + ' registrado em shared/sync/.' + LineEnding +
-      'Acompanhe o progresso pelo MMenu.', mtInformation, [mbOK], 0);
+    if Previous = Edited then Exit;
+    Op := TJSONObject.Create;
+    Op.Add('scene_id', SceneId);
+    Op.Add('field', Name);
+    Op.Add('operation', 'set');
+    Op.Add('from', Previous);
+    Op.Add('to', Edited);
+    Ops.Add(Op);
+  end;
+
+begin
+  if not FProd.Loaded or (FSelectedBoard < 0) or (FSelectedBoard > High(FBoards)) then Exit;
+  if (FBoards[FSelectedBoard].Status <> 'approved') or not ValidBoard(FBoards[FSelectedBoard]) then
+  begin
+    MessageDlg('Aprove o storyboard selecionado antes de enviar a correção.',
+      mtWarning, [mbOK], 0);
+    Exit;
+  end;
+  ScriptPath := ExtractFileDir(FScriptProj.ProjectFilePath) + PathDelim + 'revisions' +
+    PathDelim + FScriptRevId + PathDelim + 'scripts' + PathDelim + 'roteiro.json';
+  if not ReadTextFileUtf8(ScriptPath, Content) then
+  begin
+    MessageDlg('A revisão original do roteiro não está disponível.', mtError, [mbOK], 0);
+    Exit;
+  end;
+  SceneId := FBoards[FSelectedBoard].SceneId;
+  Data := GetJSON(Content);
+  Ops := TJSONArray.Create;
+  try
+    if not (Data.FindPath('scenes') is TJSONArray) then Exit;
+    Scenes := TJSONArray(Data.FindPath('scenes'));
+    for I := 0 to Scenes.Count - 1 do
+      if Scenes.Objects[I].Get('scene_id', '') = SceneId then
+      begin
+        Scene := Scenes.Objects[I];
+        RecordChange('action', Scene.Get('action', ''), FBoards[FSelectedBoard].DirectionNotes);
+        RecordChange('dialogue_text', Scene.Get('dialogue_text', ''), FBoards[FSelectedBoard].DialogueText);
+        Break;
+      end;
+    if Ops.Count = 0 then
+    begin
+      MessageDlg('Não há mudança de ação ou de diálogo para enviar ao roteiro.',
+        mtInformation, [mbOK], 0);
+      Exit;
+    end;
+    if MessageDlg('Enviar as mudanças aprovadas da cena ' + SceneId + ' para o MScript?',
+      mtConfirmation, [mbYes, mbNo], 0) <> mrYes then Exit;
+    if EmitSyncEvent(FProd.RootDir, 'MBoard', 'MScript', FScriptProj.ProjectId,
+      FScriptRevId, 'Ajuste de ação ou diálogo na cena ' + SceneId, 'MScript',
+      'queued', '', EvtId, Ops) then
+      MessageDlg('Correção ' + EvtId + ' registrada. Use Retomar sincronização no MMenu.',
+        mtInformation, [mbOK], 0)
+    else
+      MessageDlg('Não foi possível registrar a correção.', mtError, [mbOK], 0);
+  finally
+    Ops.Free;
+    Data.Free;
   end;
 end;
 

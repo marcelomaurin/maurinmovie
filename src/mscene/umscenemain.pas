@@ -55,6 +55,7 @@ type
     procedure LoadSelectedSceneWork;
     procedure EnsureSceneProjectExists(const SceneId: string);
     procedure RefreshSegmentsGrid;
+    function FindAudioGuide(const PartId: string): string;
     function TryOpenPublishedSceneAt(Index: Integer): Boolean;
     procedure OnDecoderFrame(Sender: TObject; ABitmap: TBitmap);
 
@@ -545,9 +546,33 @@ begin
   end;
 end;
 
+function TMsceneMainForm.FindAudioGuide(const PartId: string): string;
+var
+  Rev: TMmpRevisionInfo;
+  I: Integer;
+  CurrentBoard: Boolean;
+begin
+  Result := '';
+  if not FindRevisionInProject(FSoundProj, FSoundProj.ActiveRevision, Rev) then Exit;
+  CurrentBoard := False;
+  for I := 0 to High(Rev.Sources) do
+    if (Rev.Sources[I].ProjectId = FBoardProj.ProjectId) and
+      (Rev.Sources[I].RevisionId = FBoardProj.ActiveRevision) and
+      (Rev.Sources[I].Status = 'ok') then
+      CurrentBoard := True;
+  if not CurrentBoard then Exit;
+  for I := 0 to High(Rev.Artifacts) do
+    with Rev.Artifacts[I] do
+      if (Kind = 'audio.preview') and (SceneId = FCurrentSceneId) and
+        (SegmentId = PartId) and
+        ((Status = 'approved') or not FAi.Settings.RequireVoiceApprovalForScene) and
+        (Sha256 <> '') and FileExists(ResolvedPath) and SameText(SHA256File(ResolvedPath), Sha256) then
+        Exit(ResolvedPath);
+end;
+
 procedure TMsceneMainForm.OnGenerateCurrentSceneClick(Sender: TObject);
 var
-  WorkDir, OutputFile, Err, ProbeExe: string;
+  WorkDir, OutputFile, Err, ProbeExe, AudioGuide: string;
   I: Integer;
   Duration: Double;
   HasAudio: Boolean;
@@ -571,9 +596,12 @@ begin
       LogMsg('Quadro inicial ausente no segmento ' + FSegments[I].SegmentId);
       Break;
     end;
+    AudioGuide := FindAudioGuide(FSegments[I].SegmentId);
+    if AudioGuide = '' then
+      LogMsg('Sem guia de áudio compatível para ' + FSegments[I].SegmentId + '.');
     OutputFile := WorkDir + PathDelim + GenerateMmpId('video') + '.mp4';
     if not FAi.GenerateVideo(FSegments[I].PromptText, OutputFile, Err,
-      FSegments[I].OpeningPath, '', FSegments[I].DurationSec) or
+      FSegments[I].OpeningPath, AudioGuide, FSegments[I].DurationSec) or
       not ProbeMmpVideo(ProbeExe, OutputFile, Duration, HasAudio, Err) then
     begin
       DeleteFile(OutputFile);
