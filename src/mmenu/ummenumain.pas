@@ -2714,7 +2714,7 @@ end;
 function TMmenuMainForm.LaunchApplication(AppIdx: Integer;
   const ProjectId, RevisionId: string): Boolean;
 var
-  Executable, ArgLine, ProjDir, LockInfo, EffProjId, EffRevId: string;
+  Executable, ArgLine, ProjDir, LockInfo, EffProjId, EffRevId, EffSceneId: string;
   P: TProcess;
   I, K, AskRes: Integer;
   Eval, UpEval: TMmpStageStatus;
@@ -2805,6 +2805,16 @@ begin
   if EffRevId = '' then
     EffRevId := 'r0001';
 
+  { Projeto por cena do MScene: o aplicativo precisa receber --scene-id
+    (docs/specs/01-mmenu RF-MM-06). }
+  EffSceneId := '';
+  for I := 0 to High(FProd.Projects) do
+    if SameText(FProd.Projects[I].ProjectId, EffProjId) then
+    begin
+      EffSceneId := FProd.Projects[I].SceneId;
+      Break;
+    end;
+
   if IsAppInstanceRunning(AppIndexToEnum(AppIdx)) then
   begin
     FocusAppInstanceWindow(AppIndexToEnum(AppIdx));
@@ -2842,7 +2852,8 @@ begin
   P := TProcess.Create(nil);
   try
     P.Executable := Executable;
-    BuildLaunchArgs(FProd.RootDir, EffProjId, EffRevId, P.Parameters, FProd.ProductionId);
+    BuildLaunchArgs(FProd.RootDir, EffProjId, EffRevId, P.Parameters, FProd.ProductionId,
+      EffSceneId);
     P.Options := [];
 
     ArgLine := Executable;

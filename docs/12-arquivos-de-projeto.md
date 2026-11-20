@@ -29,4 +29,4 @@ Cada aplicativo cria ou abre o arquivo `project.json` em sua pasta própria. Ele
 - Ao criar uma nova produção, inicializar os projetos necessários; não confundir modelos vazios com projetos de produção efetivamente criados.
 
 ## Situação da implementação
-Os arquivos `.lpi/.lpr/.pas/.lfm` são **esqueletos iniciais** de aplicativos Lazarus; não representam funcionalidades de produção implementadas. O contrato `project.json` está especificado, mas a rotina de criar, carregar e salvar esses projetos ainda precisa ser programada, compilada e testada.
+A criação da produção (MMenu), a leitura de `project.json`/`manifest.json`, a publicação de revisões (`PublishProjectRevision` em `src/common/ummpappbase.pas`) e a auditoria de integridade estão implementadas e cobertas por `tests/test_mmp_protocol.pas`. Cada aplicativo cria/abre seu `project.json` e publica revisões imutáveis; o trabalho em edição fica em `projects/NN-app/work/` (MScript: `work/roteiro.json`; demais: `work/draft/`). A situação funcional de cada aplicativo está no `README.md` da respectiva pasta em `src/`.

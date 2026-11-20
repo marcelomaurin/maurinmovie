@@ -185,7 +185,7 @@ productions/<slug>__<production_id>/
 
 ### 5.1 Rascunho e publicação
 
-- Todo trabalho em andamento fica em `projects/NN-app/work/` (`draft.json` + mídias novas). Autosave a cada 60 s e ao trocar de etapa.
+- Todo trabalho em andamento fica em `projects/NN-app/work/` (`draft.json` + mídias novas). Autosave a cada 60 s e ao trocar de etapa. Implementação atual: o MScript usa `work/roteiro.json`; MVisual, MBoard, MSound e MScene usam `work/draft/` com a mesma estrutura relativa da revisão (`images/…`, `audio/…`, `video/…`, `indexes/…`), resolvida por `MmpResolveDraftOrRevisionFile` (rascunho primeiro, depois a revisão aberta). Uma publicação bem-sucedida copia os arquivos para a nova revisão e limpa `work/draft/`.
 - **Publicar revisão** = processo transacional (docs/11 §7):
   1. copiar/gerar arquivos em `shared/temp/<job_id>/`;
   2. calcular SHA-256 e tamanho de cada artefato; mídias grandes vão para `shared/blobs/` e o manifesto registra `uri` relativa ao blob;

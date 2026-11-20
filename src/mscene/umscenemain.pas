@@ -283,7 +283,7 @@ end;
 
 procedure TMsceneMainForm.EnsureSceneProjectExists(const SceneId: string);
 var
-  ProjJsonPath, RevDir, NowIso: string;
+  ProjJsonPath, RevDir, NowIso, NewProjId: string;
   ProjObj, ManObj: TJSONObject;
   Arr: TJSONArray;
 begin
@@ -301,9 +301,11 @@ begin
   try
     ProjObj.Add('schema', MMP_PROJECT_SCHEMA);
     ProjObj.Add('production_id', FProd.ProductionId);
-    ProjObj.Add('project_id', GenerateMmpId('pr_mscene_' + SceneId));
+    NewProjId := GenerateMmpId('pr_mscene_' + SceneId);
+    ProjObj.Add('project_id', NewProjId);
     ProjObj.Add('application', 'MScene');
     ProjObj.Add('scene_id', SceneId);
+    ProjObj.Add('name_base', FProd.Title);
     ProjObj.Add('active_revision', 'r0001');
     ProjObj.Add('status', 'draft');
     ProjObj.Add('created_at', NowIso);
@@ -319,7 +321,8 @@ begin
   try
     ManObj.Add('schema', MMP_MANIFEST_SCHEMA);
     ManObj.Add('production_id', FProd.ProductionId);
-    ManObj.Add('project_id', '');
+    { o manifesto precisa do mesmo project_id do project.json (antes ficava vazio) }
+    ManObj.Add('project_id', NewProjId);
     ManObj.Add('application', 'MScene');
     ManObj.Add('revision_id', 'r0001');
     ManObj.Add('state', 'draft');
@@ -466,7 +469,9 @@ var
   I: Integer;
 begin
   if FCurrentSceneId = '' then Exit;
-  RevDir := FSceneProjectDir + PathDelim + 'revisions' + PathDelim + FSceneRevId;
+  { arquivos novos vao para o rascunho do projeto da cena; revisoes publicadas
+    sao imutaveis (docs/11, docs/specs/00-comum 5.1) }
+  RevDir := MmpDraftDir(FSceneProjectDir);
   ForceDirectories(RevDir + PathDelim + 'video' + PathDelim + 'segments');
 
   for I := 0 to High(FSegments) do
@@ -540,7 +545,7 @@ begin
     end;
   end;
 
-  RevDir := FSceneProjectDir + PathDelim + 'revisions' + PathDelim + FSceneRevId;
+  RevDir := MmpDraftDir(FSceneProjectDir);
   ForceDirectories(RevDir + PathDelim + 'video' + PathDelim + 'assembled');
   RelAssembled := 'video/assembled/' + FCurrentSceneId + '_assembled.json';
   FAssembledRelUri := RelAssembled;
@@ -604,7 +609,7 @@ begin
   for I := 0 to High(FSegments) do
   begin
     if FSegments[I].VideoRelUri = '' then Continue;
-    SrcF := OldRevDir + PathDelim + StringReplace(FSegments[I].VideoRelUri, '/', PathDelim, [rfReplaceAll]);
+    SrcF := MmpResolveDraftOrRevisionFile(FSceneProjectDir, FSceneRevId, FSegments[I].VideoRelUri);
     DstF := RevDir + PathDelim + StringReplace(FSegments[I].VideoRelUri, '/', PathDelim, [rfReplaceAll]);
     if FileExists(SrcF) and not SameText(SrcF, DstF) then
     begin
@@ -630,7 +635,7 @@ begin
 
   if FAssembledRelUri <> '' then
   begin
-    SrcF := OldRevDir + PathDelim + StringReplace(FAssembledRelUri, '/', PathDelim, [rfReplaceAll]);
+    SrcF := MmpResolveDraftOrRevisionFile(FSceneProjectDir, FSceneRevId, FAssembledRelUri);
     DstF := RevDir + PathDelim + StringReplace(FAssembledRelUri, '/', PathDelim, [rfReplaceAll]);
     if FileExists(SrcF) and not SameText(SrcF, DstF) then
     begin
@@ -654,6 +659,10 @@ begin
   end;
 
   SetLength(Srcs, 4);
+  Srcs[0].ResolvedApp := 'MScript';
+  Srcs[1].ResolvedApp := 'MVisual';
+  Srcs[2].ResolvedApp := 'MBoard';
+  Srcs[3].ResolvedApp := 'MSound';
   Srcs[0].ProjectId := FScriptProj.ProjectId; Srcs[0].RevisionId := FScriptProj.ActiveRevision;
   if FindRevisionInProject(FScriptProj, FScriptProj.ActiveRevision, RevInfo) then Srcs[0].ManifestSha256 := RevInfo.ManifestSha256;
   Srcs[1].ProjectId := FVisualProj.ProjectId; Srcs[1].RevisionId := FVisualProj.ActiveRevision;
@@ -672,10 +681,14 @@ begin
     FSceneRevId, FinalState, '', Srcs, Arts, NewRev, ErrMsg, PrepRev) then
   begin
     FSceneRevId := NewRev;
+    MmpClearDraftDir(FSceneProjectDir);
     LogMsg('Projeto da cena ' + FCurrentSceneId + ' salvo na revisao ' + NewRev + ' [' + FinalState + ']');
   end
   else
+  begin
+    MmpDiscardUnpublishedRevisionDir(RevDir);
     MessageDlg(ErrMsg, mtError, [mbOK], 0);
+  end;
 end;
 
 procedure TMsceneMainForm.OnOpenProdClick(Sender: TObject);

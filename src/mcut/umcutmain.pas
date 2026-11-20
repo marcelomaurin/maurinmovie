@@ -685,7 +685,7 @@ var
   Srcs: array of TMmpSourceRef;
   Arts: array of TMmpArtifactInput;
   RevInfo: TMmpRevisionInfo;
-  I, MissingCnt: Integer;
+  I, J, N, MissingCnt: Integer;
   ExportObj: TJSONObject;
 begin
   if not FProd.Loaded then Exit;
@@ -729,10 +729,28 @@ begin
   Arts[3].ArtifactId := GenerateMmpId('a'); Arts[3].Kind := 'video.film.export'; Arts[3].RelUri := 'video/exports/export_report.json'; Arts[3].MimeType := 'application/json'; Arts[3].Status := ExportStatus;
 
   SetLength(Srcs, 1);
+  Srcs[0].ResolvedApp := 'MScript';
   Srcs[0].ProjectId := FScriptProj.ProjectId;
   Srcs[0].RevisionId := FScriptProj.ActiveRevision;
   if FindRevisionInProject(FScriptProj, FScriptProj.ActiveRevision, RevInfo) then
     Srcs[0].ManifestSha256 := RevInfo.ManifestSha256;
+
+  { RF-MC-17 / docs/08: cada cena da montagem aponta para a revisao exata do
+    projeto da cena no MScene (e, por ele, para as fontes 1-4). }
+  for I := 0 to High(FClips) do
+    for J := 0 to High(FProd.Projects) do
+      if (FProd.Projects[J].SoftwareIndex = 5) and (FProd.Projects[J].SceneId <> '') and
+         SameText(FProd.Projects[J].SceneId, FClips[I].SceneId) then
+      begin
+        N := Length(Srcs);
+        SetLength(Srcs, N + 1);
+        Srcs[N].ResolvedApp := 'MScene';
+        Srcs[N].ProjectId := FProd.Projects[J].ProjectId;
+        Srcs[N].RevisionId := FProd.Projects[J].ActiveRevision;
+        if FindRevisionInProject(FProd.Projects[J], FProd.Projects[J].ActiveRevision, RevInfo) then
+          Srcs[N].ManifestSha256 := RevInfo.ManifestSha256;
+        Break;
+      end;
 
   if PublishProjectRevision(FProd.ProductionId, FProj.ProjectFilePath, 'MCut',
     FCurrentRevId, ExportStatus, '', Srcs, Arts, NewRev, ErrMsg, PrepRev) then

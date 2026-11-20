@@ -1,21 +1,28 @@
 # MCut — Software 6
 
-Montagem do filme, avaliacao de publico e exportacao.
+Montagem do filme, avaliação de público e exportação.
 
-Especificação funcional: [docs/08-montagem-final.md](../../docs/08-montagem-final.md).
+Especificação funcional: [docs/08-montagem-final.md](../../docs/08-montagem-final.md) · especificação de implementação: [docs/specs/07-mcut.md](../../docs/specs/07-mcut.md).
 
 ## Arquivos
 - `mcut.lpi` — projeto Lazarus do executável (não é o projeto do filme).
-- `mcut.lpr` — programa principal.
-- `umcutmain.pas` / `umcutmain.lfm` — formulário principal (esqueleto: cabeçalho, área de trabalho e barra de status).
-- `mcut.res` — gerado automaticamente pelo Lazarus/lazbuild na primeira compilação; não precisa ser versionado.
+- `mcut.lpr` — programa principal (valida o contexto do MMenu, instância única e, no MScript, o modo headless).
+- `umcutmain.pas` — formulário principal montado em código.
+- `mcut_icon.rc` / `mcut_icon.res` / `mcut.ico` — ícone do executável.
 
 ## Como compilar
 ```
 lazbuild src/mcut/mcut.lpi
 ```
-Saída: `bin/mcut` (ou `bin/mcut.exe`); intermediários em `build/mcut/`.
-Código compartilhado em `src/common/` (já está no caminho de busca do `.lpi`).
+Saída: `bin/mcut` (Linux) ou `bin/mcut.exe` (Windows); intermediários em `build/mcut/`. Depende de `src/common/` e dos pacotes CHATGPT `openai_core`, `openai_image`, `openai_voice` e `openai_video` (ver [install/README.md](../../install/README.md)).
+
+## Execução
+Só pode ser iniciado pelo MMenu, que passa `--launcher mmenu --mmenu-version <v> --production <pasta> --project-id <id> --revision <rNNNN>` (docs/specs/00-comum §4). Permite uma instância por vez.
 
 ## Situação
-Esqueleto inicial. Compila com `lazbuild` (Lazarus 3.0, Linux) e abre a janela vazia; nenhuma funcionalidade implementada. Ainda não lê `--production`, `--project-id` ou `--revision`, e não cria nem abre `project.json` (ver [docs/12-arquivos-de-projeto.md](../../docs/12-arquivos-de-projeto.md)).
+Primeira versão funcional:
+- Monta a timeline na ordem narrativa do roteiro, apontando cada cena para a revisão do projeto da cena no MScene; cena ausente aparece como pendência explícita.
+- Cortes (in/out) e transições como dados da montagem, avaliações por cena e análise consolidada.
+- "Salvar e Exportar" publica a revisão com timeline, avaliações, análise e relatório de exportação; com cenas pendentes, o estado é `pending_scenes_missing` (nunca anunciado como exportação concluída). As fontes do manifesto incluem o MScript e cada projeto de cena do MScene.
+
+Pendente: player, renderização real do filme e sessões de público com participantes.

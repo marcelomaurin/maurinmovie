@@ -217,23 +217,42 @@ begin
 end;
 
 function MmpInitSqliteLibrary: Boolean;
+const
+  {$IFDEF WINDOWS}
+  LibFile = 'sqlite3.dll';
+  {$ELSE}
+  {$IFDEF DARWIN}
+  LibFile = 'libsqlite3.dylib';
+  {$ELSE}
+  LibFile = 'libsqlite3.so.0';
+  {$ENDIF}
+  {$ENDIF}
 var
   ExeDir, Candidate: string;
-  Candidates: array[0..4] of string;
+  Candidates: array[0..5] of string;
   I: Integer;
 begin
   if GSqliteInitialized then Exit(True);
   ExeDir := ExtractFileDir(ExpandFileName(ParamStr(0)));
-  Candidates[0] := IncludeTrailingPathDelimiter(ExeDir) + 'sqlite3.dll';
-  Candidates[1] := ExpandFileName(IncludeTrailingPathDelimiter(ExeDir) + '..' + PathDelim + 'bin' + PathDelim + 'sqlite3.dll');
-  Candidates[2] := ExpandFileName(IncludeTrailingPathDelimiter(ExeDir) + '..' + PathDelim + '..' + PathDelim + 'bin' + PathDelim + 'sqlite3.dll');
-  Candidates[3] := 'sqlite3.dll';
+  { 0..2: copia distribuida junto aos executaveis (precisa existir em disco);
+    3..5: nomes resolvidos pelo carregador do sistema operacional. }
+  Candidates[0] := IncludeTrailingPathDelimiter(ExeDir) + LibFile;
+  Candidates[1] := ExpandFileName(IncludeTrailingPathDelimiter(ExeDir) + '..' + PathDelim + 'bin' + PathDelim + LibFile);
+  Candidates[2] := ExpandFileName(IncludeTrailingPathDelimiter(ExeDir) + '..' + PathDelim + '..' + PathDelim + 'bin' + PathDelim + LibFile);
+  Candidates[3] := LibFile;
+  {$IFDEF WINDOWS}
   Candidates[4] := 'C:\Windows\System32\winsqlite3.dll';
+  Candidates[5] := '';
+  {$ELSE}
+  Candidates[4] := 'libsqlite3.so';
+  Candidates[5] := 'libsqlite3.dylib';
+  {$ENDIF}
 
   for I := 0 to High(Candidates) do
   begin
     Candidate := Candidates[I];
-    if (I <= 2) or (I = 4) then
+    if Candidate = '' then Continue;
+    if I <= 2 {$IFDEF WINDOWS}or (I = 4){$ENDIF} then
     begin
       if not FileExists(Candidate) then Continue;
     end;

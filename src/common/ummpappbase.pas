@@ -5,8 +5,8 @@ unit ummpappbase;
 interface
 
 uses
-  Classes, SysUtils, Graphics, Forms, LCLType, fpjson, jsonparser,
-  mmpcommon, ummpsha256, ummpprotocol, ummpdb;
+  Classes, SysUtils, Graphics, Forms, LCLType, fpjson, jsonparser, Process,
+  mmpcommon, mmpsettings, ummpsha256, ummpprotocol, ummpdb;
 
 type
   TMmpArtifactInput = record
@@ -60,7 +60,48 @@ function PublishProjectRevision(
 function EmitSyncEvent(
   const ProdRoot, OriginApp, TargetApp, TargetProjectId,
   SourceRevision, RequestedChange, Stage, Status, ErrText: string;
-  out EventId: string): Boolean;
+  out EventId: string; const OperationsJson: string = '';
+  const AffectedIdsCsv: string = ''; const OriginProjectId: string = '';
+  const OriginRevision: string = ''; const ApprovedBy: string = ''): Boolean;
+
+{ Igual a EmitSyncEvent, devolvendo tambem o ID da transacao criada.
+  ExtraStagesCsv lista os estagios seguintes da cascata (ex.: 'MVisual,MBoard'),
+  registrados como pendentes para que a transacao nunca seja dada como completa
+  antes de todos eles publicarem (docs/specs/00-comum 7.3). }
+function EmitSyncEventEx(
+  const ProdRoot, OriginApp, TargetApp, TargetProjectId,
+  SourceRevision, RequestedChange, Stage, Status, ErrText: string;
+  out EventId, TransactionId: string; const OperationsJson: string = '';
+  const AffectedIdsCsv: string = ''; const OriginProjectId: string = '';
+  const OriginRevision: string = ''; const ApprovedBy: string = '';
+  const ExtraStagesCsv: string = ''): Boolean;
+
+{ Atualiza um estagio da transacao e recalcula o estado geral:
+  failed se algum estagio falhou, complete so se todos completaram. }
+function MmpUpdateTransactionStage(const ProdRoot, TransactionId, StageApp,
+  StageStatus, RevisionAfter, ErrText: string): Boolean;
+
+{ Localiza o executavel de um aplicativo: caminho configurado no MMenu,
+  pasta do executavel atual e ../bin. }
+function MmpFindAppExecutable(App: TMMApp): string;
+
+{ Executa <app> --headless --event <arquivo> e devolve o codigo de saida
+  (docs/specs/00-comum 4); -1 se o executavel nao foi encontrado/iniciado. }
+function MmpRunHeadlessEvent(App: TMMApp; const ProdRoot, ProjectId, EventFile: string;
+  out ErrText: string): Integer;
+
+{ Area de rascunho mutavel do projeto (docs/specs/00-comum 5.1): projects/NN-app/work/draft.
+  Revisoes publicadas em revisions/rNNNN sao imutaveis; todo arquivo gerado ou
+  editado antes de publicar deve ir para esta pasta. }
+function MmpDraftDir(const ProjectDir: string): string;
+function MmpDraftFilePath(const ProjectDir, RelUri: string): string;
+{ Resolve um arquivo relativo: primeiro no rascunho, depois na revisao indicada. }
+function MmpResolveDraftOrRevisionFile(const ProjectDir, RevId, RelUri: string): string;
+function MmpHasDraft(const ProjectDir: string): Boolean;
+procedure MmpClearDraftDir(const ProjectDir: string);
+{ Remove um diretorio de revisao preparado mas nao publicado (sem manifest.json),
+  para nao deixar revisoes "fantasmas" que a auditoria acusaria como corrompidas. }
+procedure MmpDiscardUnpublishedRevisionDir(const RevDir: string);
 
 procedure MmpLogAppOperation(const ProdRoot, ProdId, AppName, Msg: string;
   const RevId: string = ''; const ActionName: string = 'operation';
@@ -74,7 +115,7 @@ function SavePlaceholderBitmap(const FilePath, Title, Subtitle, Footer: string;
 implementation
 
 uses
-  {$IFDEF WINDOWS}Windows{$ELSE}BaseUnix{$ENDIF};
+  {$IFDEF WINDOWS}Windows{$ELSE}BaseUnix, Unix{$ENDIF};
 
 function HandleStandardCliEarlyExit(App: TMMApp): Boolean;
 var
@@ -383,10 +424,20 @@ var
   DbRevRow: TMmpDbRevisionRow;
   DbSrcs: array of TMmpDbSourceRow;
   DbArt: TMmpDbMediaAssetRow;
+  ArtIds: array of string;
 begin
   Result := False;
   NewRevId := '';
   ErrMsg := '';
+
+  { O artifact_id gravado no manifesto e o registrado no SQLite precisam ser o
+    mesmo; antes cada um chamava GenerateMmpId e os IDs divergiam. }
+  SetLength(ArtIds, Length(Artifacts));
+  for I := 0 to High(Artifacts) do
+    if Artifacts[I].ArtifactId <> '' then
+      ArtIds[I] := Artifacts[I].ArtifactId
+    else
+      ArtIds[I] := GenerateMmpId('a');
 
   if not FileExists(ProjectJsonPath) then
   begin
@@ -452,6 +503,8 @@ begin
       for I := 0 to High(Sources) do
       begin
         SrcObj := TJSONObject.Create;
+        if Sources[I].ResolvedApp <> '' then
+          SrcObj.Add('application', Sources[I].ResolvedApp);
         SrcObj.Add('project_id', Sources[I].ProjectId);
         SrcObj.Add('revision_id', Sources[I].RevisionId);
         SrcObj.Add('manifest_sha256', Sources[I].ManifestSha256);
@@ -463,10 +516,7 @@ begin
       for I := 0 to High(Artifacts) do
       begin
         ArtObj := TJSONObject.Create;
-        if Artifacts[I].ArtifactId <> '' then
-          ArtObj.Add('artifact_id', Artifacts[I].ArtifactId)
-        else
-          ArtObj.Add('artifact_id', GenerateMmpId('a'));
+        ArtObj.Add('artifact_id', ArtIds[I]);
         ArtObj.Add('kind', Artifacts[I].Kind);
         ArtObj.Add('scene_id', Artifacts[I].SceneId);
         ArtObj.Add('segment_id', Artifacts[I].SegmentId);
@@ -612,10 +662,7 @@ begin
         for I := 0 to High(Artifacts) do
         begin
           FillChar(DbArt, SizeOf(DbArt), 0);
-          if Artifacts[I].ArtifactId <> '' then
-            DbArt.ArtifactId := Artifacts[I].ArtifactId
-          else
-            DbArt.ArtifactId := GenerateMmpId('a');
+          DbArt.ArtifactId := ArtIds[I];
           DbArt.ProductionId := ProductionId;
           DbArt.ProjectId := ProjId;
           DbArt.RevisionId := NewRevId;
@@ -660,14 +707,55 @@ begin
   end;
 end;
 
+function ReadProductionIdFromRoot(const ProdRoot: string): string;
+var
+  Content: string;
+  Data: TJSONData;
+begin
+  Result := '';
+  if not ReadTextFileUtf8(IncludeTrailingPathDelimiter(ProdRoot) + MMP_PRODUCTION_FILE, Content) then
+    Exit;
+  try
+    Data := GetJSON(Content);
+    try
+      if Data is TJSONObject then
+        Result := TJSONObject(Data).Get('production_id', '');
+    finally
+      Data.Free;
+    end;
+  except
+    Result := '';
+  end;
+end;
+
 function EmitSyncEvent(
   const ProdRoot, OriginApp, TargetApp, TargetProjectId,
   SourceRevision, RequestedChange, Stage, Status, ErrText: string;
-  out EventId: string): Boolean;
+  out EventId: string; const OperationsJson: string;
+  const AffectedIdsCsv: string; const OriginProjectId: string;
+  const OriginRevision: string; const ApprovedBy: string): Boolean;
 var
-  InboxDir, TxDir, EvtPath, TxPath, TxId, NowIso, DbErr: string;
-  Obj, ReqObj, TxObj, OrigObj, StageObj: TJSONObject;
-  StagesArr, ErrArr: TJSONArray;
+  TxId: string;
+begin
+  Result := EmitSyncEventEx(ProdRoot, OriginApp, TargetApp, TargetProjectId,
+    SourceRevision, RequestedChange, Stage, Status, ErrText, EventId, TxId,
+    OperationsJson, AffectedIdsCsv, OriginProjectId, OriginRevision, ApprovedBy, '');
+end;
+
+function EmitSyncEventEx(
+  const ProdRoot, OriginApp, TargetApp, TargetProjectId,
+  SourceRevision, RequestedChange, Stage, Status, ErrText: string;
+  out EventId, TransactionId: string; const OperationsJson: string;
+  const AffectedIdsCsv: string; const OriginProjectId: string;
+  const OriginRevision: string; const ApprovedBy: string;
+  const ExtraStagesCsv: string): Boolean;
+var
+  InboxDir, TxDir, EvtPath, TxPath, TxId, NowIso, DbErr, ProdId, Part: string;
+  StageOrder: Integer;
+  Obj, ReqObj, TxObj, OrigObj, StageObj, ResObj: TJSONObject;
+  StagesArr, ErrArr, AffArr: TJSONArray;
+  OpsData: TJSONData;
+  Parts: TStringArray;
   AppIdx: Integer;
   DbSync: TMmpDbSyncJobRow;
 begin
@@ -675,29 +763,67 @@ begin
   NowIso := CurrentIsoUtc;
   EventId := GenerateMmpId('evt');
   TxId := GenerateMmpId('tx');
+  TransactionId := TxId;
+  ProdId := ReadProductionIdFromRoot(ProdRoot);
 
   InboxDir := IncludeTrailingPathDelimiter(ProdRoot) + 'shared' + PathDelim +
     'events' + PathDelim + 'inbox' + PathDelim + TargetApp;
   ForceDirectories(InboxDir);
   EvtPath := InboxDir + PathDelim + EventId + '.json';
 
+  { Envelope obrigatorio de docs/11 4 + extras de docs/specs/00-comum 7.1. }
   Obj := TJSONObject.Create;
   try
     Obj.Add('schema', MMP_SCHEMA_EVENT);
     Obj.Add('event_id', EventId);
     Obj.Add('transaction_id', TxId);
     Obj.Add('root_event_id', EventId);
+    Obj.Add('production_id', ProdId);
     Obj.Add('origin_app', OriginApp);
     Obj.Add('target_app', TargetApp);
     Obj.Add('project_id', TargetProjectId);
     Obj.Add('source_revision', SourceRevision);
     ReqObj := TJSONObject.Create;
-    ReqObj.Add('type', 'editorial_patch');
+    if Trim(OperationsJson) <> '' then
+      ReqObj.Add('type', 'script.patch')
+    else
+      ReqObj.Add('type', 'editorial_patch');
     ReqObj.Add('summary', RequestedChange);
+    if Trim(OperationsJson) <> '' then
+    begin
+      try
+        OpsData := GetJSON(OperationsJson);
+        if OpsData is TJSONArray then
+          ReqObj.Add('operations', OpsData)
+        else
+          OpsData.Free;
+      except
+        // operacoes invalidas: o destino recusa o evento (codigo 7)
+      end;
+    end;
     Obj.Add('requested_change', ReqObj);
+    AffArr := TJSONArray.Create;
+    if Trim(AffectedIdsCsv) <> '' then
+    begin
+      Parts := AffectedIdsCsv.Split([',']);
+      for Part in Parts do
+        if Trim(Part) <> '' then
+          AffArr.Add(Trim(Part));
+    end;
+    Obj.Add('affected_ids', AffArr);
+    if ApprovedBy <> '' then
+    begin
+      Obj.Add('approved_by', ApprovedBy);
+      Obj.Add('approved_at', NowIso);
+    end;
     Obj.Add('stage', Stage);
     Obj.Add('idempotency_key', EventId + ':' + TargetApp);
     Obj.Add('status', Status);
+    Obj.Add('attempts', 0);
+    ResObj := TJSONObject.Create;
+    ResObj.Add('new_revision', '');
+    ResObj.Add('error', ErrText);
+    Obj.Add('result', ResObj);
     Obj.Add('error', ErrText);
     Obj.Add('created_at', NowIso);
     Result := AtomicWriteTextFile(EvtPath, Obj.FormatJSON, False);
@@ -715,10 +841,18 @@ begin
     TxObj.Add('schema', MMP_SCHEMA_TX);
     TxObj.Add('transaction_id', TxId);
     TxObj.Add('root_event_id', EventId);
+    TxObj.Add('production_id', ProdId);
     OrigObj := TJSONObject.Create;
     OrigObj.Add('application', OriginApp);
-    OrigObj.Add('project_id', TargetProjectId);
-    OrigObj.Add('revision_id', SourceRevision);
+    { A origem e o projeto/revisao de quem aprovou a mudanca, nao o destino. }
+    if OriginProjectId <> '' then
+      OrigObj.Add('project_id', OriginProjectId)
+    else
+      OrigObj.Add('project_id', TargetProjectId);
+    if OriginRevision <> '' then
+      OrigObj.Add('revision_id', OriginRevision)
+    else
+      OrigObj.Add('revision_id', SourceRevision);
     TxObj.Add('origin', OrigObj);
 
     StagesArr := TJSONArray.Create;
@@ -730,7 +864,27 @@ begin
       StageObj.Add('status', 'failed')
     else
       StageObj.Add('status', 'pending');
+    StageObj.Add('revision_before', SourceRevision);
+    StageObj.Add('revision_after', '');
     StagesArr.Add(StageObj);
+    StageOrder := 1;
+    if Trim(ExtraStagesCsv) <> '' then
+    begin
+      Parts := ExtraStagesCsv.Split([',']);
+      for Part in Parts do
+      begin
+        if Trim(Part) = '' then Continue;
+        Inc(StageOrder);
+        StageObj := TJSONObject.Create;
+        StageObj.Add('order', StageOrder);
+        StageObj.Add('application', Trim(Part));
+        StageObj.Add('event_id', '');
+        StageObj.Add('status', 'pending');
+        StageObj.Add('revision_before', '');
+        StageObj.Add('revision_after', '');
+        StagesArr.Add(StageObj);
+      end;
+    end;
     TxObj.Add('stages', StagesArr);
 
     if SameText(Status, 'failed') then
@@ -758,7 +912,7 @@ begin
     FillChar(DbSync, SizeOf(DbSync), 0);
     DbSync.EventId := EventId;
     DbSync.TransactionId := TxId;
-    DbSync.ProductionId := '';
+    DbSync.ProductionId := ProdId;
     DbSync.OriginApp := OriginApp;
     DbSync.TargetApp := TargetApp;
     DbSync.ProjectId := TargetProjectId;
@@ -772,6 +926,215 @@ begin
     DbSync.SourceFile := EvtPath;
     MmpDbUpsertSyncJob(ProdRoot, DbSync, DbErr);
   end;
+end;
+
+function MmpUpdateTransactionStage(const ProdRoot, TransactionId, StageApp,
+  StageStatus, RevisionAfter, ErrText: string): Boolean;
+var
+  TxPath, Content, Overall: string;
+  Data: TJSONData;
+  TxObj, StageObj: TJSONObject;
+  Arr, ErrArr: TJSONArray;
+  I: Integer;
+  AllComplete, AnyFailed: Boolean;
+begin
+  Result := False;
+  TxPath := IncludeTrailingPathDelimiter(ProdRoot) + 'shared' + PathDelim +
+    'transactions' + PathDelim + TransactionId + '.json';
+  if not ReadTextFileUtf8(TxPath, Content) then Exit;
+  try
+    Data := GetJSON(Content);
+  except
+    Exit;
+  end;
+  if not (Data is TJSONObject) then begin Data.Free; Exit; end;
+  TxObj := TJSONObject(Data);
+  try
+    if not (TxObj.Find('stages') is TJSONArray) then Exit;
+    Arr := TJSONArray(TxObj.Find('stages'));
+    AllComplete := Arr.Count > 0;
+    AnyFailed := False;
+    for I := 0 to Arr.Count - 1 do
+    begin
+      if not (Arr.Items[I] is TJSONObject) then Continue;
+      StageObj := TJSONObject(Arr.Items[I]);
+      if SameText(StageObj.Get('application', ''), StageApp) then
+      begin
+        if StageObj.IndexOfName('status') >= 0 then StageObj.Delete('status');
+        StageObj.Add('status', StageStatus);
+        if RevisionAfter <> '' then
+        begin
+          if StageObj.IndexOfName('revision_after') >= 0 then StageObj.Delete('revision_after');
+          StageObj.Add('revision_after', RevisionAfter);
+        end;
+      end;
+      if SameText(StageObj.Get('status', ''), 'failed') then AnyFailed := True;
+      if not SameText(StageObj.Get('status', ''), 'complete') then AllComplete := False;
+    end;
+    if AnyFailed then Overall := 'failed'
+    else if AllComplete then Overall := 'complete'
+    else Overall := 'in_progress';
+    if TxObj.IndexOfName('status') >= 0 then TxObj.Delete('status');
+    TxObj.Add('status', Overall);
+    if ErrText <> '' then
+    begin
+      if TxObj.Find('errors') is TJSONArray then
+        ErrArr := TJSONArray(TxObj.Find('errors'))
+      else
+      begin
+        ErrArr := TJSONArray.Create;
+        TxObj.Add('errors', ErrArr);
+      end;
+      ErrArr.Add(StageApp + ': ' + ErrText);
+    end;
+    if TxObj.IndexOfName('updated_at') >= 0 then TxObj.Delete('updated_at');
+    TxObj.Add('updated_at', CurrentIsoUtc);
+    Result := AtomicWriteTextFile(TxPath, TxObj.FormatJSON, True);
+  finally
+    TxObj.Free;
+  end;
+end;
+
+function MmpFindAppExecutable(App: TMMApp): string;
+var
+  Suffix, ExeDir, Candidate: string;
+  S: TMMSettings;
+begin
+  Result := '';
+  {$IFDEF WINDOWS}
+  Suffix := '.exe';
+  {$ELSE}
+  Suffix := '';
+  {$ENDIF}
+  S := TMMSettings.Create;
+  try
+    Candidate := S.GetAppExe(App);
+    if (Candidate <> '') and FileExists(Candidate) then Exit(Candidate);
+  finally
+    S.Free;
+  end;
+  ExeDir := ExtractFileDir(ExpandFileName(ParamStr(0)));
+  Candidate := IncludeTrailingPathDelimiter(ExeDir) + LowerCase(MMAppNames[App]) + Suffix;
+  if FileExists(Candidate) then Exit(Candidate);
+  Candidate := ExpandFileName(IncludeTrailingPathDelimiter(ExeDir) + '..' + PathDelim + 'bin' +
+    PathDelim + LowerCase(MMAppNames[App]) + Suffix);
+  if FileExists(Candidate) then Exit(Candidate);
+end;
+
+function MmpRunHeadlessEvent(App: TMMApp; const ProdRoot, ProjectId, EventFile: string;
+  out ErrText: string): Integer;
+var
+  Exe: string;
+  P: TProcess;
+begin
+  Result := -1;
+  ErrText := '';
+  Exe := MmpFindAppExecutable(App);
+  if Exe = '' then
+  begin
+    ErrText := 'Executavel de ' + MMAppNames[App] + ' nao encontrado.';
+    Exit;
+  end;
+  P := TProcess.Create(nil);
+  try
+    P.Executable := Exe;
+    P.Parameters.Add('--launcher');
+    P.Parameters.Add('mmenu');
+    P.Parameters.Add('--mmenu-version');
+    P.Parameters.Add(MAURINMOVIE_VERSION);
+    P.Parameters.Add('--production');
+    P.Parameters.Add(ProdRoot);
+    if ProjectId <> '' then
+    begin
+      P.Parameters.Add('--project-id');
+      P.Parameters.Add(ProjectId);
+    end;
+    P.Parameters.Add('--headless');
+    P.Parameters.Add('--event');
+    P.Parameters.Add(EventFile);
+    P.Options := [poWaitOnExit, poNoConsole];
+    try
+      P.Execute;
+      Result := P.ExitStatus;
+    except
+      on E: Exception do
+      begin
+        ErrText := 'Falha ao iniciar ' + MMAppNames[App] + ': ' + E.Message;
+        Result := -1;
+      end;
+    end;
+  finally
+    P.Free;
+  end;
+end;
+
+function MmpDraftDir(const ProjectDir: string): string;
+begin
+  Result := IncludeTrailingPathDelimiter(ProjectDir) + 'work' + PathDelim + 'draft';
+end;
+
+function MmpDraftFilePath(const ProjectDir, RelUri: string): string;
+begin
+  Result := MmpDraftDir(ProjectDir) + PathDelim +
+    StringReplace(NormalizeRelPath(RelUri), '/', PathDelim, [rfReplaceAll]);
+end;
+
+function MmpResolveDraftOrRevisionFile(const ProjectDir, RevId, RelUri: string): string;
+var
+  Candidate: string;
+begin
+  Result := '';
+  if (Trim(RelUri) = '') or (not IsSafeRelativePath(RelUri)) then Exit;
+  Candidate := MmpDraftFilePath(ProjectDir, RelUri);
+  if FileExists(Candidate) then Exit(Candidate);
+  if RevId <> '' then
+  begin
+    Candidate := IncludeTrailingPathDelimiter(ProjectDir) + 'revisions' + PathDelim + RevId +
+      PathDelim + StringReplace(NormalizeRelPath(RelUri), '/', PathDelim, [rfReplaceAll]);
+    if FileExists(Candidate) then Exit(Candidate);
+  end;
+end;
+
+function MmpHasDraft(const ProjectDir: string): Boolean;
+begin
+  Result := DirectoryExists(MmpDraftDir(ProjectDir));
+end;
+
+procedure DeleteTreeSafe(const Dir: string);
+var
+  SR: TSearchRec;
+  Path: string;
+begin
+  if not DirectoryExists(Dir) then Exit;
+  if FindFirst(IncludeTrailingPathDelimiter(Dir) + '*', faAnyFile, SR) = 0 then
+  begin
+    try
+      repeat
+        if (SR.Name = '.') or (SR.Name = '..') then Continue;
+        Path := IncludeTrailingPathDelimiter(Dir) + SR.Name;
+        if (SR.Attr and faDirectory) <> 0 then
+          DeleteTreeSafe(Path)
+        else
+          DeleteFile(Path);
+      until FindNext(SR) <> 0;
+    finally
+      FindClose(SR);
+    end;
+  end;
+  RemoveDir(Dir);
+end;
+
+procedure MmpClearDraftDir(const ProjectDir: string);
+begin
+  if Trim(ProjectDir) = '' then Exit;
+  DeleteTreeSafe(MmpDraftDir(ProjectDir));
+end;
+
+procedure MmpDiscardUnpublishedRevisionDir(const RevDir: string);
+begin
+  if (Trim(RevDir) = '') or (not DirectoryExists(RevDir)) then Exit;
+  if FileExists(IncludeTrailingPathDelimiter(RevDir) + MMP_MANIFEST_FILE) then Exit;
+  DeleteTreeSafe(RevDir);
 end;
 
 procedure MmpLogAppOperation(const ProdRoot, ProdId, AppName, Msg: string;

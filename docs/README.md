@@ -28,7 +28,7 @@ Todos os nomes começam com **M**, sem espaço. **MaurinMovie** é o nome da su�
 ## Fluxo e rastreabilidade
 MScript → MVisual → MBoard → MSound → MScene → MCut. MMenu permite acessar qualquer um deles e acompanhar o andamento. Uma alteração aprovada em um aplicativo pode exigir revisões nos aplicativos afetados, mantendo histórico, IDs estáveis e evitando ciclos de sincronização. Cada projeto guarda localização, ID e revisão exata de suas fontes.
 
-**Status:** requisitos funcionais documentados; arquitetura técnica, formatos finais, motores de IA e implementação ainda pendentes.
+**Status:** requisitos funcionais e especificações de implementação documentados; os sete aplicativos compilam (Windows e Linux) e têm uma primeira versão funcional, com cobertura parcial das especificações. O que já funciona e o que falta em cada um está no `README.md` de `src/<app>/`; lacunas e decisões em [specs/99-lacunas.md](specs/99-lacunas.md).
 
 ## Padrão visual obrigatório
 Todos os sete aplicativos adotam **MultiCNC / MultiSuite como referência de layout e experiência de uso**, com adaptações para roteiro, imagens, storyboard, som, vídeo e montagem. Ver [padrão de interface MultiCNC](09-padrao-layout-multicnc.md).

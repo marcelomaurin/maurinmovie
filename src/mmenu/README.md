@@ -14,7 +14,7 @@ Código-fonte:
 - **Portal dos 6 aplicativos**: exibe `MScript`, `MVisual`, `MBoard`, `MSound`, `MScene` e `MCut` com grafia oficial, `project_id`, revisão ativa, status do projeto e status do executável.
 - **Projetos, revisões e vínculos**:
   - Lista projetos, revisões disponíveis (`revision_history` + `revisions/rNNNN`), manifesto (`manifest.json`), SHA-256 e dependências de origem (`sources[]`).
-  - Abre o aplicativo responsável passando `--production "<pasta-raiz>" --project-id "<project_id>" --revision "<revision_id>"`.
+  - Abre o aplicativo responsável passando `--production "<pasta-raiz>" --project-id "<project_id>" --revision "<revision_id>"` (e `--scene-id` quando o projeto é de uma cena do MScene).
   - Não sobrescreve projetos nem revisões dos demais aplicativos; revinculações manuais de `project.json` são gravadas apenas em `projects/00-mmenu/relinks.json`.
 - **Sincronizações em cascata & integridade**:
   - Lê eventos/jobs em `shared/sync/*.json` e `projects/00-mmenu/sync_jobs.json`, exibindo etapa, status e erro sem declarar conclusão quando há falhas ou pendências, com botão **Ir para aplicativo responsável**.
@@ -33,3 +33,11 @@ Código-fonte:
    C:\lazarus\fpc\3.2.2\bin\x86_64-win64\fpc.exe -MObjFPC -Scghi -O1 -Fusrc\common -FUbuild\tests -obuild\tests\test_mmp_protocol.exe tests\test_mmp_protocol.pas
    build\tests\test_mmp_protocol.exe
    ```
+
+### Linux
+```bash
+lazbuild -B src/mmenu/mmenu.lpi            # gera bin/mmenu
+fpc -MObjFPC -Scghi -O1 -Fusrc/common -FUbuild/tests -obuild/tests/test_mmp_protocol tests/test_mmp_protocol.pas
+./build/tests/test_mmp_protocol
+```
+O SQLite é carregado de `libsqlite3.so.0` (pacote `libsqlite3-0`). Os executáveis LCL/GTK2 precisam de um display mesmo em `--version`, `--check-integrity` e `--headless`; em servidor use `xvfb-run -a`.

@@ -98,6 +98,7 @@ type
     procedure GenerateOfflineTemplateScenes;
     function BuildScriptJsonText: string;
     function BuildScriptMarkdownText: string;
+    function BuildCharactersJsonText: string;
     procedure SaveRevision(const NewState: string);
     procedure SetGenreValue(const AGenre: string);
     function ValidateTargetDuration(out DurSec: Integer; out DurHms: string): Boolean;
@@ -650,7 +651,10 @@ begin
   if not ReadTextFileUtf8(ScriptPath, Content) then Exit;
   FLoadingFields := True;
   try
+  try
     Data := GetJSON(Content);
+    { Antes o Exit abaixo deixava FLoadingFields = True para sempre, o que
+      desligava o rastreio de alteracoes e o salvamento automatico do rascunho. }
     if not (Data is TJSONObject) then begin Data.Free; Exit; end;
     Obj := TJSONObject(Data);
     try
@@ -729,7 +733,9 @@ begin
     on E: Exception do
       LogMsg('Erro ao carregar roteiro.json: ' + E.Message);
   end;
-  FLoadingFields := False;
+  finally
+    FLoadingFields := False;
+  end;
 end;
 
 procedure TMscriptMainForm.LoadScriptFromRevision(const RevId: string);
@@ -844,10 +850,21 @@ procedure TMscriptMainForm.ExtractCharacterMap;
 var
   I: Integer;
   Parts: TStringList;
+  OldChars: array of TScriptCharItem;
+
+  function FindOldIndex(const AName: string): Integer;
+  var
+    K: Integer;
+  begin
+    Result := -1;
+    for K := 0 to High(OldChars) do
+      if SameText(Trim(OldChars[K].Name), AName) then
+        Exit(K);
+  end;
 
   procedure AddEntriesFromCsv(const ACsv, ADefaultDesc, ADefaultWardrobe, ASceneId: string);
   var
-    J, K, N, FoundIdx: Integer;
+    J, K, N, FoundIdx, OldIdx: Integer;
     NameTrim: string;
   begin
     Parts.DelimitedText := ACsv;
@@ -866,9 +883,21 @@ var
       begin
         N := Length(FChars);
         SetLength(FChars, N + 1);
-        FChars[N].CharacterId := GenerateMmpId('ch');
+        OldIdx := FindOldIndex(NameTrim);
+        if OldIdx >= 0 then
+        begin
+          { Mesmo personagem: o character_id precisa sobreviver a nova extracao
+            (MVisual e MSound ligam imagens e vozes por esse ID). Descricao
+            editada anteriormente tambem e preservada. }
+          FChars[N].CharacterId := OldChars[OldIdx].CharacterId;
+          FChars[N].PhysicalDesc := OldChars[OldIdx].PhysicalDesc;
+        end
+        else
+        begin
+          FChars[N].CharacterId := GenerateMmpId('ch');
+          FChars[N].PhysicalDesc := ADefaultDesc;
+        end;
         FChars[N].Name := NameTrim;
-        FChars[N].PhysicalDesc := ADefaultDesc;
         FChars[N].WardrobeDesc := ADefaultWardrobe;
         FChars[N].ScenesCsv := ASceneId;
       end
@@ -878,28 +907,31 @@ var
           FChars[FoundIdx].ScenesCsv := FChars[FoundIdx].ScenesCsv + ', ' + ASceneId;
         if (ADefaultWardrobe <> '') and
            (Pos(ADefaultWardrobe, FChars[FoundIdx].WardrobeDesc) = 0) then
-          FChars[FoundIdx].WardrobeDesc := FChars[FoundIdx].WardrobeDesc + '; ' + ADefaultWardrobe;
+        begin
+          if FChars[FoundIdx].WardrobeDesc = '' then
+            FChars[FoundIdx].WardrobeDesc := ADefaultWardrobe
+          else
+            FChars[FoundIdx].WardrobeDesc := FChars[FoundIdx].WardrobeDesc + '; ' + ADefaultWardrobe;
+        end;
       end;
     end;
   end;
 
 begin
+  OldChars := Copy(FChars, 0, Length(FChars));
   SetLength(FChars, 0);
   Parts := TStringList.Create;
   try
     Parts.Delimiter := ',';
     Parts.StrictDelimiter := True;
+    { O mapa e de personagens (docs/01 fluxo 5). Objetos ficam nas cenas
+      (objects_csv) e sao indexados pelo MVisual; antes entravam aqui como
+      "personagens" e o MSound criava perfil de voz para objetos. }
     for I := 0 to High(FScenes) do
-    begin
       AddEntriesFromCsv(FScenes[I].CharactersCsv,
         'Personagem (' + FScenes[I].Mood + ')',
         FScenes[I].CostumesCsv,
         FScenes[I].SceneId);
-      AddEntriesFromCsv(FScenes[I].ObjectsCsv,
-        'Objeto de cena (' + FScenes[I].Mood + ')',
-        'Objeto / Adereco',
-        FScenes[I].SceneId);
-    end;
   finally
     Parts.Free;
   end;
@@ -972,40 +1004,161 @@ begin
   FScenes[2].DialogueText := 'Protagonista: Agora a historia esta completa.';
 end;
 
+{ Converte um campo que pode vir como texto ("A, B") ou como lista
+  (lista de textos ou de objetos com character/description) num texto CSV. }
+function JsonFieldToCsv(Item: TJSONObject; const Names: array of string;
+  const Sep: string = ', '): string;
+var
+  D: TJSONData;
+  Arr: TJSONArray;
+  K, NIdx: Integer;
+  Part, Who, Desc: string;
+begin
+  Result := '';
+  D := nil;
+  for NIdx := 0 to High(Names) do
+  begin
+    D := Item.Find(Names[NIdx]);
+    if D <> nil then Break;
+  end;
+  if D = nil then Exit;
+  if D is TJSONArray then
+  begin
+    Arr := TJSONArray(D);
+    for K := 0 to Arr.Count - 1 do
+    begin
+      if Arr.Items[K] is TJSONObject then
+      begin
+        Who := TJSONObject(Arr.Items[K]).Get('character', TJSONObject(Arr.Items[K]).Get('name', ''));
+        Desc := TJSONObject(Arr.Items[K]).Get('description', TJSONObject(Arr.Items[K]).Get('text', ''));
+        if (Who <> '') and (Desc <> '') then
+          Part := Who + ': ' + Desc
+        else
+          Part := Who + Desc;
+      end
+      else if Arr.Items[K].JSONType in [jtString, jtNumber] then
+        Part := Arr.Items[K].AsString
+      else
+        Part := '';
+      Part := Trim(Part);
+      if Part = '' then Continue;
+      if Result <> '' then Result := Result + Sep;
+      Result := Result + Part;
+    end;
+  end
+  else if D.JSONType in [jtString, jtNumber] then
+    Result := Trim(D.AsString);
+end;
+
+{ Falas podem vir como texto livre ou como lista de objetos character/parenthetical/text. }
+function JsonDialogueToText(Item: TJSONObject): string;
+var
+  D: TJSONData;
+  Arr: TJSONArray;
+  K: Integer;
+  L: TJSONObject;
+  Line: string;
+begin
+  Result := '';
+  D := Item.Find('dialogue');
+  if D = nil then Exit;
+  if D is TJSONArray then
+  begin
+    Arr := TJSONArray(D);
+    for K := 0 to Arr.Count - 1 do
+    begin
+      if Arr.Items[K] is TJSONObject then
+      begin
+        L := TJSONObject(Arr.Items[K]);
+        Line := L.Get('character', '');
+        if L.Get('parenthetical', '') <> '' then
+          Line := Line + ' (' + L.Get('parenthetical', '') + ')';
+        Line := Line + ': ' + L.Get('text', '');
+      end
+      else if Arr.Items[K].JSONType = jtString then
+        Line := Arr.Items[K].AsString
+      else
+        Line := '';
+      if Trim(Line) = '' then Continue;
+      if Result <> '' then Result := Result + LineEnding;
+      Result := Result + Trim(Line);
+    end;
+  end
+  else if D.JSONType = jtString then
+    Result := D.AsString;
+end;
+
+function JsonDurationSec(Item: TJSONObject; DefaultSec: Integer): Integer;
+var
+  D: TJSONData;
+begin
+  Result := DefaultSec;
+  D := Item.Find('estimated_duration_seconds');
+  if D = nil then D := Item.Find('estimated_duration');
+  if D = nil then Exit;
+  if D.JSONType = jtNumber then
+    Result := Round(D.AsFloat)
+  else if D.JSONType = jtString then
+    Result := StrToIntDef(Trim(D.AsString), DefaultSec);
+  if Result <= 0 then Result := DefaultSec;
+end;
+
 procedure TMscriptMainForm.PopulateFromAiJson(const RawJson: string);
 var
-  Cleaned: string;
+  Cleaned, Heading, IntExt, Loc: string;
   Data: TJSONData;
   Obj, Item: TJSONObject;
   Arr: TJSONArray;
-  I: Integer;
+  I, N: Integer;
+  NewScenes: array of TScriptSceneItem;
 begin
   Cleaned := StripMarkdownJsonFence(RawJson);
   Data := GetJSON(Cleaned);
   if not (Data is TJSONObject) then begin Data.Free; raise Exception.Create('JSON raiz invalido'); end;
   Obj := TJSONObject(Data);
   try
-    if Obj.Find('scenes') is TJSONArray then
+    if not (Obj.Find('scenes') is TJSONArray) then
+      raise Exception.Create('campo "scenes" ausente');
+    Arr := TJSONArray(Obj.Find('scenes'));
+    SetLength(NewScenes, 0);
+    for I := 0 to Arr.Count - 1 do
     begin
-      Arr := TJSONArray(Obj.Find('scenes'));
-      SetLength(FScenes, Arr.Count);
-      for I := 0 to Arr.Count - 1 do
+      if not (Arr.Items[I] is TJSONObject) then Continue;
+      Item := TJSONObject(Arr.Items[I]);
+      N := Length(NewScenes);
+      SetLength(NewScenes, N + 1);
+      NewScenes[N].SceneId := GenerateMmpId('sc');
+      NewScenes[N].Sequence := N + 1;
+      Loc := Trim(Item.Get('location', ''));
+      Heading := Trim(Item.Get('heading', ''));
+      if Heading = '' then
       begin
-        Item := TJSONObject(Arr.Items[I]);
-        FScenes[I].SceneId := GenerateMmpId('sc');
-        FScenes[I].Sequence := I + 1;
-        FScenes[I].Heading := Item.Get('heading', 'CENA ' + IntToStr(I + 1));
-        FScenes[I].LocationRef := Item.Get('location', 'Local');
-        FScenes[I].TimeOfDay := Item.Get('time_of_day', 'DIA');
-        FScenes[I].Mood := Item.Get('mood', 'Neutro');
-        FScenes[I].DurationSec := Item.Get('estimated_duration', 40);
-        FScenes[I].CharactersCsv := Item.Get('characters', '');
-        FScenes[I].ObjectsCsv := Item.Get('objects', '');
-        FScenes[I].CostumesCsv := Item.Get('costumes', '');
-        FScenes[I].ActionText := Item.Get('action', '');
-        FScenes[I].DialogueText := Item.Get('dialogue', '');
+        { contrato de docs/specs/02-mscript 7.3: int_ext + location + time_of_day }
+        IntExt := Trim(Item.Get('int_ext', ''));
+        if IntExt <> '' then Heading := IntExt + '. ';
+        if Loc <> '' then Heading := Heading + UpperCase(Loc);
+        if Item.Get('time_of_day', '') <> '' then
+          Heading := Heading + ' - ' + UpperCase(Item.Get('time_of_day', ''));
+        if Item.Get('title', '') <> '' then
+          Heading := Trim(Heading + ' ' + Item.Get('title', ''));
+        if Trim(Heading) = '' then Heading := 'CENA ' + IntToStr(N + 1);
       end;
+      NewScenes[N].Heading := Heading;
+      if Loc = '' then Loc := 'Local';
+      NewScenes[N].LocationRef := Loc;
+      NewScenes[N].TimeOfDay := Item.Get('time_of_day', 'DIA');
+      NewScenes[N].Mood := Item.Get('mood', 'Neutro');
+      NewScenes[N].DurationSec := JsonDurationSec(Item, 40);
+      NewScenes[N].CharactersCsv := JsonFieldToCsv(Item, ['characters']);
+      NewScenes[N].ObjectsCsv := JsonFieldToCsv(Item, ['objects']);
+      NewScenes[N].CostumesCsv := JsonFieldToCsv(Item, ['costumes']);
+      NewScenes[N].ActionText := Item.Get('action', '');
+      NewScenes[N].DialogueText := JsonDialogueToText(Item);
     end;
+    if Length(NewScenes) = 0 then
+      raise Exception.Create('nenhuma cena valida na resposta');
+    { So substitui o roteiro depois de validar a resposta inteira (RF-MS-04). }
+    FScenes := NewScenes;
   finally
     Obj.Free;
   end;
@@ -1067,6 +1220,38 @@ begin
     end;
     Root.Add('characters', CArr);
 
+    Result := Root.FormatJSON;
+  finally
+    Root.Free;
+  end;
+end;
+
+function TMscriptMainForm.BuildCharactersJsonText: string;
+var
+  Root, CObj: TJSONObject;
+  CArr: TJSONArray;
+  I: Integer;
+begin
+  Root := TJSONObject.Create;
+  try
+    Root.Add('schema', 'mmp.mscript.characters/1');
+    CArr := TJSONArray.Create;
+    for I := 0 to High(FChars) do
+    begin
+      CObj := TJSONObject.Create;
+      CObj.Add('character_id', FChars[I].CharacterId);
+      CObj.Add('name', FChars[I].Name);
+      CObj.Add('description', FChars[I].PhysicalDesc);
+      CObj.Add('wardrobe', FChars[I].WardrobeDesc);
+      CObj.Add('scenes_csv', FChars[I].ScenesCsv);
+      CObj.Add('origin', 'ai');
+      if FValidated then
+        CObj.Add('status', 'approved')
+      else
+        CObj.Add('status', 'pending_review');
+      CArr.Add(CObj);
+    end;
+    Root.Add('characters', CArr);
     Result := Root.FormatJSON;
   finally
     Root.Free;
@@ -1164,7 +1349,7 @@ begin
   SysPrompt := 'Voce e um roteirista profissional. Responda APENAS com JSON valido no formato: ' +
     '{"scenes":[{"heading":"...","location":"...","time_of_day":"DIA|NOITE","mood":"...",' +
     '"estimated_duration":45,"characters":"Nome1, Nome2","objects":"...","costumes":"...",' +
-    '"action":"...","dialogue":"Nome1: fala"}]}.';
+    '"action":"...","dialogue":"Nome1: fala"}]}. Nao invente IDs.';
   UserPrompt := 'Titulo: ' + FTitleEdit.Text + LineEnding +
     'Genero: ' + FGenreCombo.Text + LineEnding +
     'Duracao alvo (HH:MM:SS): ' + DurHms + ' (' + IntToStr(DurSec) + ' segundos)' + LineEnding +
@@ -1339,18 +1524,29 @@ begin
   if not AtomicWriteTextFile(RevDir + PathDelim + 'scripts' + PathDelim + 'roteiro.json',
     BuildScriptJsonText, False) then
   begin
+    if not IsInitialEmptyR0001 then MmpDiscardUnpublishedRevisionDir(RevDir);
     MessageDlg('Falha ao gravar scripts/roteiro.json.', mtError, [mbOK], 0);
     Exit;
   end;
   if not AtomicWriteTextFile(RevDir + PathDelim + 'scripts' + PathDelim + 'roteiro.md',
     BuildScriptMarkdownText, False) then
   begin
+    if not IsInitialEmptyR0001 then MmpDiscardUnpublishedRevisionDir(RevDir);
     MessageDlg('Falha ao gravar scripts/roteiro.md.', mtError, [mbOK], 0);
     Exit;
   end;
+  if not AtomicWriteTextFile(RevDir + PathDelim + 'scripts' + PathDelim + 'characters.json',
+    BuildCharactersJsonText, False) then
+  begin
+    if not IsInitialEmptyR0001 then MmpDiscardUnpublishedRevisionDir(RevDir);
+    MessageDlg('Falha ao gravar scripts/characters.json.', mtError, [mbOK], 0);
+    Exit;
+  end;
 
+  { Tipos de artefato de docs/11 e docs/specs/02-mscript 7.1: o roteiro.md e
+    exportacao derivada (script.export) e o mapa de personagens e script.character. }
   SetLength(Srcs, 0);
-  SetLength(Arts, 2);
+  SetLength(Arts, 3);
   Arts[0].ArtifactId := GenerateMmpId('a');
   Arts[0].Kind := 'script.scene';
   Arts[0].RelUri := 'scripts/roteiro.json';
@@ -1359,9 +1555,15 @@ begin
 
   Arts[1].ArtifactId := GenerateMmpId('a');
   Arts[1].Kind := 'script.character';
-  Arts[1].RelUri := 'scripts/roteiro.md';
-  Arts[1].MimeType := 'text/markdown';
+  Arts[1].RelUri := 'scripts/characters.json';
+  Arts[1].MimeType := 'application/json';
   Arts[1].Status := NewState;
+
+  Arts[2].ArtifactId := GenerateMmpId('a');
+  Arts[2].Kind := 'script.export';
+  Arts[2].RelUri := 'scripts/roteiro.md';
+  Arts[2].MimeType := 'text/markdown';
+  Arts[2].Status := NewState;
 
   if PublishProjectRevision(FProd.ProductionId, FProj.ProjectFilePath, 'MScript',
     ParentRev, NewState, '', Srcs, Arts, NewRev, ErrMsg, PrepRev) then
@@ -1418,19 +1620,90 @@ begin
     ') carregada para leitura/edicao.');
 end;
 
+{ Campo do evento (docs/specs/02-mscript 8.4) -> chave do roteiro.json do MScript. }
+function PatchFieldToScriptKey(const AField: string): string;
+var
+  F: string;
+begin
+  F := LowerCase(Trim(AField));
+  if (F = '') or (F = 'action') then Result := 'action'
+  else if (F = 'dialogue') or (F = 'dialogue_text') then Result := 'dialogue_text'
+  else if (F = 'title') or (F = 'heading') then Result := 'heading'
+  else if (F = 'mood') or (F = 'time_of_day') or (F = 'location_ref') then Result := F
+  else if (F = 'objects') or (F = 'objects_csv') then Result := 'objects_csv'
+  else if (F = 'costumes') or (F = 'costumes_csv') then Result := 'costumes_csv'
+  else if (F = 'characters') or (F = 'characters_csv') then Result := 'characters_csv'
+  else Result := '';
+end;
+
+{ Grava o estado final do evento (published/failed) e o move para archive
+  quando concluido (docs/specs/00-comum 7.2, regras 5 e 6). }
+procedure FinishHeadlessEvent(EvtObj: TJSONObject; const ProdRoot, EventFile,
+  NewStatus, NewRevision, ErrText: string);
+var
+  ResObj: TJSONObject;
+  ArchivePath: string;
+begin
+  if EvtObj.IndexOfName('status') >= 0 then
+    EvtObj.Strings['status'] := NewStatus
+  else
+    EvtObj.Add('status', NewStatus);
+  if EvtObj.IndexOfName('attempts') >= 0 then
+    EvtObj.Integers['attempts'] := EvtObj.Get('attempts', 0) + 1
+  else
+    EvtObj.Add('attempts', 1);
+  if EvtObj.Find('result') is TJSONObject then
+    ResObj := TJSONObject(EvtObj.Find('result'))
+  else
+  begin
+    if EvtObj.IndexOfName('result') >= 0 then EvtObj.Delete('result');
+    ResObj := TJSONObject.Create;
+    EvtObj.Add('result', ResObj);
+  end;
+  if ResObj.IndexOfName('new_revision') >= 0 then ResObj.Delete('new_revision');
+  ResObj.Add('new_revision', NewRevision);
+  if ResObj.IndexOfName('error') >= 0 then ResObj.Delete('error');
+  ResObj.Add('error', ErrText);
+  if EvtObj.IndexOfName('error') >= 0 then
+    EvtObj.Strings['error'] := ErrText;
+  if EvtObj.IndexOfName('updated_at') >= 0 then
+    EvtObj.Strings['updated_at'] := CurrentIsoUtc
+  else
+    EvtObj.Add('updated_at', CurrentIsoUtc);
+
+  if SameText(NewStatus, 'published') then
+  begin
+    ArchivePath := IncludeTrailingPathDelimiter(ProdRoot) + 'shared' + PathDelim +
+      'events' + PathDelim + 'archive' + PathDelim + ExtractFileName(EventFile);
+    if AtomicWriteTextFile(ArchivePath, EvtObj.FormatJSON, False) then
+      DeleteFile(EventFile);
+  end
+  else
+    AtomicWriteTextFile(EventFile, EvtObj.FormatJSON, False);
+end;
+
 function RunMScriptHeadlessEvent(const Args: TMMLaunchArgs): Integer;
 var
   Prod: TMmpProduction;
   Proj: TMmpProjectRef;
-  ProjDir, RevId, ErrMsg, EvtStr, ScriptStr, PrepRev, RevDir, NewRev, ArchivePath: string;
+  ProjDir, RevId, ErrMsg, EvtStr, ScriptStr, PrepRev, RevDir, NewRev: string;
   EvtData, ScriptData: TJSONData;
   EvtObj, ScriptObj, ReqObj, OpObj, SceneObj: TJSONObject;
   OpsArr, ScenesArr: TJSONArray;
-  EvtId, SceneId, FieldName, FromTxt, ToTxt, ActionTxt: string;
+  EvtId, SceneId, OpName, FieldKey, FromTxt, ToTxt, CurTxt, SrcRev, FailMsg: string;
   I, J: Integer;
-  AppliedAny, FoundTarget: Boolean;
+  AppliedAny, FoundScene, FoundTarget: Boolean;
   Arts: array of TMmpArtifactInput;
   Srcs: array of TMmpSourceRef;
+
+  function Fail(Code: Integer; const Msg: string): Integer;
+  begin
+    WriteCliLine('[ERRO] ' + Msg);
+    AppendJsonLogLine(Prod.RootDir, 'MScript', 'error', 'Evento ' + EvtId + ': ' + Msg);
+    FinishHeadlessEvent(EvtObj, Prod.RootDir, Args.EventFile, 'failed', '', Msg);
+    Result := Code;
+  end;
+
 begin
   Result := EXIT_UNEXPECTED_ERROR;
   if (Args.Production = '') or (Args.EventFile = '') then
@@ -1439,7 +1712,8 @@ begin
     Exit(EXIT_INVALID_ARGS);
   end;
   if not FileExists(Args.EventFile) then Exit(EXIT_NOT_FOUND);
-  if not ResolveAppProject(Args.Production, 1, Args.ProjectId, Args.Revision,
+  { O patch e sempre aplicado sobre a revisao ATIVA (nao sobre --revision). }
+  if not ResolveAppProject(Args.Production, 1, Args.ProjectId, '',
     Prod, Proj, ProjDir, RevId, ErrMsg) then
   begin
     WriteCliLine(ErrMsg);
@@ -1447,74 +1721,176 @@ begin
   end;
 
   if not ReadTextFileUtf8(Args.EventFile, EvtStr) then Exit(EXIT_NOT_FOUND);
-  EvtData := GetJSON(EvtStr);
+  try
+    EvtData := GetJSON(EvtStr);
+  except
+    Exit(EXIT_INVALID_ARGS);
+  end;
   if not (EvtData is TJSONObject) then begin EvtData.Free; Exit(EXIT_INVALID_ARGS); end;
   EvtObj := TJSONObject(EvtData);
   try
-    EvtId := EvtObj.Get('event_id', '');
-    // Idempotency check across published revisions
+    EvtId := Trim(EvtObj.Get('event_id', ''));
+    if EvtId = '' then
+    begin
+      { sem event_id nao ha como garantir idempotencia: antes, '' "casava" com
+        toda revisao sem change_event_id e o evento era dado como ja aplicado. }
+      WriteCliLine('[ERRO] Evento sem event_id.');
+      Exit(EXIT_INVALID_ARGS);
+    end;
+
+    // Idempotencia: evento ja aplicado em alguma revisao publicada
     for I := 0 to High(Proj.Revisions) do
     begin
       if SameText(Proj.Revisions[I].ChangeEventId, EvtId) then
       begin
         WriteCliLine('Evento ' + EvtId + ' ja aplicado em ' + Proj.Revisions[I].RevisionId);
+        FinishHeadlessEvent(EvtObj, Prod.RootDir, Args.EventFile, 'published',
+          Proj.Revisions[I].RevisionId, '');
         Exit(EXIT_OK);
       end;
     end;
 
+    // A fonte do patch precisa ser a revisao ativa (senao: "fonte desatualizada")
+    SrcRev := Trim(EvtObj.Get('source_revision', ''));
+    if (SrcRev <> '') and IsValidRevisionId(SrcRev) and not SameText(SrcRev, RevId) then
+      Exit(Fail(EXIT_EVENT_AMBIGUOUS, 'Fonte desatualizada: o evento foi preparado sobre ' +
+        SrcRev + ', mas a revisao ativa do MScript e ' + RevId + '.'));
+
     if not ReadTextFileUtf8(IncludeTrailingPathDelimiter(ProjDir) + 'revisions' +
       PathDelim + RevId + PathDelim + 'scripts' + PathDelim + 'roteiro.json', ScriptStr) then
-      Exit(EXIT_NOT_FOUND);
+      Exit(Fail(EXIT_NOT_FOUND, 'roteiro.json da revisao ativa ' + RevId + ' nao encontrado.'));
 
-    ScriptData := GetJSON(ScriptStr);
-    if not (ScriptData is TJSONObject) then begin ScriptData.Free; Exit(EXIT_INTEGRITY_ERROR); end;
+    try
+      ScriptData := GetJSON(ScriptStr);
+    except
+      Exit(Fail(EXIT_INTEGRITY_ERROR, 'roteiro.json da revisao ' + RevId + ' esta corrompido.'));
+    end;
+    if not (ScriptData is TJSONObject) then
+    begin
+      ScriptData.Free;
+      Exit(Fail(EXIT_INTEGRITY_ERROR, 'roteiro.json da revisao ' + RevId + ' esta corrompido.'));
+    end;
     ScriptObj := TJSONObject(ScriptData);
     try
+      if not (EvtObj.Find('requested_change') is TJSONObject) then
+        Exit(Fail(EXIT_EVENT_AMBIGUOUS, 'Evento sem requested_change.'));
+      ReqObj := TJSONObject(EvtObj.Find('requested_change'));
+      if not (ReqObj.Find('operations') is TJSONArray) or
+         (TJSONArray(ReqObj.Find('operations')).Count = 0) then
+        Exit(Fail(EXIT_EVENT_AMBIGUOUS,
+          'Evento sem operacoes estruturadas (requested_change.operations); exige decisao humana.'));
+      if not (ScriptObj.Find('scenes') is TJSONArray) then
+        Exit(Fail(EXIT_INTEGRITY_ERROR, 'roteiro.json sem cenas.'));
+
+      ScenesArr := TJSONArray(ScriptObj.Find('scenes'));
+      OpsArr := TJSONArray(ReqObj.Find('operations'));
       AppliedAny := False;
-      if (EvtObj.Find('requested_change') is TJSONObject) and
-         (ScriptObj.Find('scenes') is TJSONArray) then
+      for I := 0 to OpsArr.Count - 1 do
       begin
-        ReqObj := TJSONObject(EvtObj.Find('requested_change'));
-        ScenesArr := TJSONArray(ScriptObj.Find('scenes'));
-        if ReqObj.Find('operations') is TJSONArray then
-        begin
-          OpsArr := TJSONArray(ReqObj.Find('operations'));
-          for I := 0 to OpsArr.Count - 1 do
+        if not (OpsArr.Items[I] is TJSONObject) then
+          Exit(Fail(EXIT_EVENT_AMBIGUOUS, 'Operacao ' + IntToStr(I + 1) + ' invalida.'));
+        OpObj := TJSONObject(OpsArr.Items[I]);
+        OpName := LowerCase(OpObj.Get('op', 'replace_text'));
+        SceneId := OpObj.Get('scene_id', '');
+        if SceneId = '' then
+          Exit(Fail(EXIT_EVENT_AMBIGUOUS, 'Operacao ' + OpName + ' sem scene_id.'));
+
+        SceneObj := nil;
+        FoundScene := False;
+        for J := 0 to ScenesArr.Count - 1 do
+          if (ScenesArr.Items[J] is TJSONObject) and
+             SameText(TJSONObject(ScenesArr.Items[J]).Get('scene_id', ''), SceneId) then
           begin
-            OpObj := TJSONObject(OpsArr.Items[I]);
-            SceneId := OpObj.Get('scene_id', '');
-            FieldName := OpObj.Get('field', 'action');
-            FromTxt := OpObj.Get('from', '');
-            ToTxt := OpObj.Get('to', OpObj.Get('to_name', ''));
-            FoundTarget := False;
-            for J := 0 to ScenesArr.Count - 1 do
+            SceneObj := TJSONObject(ScenesArr.Items[J]);
+            FoundScene := True;
+            Break;
+          end;
+        if not FoundScene then
+          Exit(Fail(EXIT_EVENT_AMBIGUOUS, 'Cena ' + SceneId + ' nao existe na revisao ' + RevId + '.'));
+
+        FoundTarget := False;
+        if OpName = 'replace_text' then
+        begin
+          FieldKey := PatchFieldToScriptKey(OpObj.Get('field', 'action'));
+          FromTxt := OpObj.Get('from', '');
+          ToTxt := OpObj.Get('to', '');
+          if (FieldKey = '') or (FromTxt = '') then
+            Exit(Fail(EXIT_EVENT_AMBIGUOUS, 'replace_text sem campo valido ou sem "from".'));
+          CurTxt := SceneObj.Get(FieldKey, '');
+          if Pos(FromTxt, CurTxt) > 0 then
+          begin
+            if SceneObj.IndexOfName(FieldKey) >= 0 then SceneObj.Delete(FieldKey);
+            SceneObj.Add(FieldKey, StringReplace(CurTxt, FromTxt, ToTxt, [rfReplaceAll]));
+            FoundTarget := True;
+          end;
+        end
+        else if OpName = 'replace_entity' then
+        begin
+          FromTxt := OpObj.Get('from_name', OpObj.Get('from', ''));
+          ToTxt := OpObj.Get('to_name', OpObj.Get('to', ''));
+          if (FromTxt = '') or (ToTxt = '') then
+            Exit(Fail(EXIT_EVENT_AMBIGUOUS, 'replace_entity exige from_name e to_name.'));
+          for FieldKey in ['objects_csv', 'costumes_csv', 'location_ref', 'action', 'heading'] do
+          begin
+            CurTxt := SceneObj.Get(FieldKey, '');
+            if Pos(LowerCase(FromTxt), LowerCase(CurTxt)) > 0 then
             begin
-              SceneObj := TJSONObject(ScenesArr.Items[J]);
-              if (SceneId = '') or SameText(SceneObj.Get('scene_id', ''), SceneId) then
-              begin
-                ActionTxt := SceneObj.Get(FieldName, '');
-                if (FromTxt <> '') and (Pos(FromTxt, ActionTxt) > 0) then
-                begin
-                  SceneObj.Strings[FieldName] := StringReplace(ActionTxt, FromTxt, ToTxt, [rfReplaceAll]);
-                  FoundTarget := True;
-                  AppliedAny := True;
-                end;
-              end;
-            end;
-            if (FromTxt <> '') and not FoundTarget then
-            begin
-              WriteCliLine('Mudanca ambigua/nao encontrada: ' + FromTxt);
-              Exit(EXIT_EVENT_AMBIGUOUS);
+              if SceneObj.IndexOfName(FieldKey) >= 0 then SceneObj.Delete(FieldKey);
+              SceneObj.Add(FieldKey, StringReplace(CurTxt, FromTxt, ToTxt, [rfReplaceAll, rfIgnoreCase]));
+              FoundTarget := True;
             end;
           end;
+        end
+        else if OpName = 'set_duration' then
+        begin
+          if OpObj.Find('estimated_duration_ms') <> nil then
+            J := OpObj.Get('estimated_duration_ms', 0) div 1000
+          else
+            J := OpObj.Get('estimated_duration', 0);
+          if J <= 0 then
+            Exit(Fail(EXIT_EVENT_AMBIGUOUS, 'set_duration sem duracao valida.'));
+          if SceneObj.IndexOfName('estimated_duration') >= 0 then SceneObj.Delete('estimated_duration');
+          SceneObj.Add('estimated_duration', J);
+          FoundTarget := True;
+        end
+        else if OpName = 'set_scene_field' then
+        begin
+          FieldKey := PatchFieldToScriptKey(OpObj.Get('field', ''));
+          if (FieldKey <> 'mood') and (FieldKey <> 'time_of_day') and (FieldKey <> 'location_ref') then
+            Exit(Fail(EXIT_EVENT_AMBIGUOUS, 'set_scene_field aceita apenas mood, time_of_day e location_ref.'));
+          if SceneObj.IndexOfName(FieldKey) >= 0 then SceneObj.Delete(FieldKey);
+          SceneObj.Add(FieldKey, OpObj.Get('value', ''));
+          FoundTarget := True;
+        end
+        else
+          Exit(Fail(EXIT_EVENT_AMBIGUOUS, 'Operacao "' + OpName + '" nao suportada pelo MScript.'));
+
+        if not FoundTarget then
+        begin
+          FailMsg := 'Mudanca ambigua/nao encontrada na cena ' + SceneId + ': "' + FromTxt + '".';
+          Exit(Fail(EXIT_EVENT_AMBIGUOUS, FailMsg));
         end;
+        AppliedAny := True;
       end;
 
-      if not PrepareNextRevisionDir(Proj.ProjectFilePath, PrepRev, RevDir) then
-        Exit(EXIT_UNEXPECTED_ERROR);
+      if not AppliedAny then
+        Exit(Fail(EXIT_EVENT_AMBIGUOUS, 'Nenhuma operacao aplicada.'));
 
-      AtomicWriteTextFile(RevDir + PathDelim + 'scripts' + PathDelim + 'roteiro.json',
-        ScriptObj.FormatJSON, False);
+      { aprovacao veio da origem (docs/specs/02-mscript 8.4) }
+      if ScriptObj.IndexOfName('validated') >= 0 then ScriptObj.Delete('validated');
+      ScriptObj.Add('validated', True);
+      if ScriptObj.IndexOfName('updated_at') >= 0 then ScriptObj.Delete('updated_at');
+      ScriptObj.Add('updated_at', CurrentIsoUtc);
+
+      if not PrepareNextRevisionDir(Proj.ProjectFilePath, PrepRev, RevDir) then
+        Exit(Fail(EXIT_EVENT_RETRYABLE, 'Nao foi possivel preparar a nova revisao.'));
+
+      if not AtomicWriteTextFile(RevDir + PathDelim + 'scripts' + PathDelim + 'roteiro.json',
+        ScriptObj.FormatJSON, False) then
+      begin
+        MmpDiscardUnpublishedRevisionDir(RevDir);
+        Exit(Fail(EXIT_EVENT_RETRYABLE, 'Falha ao gravar roteiro.json da nova revisao.'));
+      end;
 
       SetLength(Srcs, 0);
       SetLength(Arts, 1);
@@ -1527,17 +1903,14 @@ begin
       if not PublishProjectRevision(Prod.ProductionId, Proj.ProjectFilePath, 'MScript',
         RevId, 'approved', EvtId, Srcs, Arts, NewRev, ErrMsg, PrepRev) then
       begin
-        WriteCliLine(ErrMsg);
-        Exit(EXIT_UNEXPECTED_ERROR);
+        MmpDiscardUnpublishedRevisionDir(RevDir);
+        Exit(Fail(EXIT_EVENT_RETRYABLE, ErrMsg));
       end;
 
-      EvtObj.Strings['status'] := 'published';
-      ArchivePath := IncludeTrailingPathDelimiter(Prod.RootDir) + 'shared' + PathDelim +
-        'events' + PathDelim + 'archive' + PathDelim + ExtractFileName(Args.EventFile);
-      AtomicWriteTextFile(ArchivePath, EvtObj.FormatJSON, False);
-      DeleteFile(Args.EventFile);
+      FinishHeadlessEvent(EvtObj, Prod.RootDir, Args.EventFile, 'published', NewRev, '');
       AppendJsonLogLine(Prod.RootDir, 'MScript', 'info',
-        'Headless patch ' + EvtId + ' aplicado -> ' + NewRev + ' (applied=' + BoolToStr(AppliedAny, True) + ')');
+        'Headless patch ' + EvtId + ' aplicado -> ' + NewRev);
+      WriteCliLine('Evento ' + EvtId + ' aplicado: nova revisao ' + NewRev);
       Result := EXIT_OK;
     finally
       ScriptObj.Free;

@@ -7,7 +7,7 @@ interface
 uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
   ComCtrls, Grids, fpjson, jsonparser, imagefilters,
-  ummpprotocol, ummpappbase, ummpaibridge;
+  mmpcommon, ummpprotocol, ummpappbase, ummpaibridge;
 
 type
   TBoardSegment = record
@@ -72,6 +72,8 @@ type
     procedure RefreshSelectedBoard;
     procedure RefreshSegmentsGrid;
     function BoardsToJson: string;
+    function AllBoardsApproved: Boolean;
+    function BuildCascadeOperations(out OpsJson, AffectedCsv: string): Integer;
     procedure SaveRevision(const NewState, ChangeEventId: string);
 
     procedure OnOpenProdClick(Sender: TObject);
@@ -444,12 +446,14 @@ begin
     if not (Obj.Find('scenes') is TJSONArray) then Exit;
     Arr := TJSONArray(Obj.Find('scenes'));
     SetLength(FBoards, Arr.Count);
-    BaseRevDir := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim + FCurrentRevId;
+    { quadros novos vao para o rascunho; a revisao publicada nao e reescrita }
+    BaseRevDir := MmpDraftDir(FProjectDir);
     QuadDir := BaseRevDir + PathDelim + 'images' + PathDelim + 'quadros';
     ForceDirectories(QuadDir);
 
     for I := 0 to Arr.Count - 1 do
     begin
+      if not (Arr.Items[I] is TJSONObject) then Continue;
       SItem := TJSONObject(Arr.Items[I]);
       FBoards[I].BoardId := GenerateMmpId('brd');
       FBoards[I].SceneId := SItem.Get('scene_id', '');
@@ -469,17 +473,21 @@ begin
 
       FBoards[I].OpeningAssetId := GenerateMmpId('a_qopen');
       FBoards[I].ClosingAssetId := GenerateMmpId('a_qclose');
-      OpenRel := 'images/quadros/' + FBoards[I].SceneId + '_open.bmp';
       CloseRel := 'images/quadros/' + FBoards[I].SceneId + '_close.bmp';
-      FBoards[I].OpeningUri := OpenRel;
-      FBoards[I].ClosingUri := CloseRel;
-
+      { a IA de imagem devolve PNG: a extensao precisa refletir o formato real,
+        senao o TImage nao abre o arquivo e o manifesto registra MIME errado }
+      OpenRel := 'images/quadros/' + FBoards[I].SceneId + '_open.png';
       if not FAi.GenerateImage('Storyboard inicial: ' + FBoards[I].Heading + ' - ' +
         FBoards[I].DirectionNotes,
         BaseRevDir + PathDelim + StringReplace(OpenRel, '/', PathDelim, [rfReplaceAll]), Err) then
+      begin
+        OpenRel := 'images/quadros/' + FBoards[I].SceneId + '_open.bmp';
         SavePlaceholderBitmap(BaseRevDir + PathDelim + StringReplace(OpenRel, '/', PathDelim, [rfReplaceAll]),
           FBoards[I].Heading + ' [INICIO]', FBoards[I].DirectionNotes,
           'Asset: ' + FBoards[I].OpeningAssetId, $00383044);
+      end;
+      FBoards[I].OpeningUri := OpenRel;
+      FBoards[I].ClosingUri := CloseRel;
       SavePlaceholderBitmap(BaseRevDir + PathDelim + StringReplace(CloseRel, '/', PathDelim, [rfReplaceAll]),
         FBoards[I].Heading + ' [FIM]', FBoards[I].DialogueText,
         'Asset: ' + FBoards[I].ClosingAssetId, $002C3D34);
@@ -515,7 +523,7 @@ begin
   if N < 1 then N := 1;
   if N > 60 then N := 60;
 
-  BaseRevDir := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim + FCurrentRevId;
+  BaseRevDir := MmpDraftDir(FProjectDir);
   SegDur := FBoards[FSelectedBoard].DurationSec div N;
   Rem := FBoards[FSelectedBoard].DurationSec mod N;
   SetLength(FBoards[FSelectedBoard].Segments, N);
@@ -606,11 +614,16 @@ begin
   FDialogueMemo.Text := FBoards[FSelectedBoard].DialogueText;
   FNotesMemo.Text := FBoards[FSelectedBoard].DirectionNotes;
 
-  RevDir := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim + FCurrentRevId;
-  P1 := RevDir + PathDelim + StringReplace(FBoards[FSelectedBoard].OpeningUri, '/', PathDelim, [rfReplaceAll]);
-  P2 := RevDir + PathDelim + StringReplace(FBoards[FSelectedBoard].ClosingUri, '/', PathDelim, [rfReplaceAll]);
-  if FileExists(P1) then FOpenImg.Picture.LoadFromFile(P1);
-  if FileExists(P2) then FCloseImg.Picture.LoadFromFile(P2);
+  RevDir := '';
+  P1 := MmpResolveDraftOrRevisionFile(FProjectDir, FCurrentRevId, FBoards[FSelectedBoard].OpeningUri);
+  P2 := MmpResolveDraftOrRevisionFile(FProjectDir, FCurrentRevId, FBoards[FSelectedBoard].ClosingUri);
+  try
+    if (P1 <> '') and FileExists(P1) then FOpenImg.Picture.LoadFromFile(P1);
+    if (P2 <> '') and FileExists(P2) then FCloseImg.Picture.LoadFromFile(P2);
+  except
+    on E: Exception do
+      LogMsg('Nao foi possivel exibir o quadro: ' + E.Message);
+  end;
   RefreshSegmentsGrid;
 end;
 
@@ -707,7 +720,7 @@ var
     FS1, FS2: TFileStream;
   begin
     if RelUri = '' then Exit;
-    SrcF := OldRevDir + PathDelim + StringReplace(RelUri, '/', PathDelim, [rfReplaceAll]);
+    SrcF := MmpResolveDraftOrRevisionFile(FProjectDir, FCurrentRevId, RelUri);
     DstF := RevDir + PathDelim + StringReplace(RelUri, '/', PathDelim, [rfReplaceAll]);
     if FileExists(SrcF) and not SameText(SrcF, DstF) then
     begin
@@ -731,7 +744,10 @@ var
     Arts[ArtCount].SceneId := SceneId;
     Arts[ArtCount].SegmentId := SegId;
     Arts[ArtCount].RelUri := RelUri;
-    Arts[ArtCount].MimeType := 'image/bmp';
+    if SameText(ExtractFileExt(RelUri), '.png') then
+      Arts[ArtCount].MimeType := 'image/png'
+    else
+      Arts[ArtCount].MimeType := 'image/bmp';
     Arts[ArtCount].Status := StatusStr;
   end;
 begin
@@ -739,8 +755,13 @@ begin
   if not PrepareNextRevisionDir(FProj.ProjectFilePath, PrepRev, RevDir) then Exit;
   OldRevDir := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim + FCurrentRevId;
 
-  AtomicWriteTextFile(RevDir + PathDelim + 'storyboard' + PathDelim + 'scenes.json',
-    BoardsToJson, False);
+  if not AtomicWriteTextFile(RevDir + PathDelim + 'storyboard' + PathDelim + 'scenes.json',
+    BoardsToJson, False) then
+  begin
+    MmpDiscardUnpublishedRevisionDir(RevDir);
+    MessageDlg('Falha ao gravar storyboard/scenes.json.', mtError, [mbOK], 0);
+    Exit;
+  end;
 
   SetLength(Arts, 1);
   Arts[0].ArtifactId := GenerateMmpId('a');
@@ -760,6 +781,8 @@ begin
   end;
 
   SetLength(Srcs, 2);
+  Srcs[0].ResolvedApp := 'MScript';
+  Srcs[1].ResolvedApp := 'MVisual';
   Srcs[0].ProjectId := FScriptProj.ProjectId;
   Srcs[0].RevisionId := FScriptRevId;
   if FindRevisionInProject(FScriptProj, FScriptRevId, RevInfo) then
@@ -773,11 +796,134 @@ begin
   if PublishProjectRevision(FProd.ProductionId, FProj.ProjectFilePath, 'MBoard',
     FCurrentRevId, NewState, ChangeEventId, Srcs, Arts, NewRev, ErrMsg, PrepRev) then
   begin
-    LogMsg('Revisao MBoard publicada: ' + NewRev);
+    MmpClearDraftDir(FProjectDir);
+    LogMsg('Revisao MBoard publicada: ' + NewRev + ' [' + NewState + ']');
     LoadProductionAndRevision(FProd.RootDir, FProj.ProjectId, NewRev);
   end
   else
+  begin
+    MmpDiscardUnpublishedRevisionDir(RevDir);
     MessageDlg(ErrMsg, mtError, [mbOK], 0);
+  end;
+end;
+
+function TMboardMainForm.AllBoardsApproved: Boolean;
+var
+  I: Integer;
+begin
+  Result := Length(FBoards) > 0;
+  for I := 0 to High(FBoards) do
+    if not SameText(FBoards[I].Status, 'approved') then
+      Exit(False);
+end;
+
+{ Remove as notas de enquadramento acrescentadas pela IA ("[IA] ...") para que
+  nao sejam propagadas como acao do roteiro. }
+function StripAiNotes(const S: string): string;
+var
+  L: TStringList;
+  I: Integer;
+begin
+  L := TStringList.Create;
+  try
+    L.Text := S;
+    for I := L.Count - 1 downto 0 do
+      if Copy(TrimLeft(L[I]), 1, 4) = '[IA]' then
+        L.Delete(I);
+    Result := TrimRight(L.Text);
+  finally
+    L.Free;
+  end;
+end;
+
+{ Monta as operacoes script.patch (docs/specs/02-mscript 8.4) comparando os
+  storyboards editados com as cenas do roteiro de origem. }
+function TMboardMainForm.BuildCascadeOperations(out OpsJson, AffectedCsv: string): Integer;
+var
+  ScriptPath, Content, OldAction, OldDialogue, NewAction, NewDialogue: string;
+  Data: TJSONData;
+  Obj, SItem, Op: TJSONObject;
+  Scenes, Ops: TJSONArray;
+  I, J: Integer;
+begin
+  Result := 0;
+  OpsJson := '';
+  AffectedCsv := '';
+  ScriptPath := ExtractFileDir(FScriptProj.ProjectFilePath) + PathDelim + 'revisions' +
+    PathDelim + FScriptRevId + PathDelim + 'scripts' + PathDelim + 'roteiro.json';
+  if not ReadTextFileUtf8(ScriptPath, Content) then Exit;
+  try
+    Data := GetJSON(Content);
+  except
+    Exit;
+  end;
+  if not (Data is TJSONObject) then begin Data.Free; Exit; end;
+  Obj := TJSONObject(Data);
+  Ops := TJSONArray.Create;
+  try
+    if not (Obj.Find('scenes') is TJSONArray) then Exit;
+    Scenes := TJSONArray(Obj.Find('scenes'));
+    for I := 0 to High(FBoards) do
+    begin
+      if not SameText(FBoards[I].Status, 'edited') then Continue;
+      for J := 0 to Scenes.Count - 1 do
+      begin
+        if not (Scenes.Items[J] is TJSONObject) then Continue;
+        SItem := TJSONObject(Scenes.Items[J]);
+        if not SameText(SItem.Get('scene_id', ''), FBoards[I].SceneId) then Continue;
+        OldAction := SItem.Get('action', '');
+        OldDialogue := SItem.Get('dialogue_text', '');
+        NewAction := StripAiNotes(FBoards[I].DirectionNotes);
+        NewDialogue := FBoards[I].DialogueText;
+        if (Trim(OldAction) <> '') and (Trim(NewAction) <> Trim(OldAction)) then
+        begin
+          Op := TJSONObject.Create;
+          Op.Add('op', 'replace_text');
+          Op.Add('scene_id', FBoards[I].SceneId);
+          Op.Add('field', 'action');
+          Op.Add('from', OldAction);
+          Op.Add('to', NewAction);
+          Ops.Add(Op);
+          Inc(Result);
+        end;
+        if (Trim(OldDialogue) <> '') and (Trim(NewDialogue) <> Trim(OldDialogue)) then
+        begin
+          Op := TJSONObject.Create;
+          Op.Add('op', 'replace_text');
+          Op.Add('scene_id', FBoards[I].SceneId);
+          Op.Add('field', 'dialogue');
+          Op.Add('from', OldDialogue);
+          Op.Add('to', NewDialogue);
+          Ops.Add(Op);
+          Inc(Result);
+        end;
+        if (SItem.Get('estimated_duration', 0) > 0) and
+           (SItem.Get('estimated_duration', 0) <> FBoards[I].DurationSec) then
+        begin
+          Op := TJSONObject.Create;
+          Op.Add('op', 'set_duration');
+          Op.Add('scene_id', FBoards[I].SceneId);
+          Op.Add('estimated_duration_ms', Int64(FBoards[I].DurationSec) * 1000);
+          Ops.Add(Op);
+          Inc(Result);
+        end;
+        if Result > 0 then
+        begin
+          if Pos(FBoards[I].SceneId, AffectedCsv) = 0 then
+          begin
+            if AffectedCsv <> '' then AffectedCsv := AffectedCsv + ',';
+            AffectedCsv := AffectedCsv + FBoards[I].SceneId;
+          end;
+        end;
+        Break;
+      end;
+    end;
+    if Result > 0 then
+      OpsJson := Ops.AsJSON;
+  finally
+    Ops.Free;
+    Obj.Free;
+  end;
 end;
 
 procedure TMboardMainForm.OnOpenProdClick(Sender: TObject);
@@ -823,25 +969,79 @@ end;
 procedure TMboardMainForm.OnPublishClick(Sender: TObject);
 begin
   if not FProd.Loaded then Exit;
-  SaveRevision('approved', '');
+  { "approved" so com todos os storyboards aprovados por pessoa }
+  if AllBoardsApproved then
+    SaveRevision('approved', '')
+  else
+    SaveRevision('published', '');
 end;
 
 procedure TMboardMainForm.OnEmitCascadeClick(Sender: TObject);
 var
-  EvtId, Desc: string;
+  EvtId, TxId, Desc, OpsJson, AffectedCsv, EvtFile, RunErr, NewScriptRev: string;
+  OpCount, Code: Integer;
+  ScriptProjAfter: TMmpProjectRef;
+  ProdAfter: TMmpProduction;
 begin
   if not FProd.Loaded then Exit;
+  OpCount := BuildCascadeOperations(OpsJson, AffectedCsv);
+  if OpCount = 0 then
+  begin
+    MessageDlg('Nenhum ajuste editorial a propagar.' + LineEnding +
+      'Edite falas, acao ou duracao de um storyboard (botao Aplicar ajuste) antes de sincronizar.',
+      mtInformation, [mbOK], 0);
+    Exit;
+  end;
+
   Desc := 'Ajuste editorial aprovado no MBoard';
-  if not InputQuery('Sincronizacao em Cascata', 'Descreva a alteracao para MScript -> MVisual -> MBoard:', Desc) then
+  if not InputQuery('Sincronizacao em Cascata',
+    IntToStr(OpCount) + ' alteracao(oes) em ' + AffectedCsv + '.' + LineEnding +
+    'Descreva a alteracao para MScript -> MVisual -> MBoard:', Desc) then
     Exit;
 
-  if EmitSyncEvent(FProd.RootDir, 'MBoard', 'MScript', FScriptProj.ProjectId,
-    FCurrentRevId, Desc, 'MScript', 'queued', '', EvtId) then
+  { Evento script.patch com operacoes estruturadas; fonte = revisao do roteiro. }
+  if not EmitSyncEventEx(FProd.RootDir, 'MBoard', 'MScript', FScriptProj.ProjectId,
+    FScriptRevId, Desc, 'MScript', 'queued', '', EvtId, TxId, OpsJson, AffectedCsv,
+    FProj.ProjectId, FCurrentRevId, FAi.Settings.UserName, 'MVisual,MBoard') then
   begin
-    SaveRevision('approved', EvtId);
-    LogMsg('Evento de cascata emitido (' + EvtId + ') em shared/sync/ para MScript.');
-    MessageDlg('Evento de sincronizacao ' + EvtId + ' registrado em shared/sync/.' + LineEnding +
-      'Acompanhe o progresso pelo MMenu.', mtInformation, [mbOK], 0);
+    MessageDlg('Nao foi possivel registrar o evento de sincronizacao.', mtError, [mbOK], 0);
+    Exit;
+  end;
+  LogMsg('Evento de cascata ' + EvtId + ' (transacao ' + TxId + ') registrado para MScript.');
+
+  { Estagio 1: aplica o patch no MScript sem abrir a janela (modo headless). }
+  EvtFile := IncludeTrailingPathDelimiter(FProd.RootDir) + 'shared' + PathDelim + 'events' +
+    PathDelim + 'inbox' + PathDelim + 'MScript' + PathDelim + EvtId + '.json';
+  Code := MmpRunHeadlessEvent(maMScript, FProd.RootDir, FScriptProj.ProjectId, EvtFile, RunErr);
+  if Code = EXIT_OK then
+  begin
+    NewScriptRev := '';
+    if LoadProduction(FProd.RootDir, False, ProdAfter) and
+       FindProjectByApp(ProdAfter, 1, ScriptProjAfter) then
+      NewScriptRev := ScriptProjAfter.ActiveRevision;
+    MmpUpdateTransactionStage(FProd.RootDir, TxId, 'MScript', 'complete', NewScriptRev, '');
+    LogMsg('MScript aplicou o patch: nova revisao ' + NewScriptRev +
+      '. Estagios MVisual e MBoard pendentes (atualizar fontes nesses aplicativos).');
+    MessageDlg('Sincronizacao ' + TxId + ':' + LineEnding +
+      '- MScript: nova revisao ' + NewScriptRev + ' publicada.' + LineEnding +
+      '- MVisual e MBoard: pendentes (abra cada um e atualize a partir da nova revisao).' + LineEnding +
+      LineEnding + 'A transacao so sera marcada como completa quando todos os estagios publicarem.',
+      mtInformation, [mbOK], 0);
+  end
+  else
+  begin
+    if Code < 0 then
+      // RunErr ja descreve a falha ao localizar/iniciar o executavel
+    else if Code = EXIT_LOCKED then
+      RunErr := 'MScript esta aberto (instancia unica); feche-o e use Retomar no MMenu.'
+    else if Code = EXIT_EVENT_AMBIGUOUS then
+      RunErr := 'Alteracao ambigua ou fonte desatualizada; exige decisao humana (codigo 7).'
+    else
+      RunErr := 'MScript terminou com codigo ' + IntToStr(Code) + '.';
+    MmpUpdateTransactionStage(FProd.RootDir, TxId, 'MScript', 'failed', '', RunErr);
+    LogMsg('FALHA na sincronizacao ' + TxId + ' (MScript): ' + RunErr);
+    MessageDlg('A sincronizacao ' + TxId + ' parou em MScript:' + LineEnding + RunErr + LineEnding +
+      'Nada foi marcado como concluido.', mtWarning, [mbOK], 0);
   end;
 end;
 

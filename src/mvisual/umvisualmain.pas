@@ -67,8 +67,13 @@ type
     procedure LoadEntitiesFromRevision(const RevId: string);
     procedure RefreshGrid;
     procedure RefreshSelectedEntity;
-    procedure AddEntityIfMissing(const Kind, EntityName, Desc, SceneId: string);
+    procedure AddEntityIfMissing(const Kind, EntityName, Desc, SceneId: string;
+      const FixedId: string = '');
     function EntityFolderName(const Kind: string): string;
+    function ResolveAssetFile(const RelUri: string): string;
+    function DraftAssetFile(const RelUri: string): string;
+    function FindScriptCharacterId(const ScriptObj: TJSONObject; const AName: string): string;
+    function IsScriptRevisionApproved(const RevId: string): Boolean;
     function EntitiesToJson: string;
     procedure SaveCurrentEntitiesDraft;
     procedure SaveRevision(const NewState: string);
@@ -480,6 +485,15 @@ begin
     for I := 0 to High(FScriptProj.Revisions) do
       FScriptRevCombo.Items.Add(FScriptProj.Revisions[I].RevisionId);
     Idx := FScriptRevCombo.Items.IndexOf(FScriptProj.ActiveRevision);
+    { RF-MV-01: so revisoes aprovadas do MScript podem ser importadas;
+      se a ativa nao estiver aprovada, sugere a aprovada mais recente. }
+    if not IsScriptRevisionApproved(FScriptProj.ActiveRevision) then
+      for I := High(FScriptProj.Revisions) downto 0 do
+        if SameText(FScriptProj.Revisions[I].State, 'approved') then
+        begin
+          Idx := FScriptRevCombo.Items.IndexOf(FScriptProj.Revisions[I].RevisionId);
+          Break;
+        end;
     if Idx < 0 then Idx := 0;
     if FScriptRevCombo.Items.Count > 0 then
     begin
@@ -505,8 +519,12 @@ var
   DbStatus: string;
 begin
   SetLength(FEntities, 0);
-  Path := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim +
-    RevId + PathDelim + 'indexes' + PathDelim + 'entities.json';
+  Path := MmpDraftFilePath(FProjectDir, 'indexes/entities.json');
+  if FileExists(Path) then
+    LogMsg('Rascunho nao publicado restaurado (work/draft).')
+  else
+    Path := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim +
+      RevId + PathDelim + 'indexes' + PathDelim + 'entities.json';
   if not FileExists(Path) then Exit;
   if not ReadTextFileUtf8(Path, Content) then Exit;
   Data := GetJSON(Content);
@@ -519,6 +537,7 @@ begin
       SetLength(FEntities, Arr.Count);
       for I := 0 to Arr.Count - 1 do
       begin
+        if not (Arr.Items[I] is TJSONObject) then Continue;
         Item := TJSONObject(Arr.Items[I]);
         FEntities[I].EntityId := Item.Get('entity_id', '');
         FEntities[I].Kind := Item.Get('kind', 'character');
@@ -541,7 +560,8 @@ begin
   end;
 end;
 
-procedure TMvisualMainForm.AddEntityIfMissing(const Kind, EntityName, Desc, SceneId: string);
+procedure TMvisualMainForm.AddEntityIfMissing(const Kind, EntityName, Desc, SceneId: string;
+  const FixedId: string);
 var
   TrimName: string;
   I, N: Integer;
@@ -565,7 +585,10 @@ begin
 
   N := Length(FEntities);
   SetLength(FEntities, N + 1);
-  FEntities[N].EntityId := GenerateMmpId('ent');
+  if FixedId <> '' then
+    FEntities[N].EntityId := FixedId
+  else
+    FEntities[N].EntityId := GenerateMmpId('ent');
   FEntities[N].Kind := Kind;
   FEntities[N].Name := TrimName;
   FEntities[N].Description := Desc;
@@ -600,6 +623,13 @@ begin
       ' do MScript. Salve/valide o roteiro no MScript primeiro.', mtWarning, [mbOK], 0);
     Exit;
   end;
+  if not IsScriptRevisionApproved(FScriptSourceRevId) then
+  begin
+    MessageDlg('A revisao ' + FScriptSourceRevId + ' do MScript ainda nao foi validada.' + LineEnding +
+      'O MVisual so importa revisoes aprovadas do roteiro (valide no MScript primeiro).',
+      mtWarning, [mbOK], 0);
+    Exit;
+  end;
 
   if not ReadTextFileUtf8(ScriptJsonPath, Content) then Exit;
   Data := GetJSON(Content);
@@ -614,6 +644,7 @@ begin
       Arr := TJSONArray(Obj.Find('scenes'));
       for I := 0 to Arr.Count - 1 do
       begin
+        if not (Arr.Items[I] is TJSONObject) then Continue;
         Item := TJSONObject(Arr.Items[I]);
         SceneId := Item.Get('scene_id', '');
         Loc := Item.Get('location_ref', '');
@@ -625,7 +656,8 @@ begin
 
         Parts.DelimitedText := Chars;
         for J := 0 to Parts.Count - 1 do
-          AddEntityIfMissing('character', Parts[J], 'Personagem em ' + Item.Get('heading', ''), SceneId);
+          AddEntityIfMissing('character', Parts[J], 'Personagem em ' + Item.Get('heading', ''),
+            SceneId, FindScriptCharacterId(Obj, Parts[J]));
 
         Parts.Delimiter := ',';
         Parts.DelimitedText := Objs;
@@ -634,7 +666,11 @@ begin
 
         if Trim(Costumes) <> '' then
         begin
-          Parts.Delimiter := ';';
+          { O MScript grava figurinos separados por virgula; ';' tambem e aceito. }
+          if Pos(';', Costumes) > 0 then
+            Parts.Delimiter := ';'
+          else
+            Parts.Delimiter := ',';
           Parts.DelimitedText := Costumes;
           for J := 0 to Parts.Count - 1 do
             AddEntityIfMissing('costume', Parts[J], 'Figurino vinculado ao roteiro', SceneId);
@@ -651,6 +687,43 @@ begin
   RefreshGrid;
   LogMsg('Etapa 1 concluida e salva: ' + IntToStr(Length(FEntities)) +
     ' entidades indexadas a partir de MScript @ ' + FScriptSourceRevId);
+end;
+
+{ Arquivos do rascunho ficam em projects/02-mvisual/work/draft; a revisao
+  publicada (revisions/rNNNN) nunca e reescrita (docs/11, docs/specs/00-comum 5.1). }
+function TMvisualMainForm.ResolveAssetFile(const RelUri: string): string;
+begin
+  Result := MmpResolveDraftOrRevisionFile(FProjectDir, FCurrentRevId, RelUri);
+end;
+
+function TMvisualMainForm.DraftAssetFile(const RelUri: string): string;
+begin
+  Result := MmpDraftFilePath(FProjectDir, RelUri);
+  ForceDirectories(ExtractFileDir(Result));
+end;
+
+{ RF-MV-04: personagens reutilizam o character_id do MScript. }
+function TMvisualMainForm.FindScriptCharacterId(const ScriptObj: TJSONObject;
+  const AName: string): string;
+var
+  Arr: TJSONArray;
+  I: Integer;
+begin
+  Result := '';
+  if (ScriptObj = nil) or not (ScriptObj.Find('characters') is TJSONArray) then Exit;
+  Arr := TJSONArray(ScriptObj.Find('characters'));
+  for I := 0 to Arr.Count - 1 do
+    if (Arr.Items[I] is TJSONObject) and
+       SameText(Trim(TJSONObject(Arr.Items[I]).Get('name', '')), Trim(AName)) then
+      Exit(TJSONObject(Arr.Items[I]).Get('character_id', ''));
+end;
+
+function TMvisualMainForm.IsScriptRevisionApproved(const RevId: string): Boolean;
+var
+  RevInfo: TMmpRevisionInfo;
+begin
+  Result := FindRevisionInProject(FScriptProj, RevId, RevInfo) and
+    SameText(RevInfo.State, 'approved');
 end;
 
 function TMvisualMainForm.EntityFolderName(const Kind: string): string;
@@ -810,7 +883,7 @@ var
 begin
   if FStopRequested or (EntIdx < 0) or (EntIdx > High(FEntities)) then Exit;
   FAi.ReloadIfChanged;
-  BaseRevDir := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim + FCurrentRevId;
+  BaseRevDir := MmpDraftDir(FProjectDir);
   Folder := EntityFolderName(FEntities[EntIdx].Kind);
   SubDir := BaseRevDir + PathDelim + 'images' + PathDelim + Folder;
   ForceDirectories(SubDir);
@@ -827,10 +900,7 @@ begin
 
   FrontRefPath := '';
   if (FEntities[EntIdx].FrontRelUri <> '') and SameText(ExtractFileExt(FEntities[EntIdx].FrontRelUri), '.png') then
-  begin
-    FrontRefPath := BaseRevDir + PathDelim + StringReplace(FEntities[EntIdx].FrontRelUri, '/', PathDelim, [rfReplaceAll]);
-    if not FileExists(FrontRefPath) then FrontRefPath := '';
-  end;
+    FrontRefPath := ResolveAssetFile(FEntities[EntIdx].FrontRelUri);
 
   if (OnlyViewIdx < 0) or (OnlyViewIdx = 1) then
     EnsureView(FEntities[EntIdx].BackRelUri, 'back', 'Costas',
@@ -976,15 +1046,16 @@ var
   Filter: TSharpenFilter;
 begin
   if (FSelectedIdx < 0) or (FSelectedIdx > High(FEntities)) then Exit;
-  Path := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim +
-    FCurrentRevId + PathDelim + StringReplace(FEntities[FSelectedIdx].FrontRelUri, '/', PathDelim, [rfReplaceAll]);
-  if not FileExists(Path) then
+  Path := ResolveAssetFile(FEntities[FSelectedIdx].FrontRelUri);
+  if (Path = '') or not FileExists(Path) then
   begin
     MessageDlg('Gere as vistas primeiro.', mtInformation, [mbOK], 0);
     Exit;
   end;
 
   FPreviewImg.Picture.LoadFromFile(Path);
+  { a imagem filtrada vira versao de rascunho; a da revisao publicada e preservada }
+  Path := DraftAssetFile(FEntities[FSelectedIdx].FrontRelUri);
   Filter := TSharpenFilter.Create(Self);
   try
     Filter.InputImage := FPreviewImg;
@@ -1083,9 +1154,8 @@ begin
 
     if RelUri <> '' then
     begin
-      FullPath := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim +
-        FCurrentRevId + PathDelim + StringReplace(RelUri, '/', PathDelim, [rfReplaceAll]);
-      if FileExists(FullPath) then
+      FullPath := ResolveAssetFile(RelUri);
+      if (FullPath <> '') and FileExists(FullPath) then
         FPreviewImg.Picture.LoadFromFile(FullPath);
     end;
   end;
@@ -1128,14 +1198,12 @@ end;
 
 procedure TMvisualMainForm.SaveCurrentEntitiesDraft;
 var
-  IdxDir: string;
+  DraftFile: string;
 begin
   if (not FProd.Loaded) or (FProjectDir = '') or (FCurrentRevId = '') then Exit;
-  IdxDir := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim +
-    FCurrentRevId + PathDelim + 'indexes';
-  ForceDirectories(IdxDir);
-  if not AtomicWriteTextFile(IdxDir + PathDelim + 'entities.json', EntitiesToJson, False) then
-    raise Exception.Create('Falha ao salvar entities.json em ' + IdxDir);
+  DraftFile := DraftAssetFile('indexes/entities.json');
+  if not AtomicWriteTextFile(DraftFile, EntitiesToJson, False) then
+    raise Exception.Create('Falha ao salvar o rascunho ' + DraftFile);
 end;
 
 procedure TMvisualMainForm.SaveRevision(const NewState: string);
@@ -1152,7 +1220,7 @@ var
     FS1, FS2: TFileStream;
   begin
     if RelUri = '' then Exit;
-    SrcFile := OldRevDir + PathDelim + StringReplace(RelUri, '/', PathDelim, [rfReplaceAll]);
+    SrcFile := MmpResolveDraftOrRevisionFile(FProjectDir, FCurrentRevId, RelUri);
     DstFile := RevDir + PathDelim + StringReplace(RelUri, '/', PathDelim, [rfReplaceAll]);
     if FileExists(SrcFile) and not SameText(SrcFile, DstFile) then
     begin
@@ -1185,8 +1253,13 @@ begin
   if not PrepareNextRevisionDir(FProj.ProjectFilePath, PrepRev, RevDir) then Exit;
   OldRevDir := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim + FCurrentRevId;
 
-  AtomicWriteTextFile(RevDir + PathDelim + 'indexes' + PathDelim + 'entities.json',
-    EntitiesToJson, False);
+  if not AtomicWriteTextFile(RevDir + PathDelim + 'indexes' + PathDelim + 'entities.json',
+    EntitiesToJson, False) then
+  begin
+    MmpDiscardUnpublishedRevisionDir(RevDir);
+    MessageDlg('Falha ao gravar indexes/entities.json.', mtError, [mbOK], 0);
+    Exit;
+  end;
 
   SetLength(Arts, 0);
   for I := 0 to High(FEntities) do
@@ -1199,6 +1272,7 @@ begin
 
   SetLength(Srcs, 1);
   Srcs[0].ProjectId := FScriptProj.ProjectId;
+  Srcs[0].ResolvedApp := 'MScript';
   Srcs[0].RevisionId := FScriptSourceRevId;
   if FindRevisionInProject(FScriptProj, FScriptSourceRevId, RevInfo) then
     Srcs[0].ManifestSha256 := RevInfo.ManifestSha256;
@@ -1206,11 +1280,15 @@ begin
   if PublishProjectRevision(FProd.ProductionId, FProj.ProjectFilePath, 'MVisual',
     FCurrentRevId, NewState, '', Srcs, Arts, NewRev, ErrMsg, PrepRev) then
   begin
-    LogMsg('Nova revisao visual publicada: ' + NewRev);
+    MmpClearDraftDir(FProjectDir);
+    LogMsg('Nova revisao visual publicada: ' + NewRev + ' [' + NewState + ']');
     LoadProductionAndRevision(FProd.RootDir, FProj.ProjectId, NewRev);
   end
   else
+  begin
+    MmpDiscardUnpublishedRevisionDir(RevDir);
     MessageDlg(ErrMsg, mtError, [mbOK], 0);
+  end;
 end;
 
 procedure TMvisualMainForm.OnOpenProdClick(Sender: TObject);
@@ -1311,13 +1389,28 @@ begin
 end;
 
 procedure TMvisualMainForm.OnPublishClick(Sender: TObject);
+var
+  I: Integer;
+  AllApproved: Boolean;
 begin
   if not FProd.Loaded then
   begin
     MessageDlg('Abra uma producao primeiro.', mtWarning, [mbOK], 0);
     Exit;
   end;
-  SaveRevision('approved');
+  { docs/specs/00-comum 6.5: revisao "approved" exige todos os itens aprovados
+    por pessoa; publicar sem isso gera revisao "published". }
+  AllApproved := Length(FEntities) > 0;
+  for I := 0 to High(FEntities) do
+    if not SameText(FEntities[I].ApprovalStatus, 'approved') then
+    begin
+      AllApproved := False;
+      Break;
+    end;
+  if AllApproved then
+    SaveRevision('approved')
+  else
+    SaveRevision('published');
 end;
 
 procedure TMvisualMainForm.OnValidateStageClick(Sender: TObject);
@@ -1346,7 +1439,7 @@ begin
       Inc(PendingCount);
     FrontPath := '';
     if FEntities[I].FrontRelUri <> '' then
-      FrontPath := RevDir + PathDelim + StringReplace(FEntities[I].FrontRelUri, '/', PathDelim, [rfReplaceAll]);
+      FrontPath := ResolveAssetFile(FEntities[I].FrontRelUri);
     if (FrontPath = '') or (not FileExists(FrontPath)) then
       Inc(MissingImgCount);
   end;

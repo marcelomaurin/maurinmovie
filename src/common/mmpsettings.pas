@@ -262,7 +262,7 @@ function GetSharedMaurinMovieConfigDir(out LegacyMMenuDir: string): string;
 implementation
 
 uses
-  DateUtils;
+  DateUtils{$IFDEF UNIX}, BaseUnix{$ENDIF};
 
 function CurrentUtcIso: string;
 begin
@@ -484,7 +484,15 @@ var
   A: TMMApp;
   PDir: string;
 begin
-  if not FileExists(FMachineIniPath) then Exit;
+  { O mmenu.ini pode ainda nao existir (primeiro uso, ou so a configuracao de IA
+    foi salva). Mesmo assim os provedores de IA da maquina (ai-providers.json /
+    apps.json) precisam ser lidos; antes, o Exit precoce os ignorava. }
+  if not FileExists(FMachineIniPath) then
+  begin
+    LoadAiAndAppsFromDir(IncludeTrailingPathDelimiter(ExtractFileDir(FMachineIniPath)), True);
+    EnsureDefaultProvidersInMemory;
+    Exit;
+  end;
   Ini := TIniFile.Create(FMachineIniPath);
   try
     FUserName := Ini.ReadString('User', 'Name', FUserName);
@@ -948,6 +956,11 @@ begin
   finally
     Ini.Free;
   end;
+  {$IFDEF UNIX}
+  { Cofre local: somente o dono le/grava (docs/specs/00-comum §9.1). }
+  if Result then
+    FpChmod(FSecretsIniPath, &600);
+  {$ENDIF}
 end;
 
 function TMMSettings.DetectToolPath(const ToolName: string): string;

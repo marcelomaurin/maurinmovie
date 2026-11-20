@@ -22,3 +22,11 @@ O script:
 6. Gera as imagens do wizard (`prepare_images.ps1`), o manifesto (`build-manifest.json`) e compila `install\windows\maurinmovie.iss` com o `ISCC.exe`.
 7. Salva os instaladores e `SHA256SUMS` em `install\`.
 
+## Compilação no Linux (desenvolvimento)
+Não há instalador Linux; os executáveis podem ser gerados com `lazbuild`:
+
+1. Pacotes do sistema (Debian/Ubuntu): `fpc lazarus-ide lcl-gtk2 lcl-utils libsqlite3-0`.
+2. Pacotes Lazarus exigidos pelo CHATGPT: ZeosLib **7.2** (`zcomponent.lpk`; o ramo 8.x não compila com FPC 3.2.2) e os pacotes `openai_core`, `openai_image`, `openai_voice`, `openai_video` do repositório CHATGPT, registrados com `lazbuild --add-package-link <arquivo.lpk>`.
+3. `lazbuild -B src/<app>/<app>.lpi` para cada um dos sete aplicativos (saída em `bin/`).
+
+Os aplicativos LCL/GTK2 precisam de um display (use `xvfb-run -a` em servidor), inclusive no modo `--headless`.

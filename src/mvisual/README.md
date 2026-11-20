@@ -1,21 +1,29 @@
 # MVisual — Software 2
 
-Indexacao e biblioteca visual.
+Indexação e biblioteca visual.
 
-Especificação funcional: [docs/02-biblioteca-visual.md](../../docs/02-biblioteca-visual.md).
+Especificação funcional: [docs/02-biblioteca-visual.md](../../docs/02-biblioteca-visual.md) · especificação de implementação: [docs/specs/03-mvisual.md](../../docs/specs/03-mvisual.md).
 
 ## Arquivos
 - `mvisual.lpi` — projeto Lazarus do executável (não é o projeto do filme).
-- `mvisual.lpr` — programa principal.
-- `umvisualmain.pas` / `umvisualmain.lfm` — formulário principal (esqueleto: cabeçalho, área de trabalho e barra de status).
-- `mvisual.res` — gerado automaticamente pelo Lazarus/lazbuild na primeira compilação; não precisa ser versionado.
+- `mvisual.lpr` — programa principal (valida o contexto do MMenu, instância única e, no MScript, o modo headless).
+- `umvisualmain.pas` — formulário principal montado em código.
+- `mvisual_icon.rc` / `mvisual_icon.res` / `mvisual.ico` — ícone do executável.
 
 ## Como compilar
 ```
 lazbuild src/mvisual/mvisual.lpi
 ```
-Saída: `bin/mvisual` (ou `bin/mvisual.exe`); intermediários em `build/mvisual/`.
-Código compartilhado em `src/common/` (já está no caminho de busca do `.lpi`).
+Saída: `bin/mvisual` (Linux) ou `bin/mvisual.exe` (Windows); intermediários em `build/mvisual/`. Depende de `src/common/` e dos pacotes CHATGPT `openai_core`, `openai_image`, `openai_voice` e `openai_video` (ver [install/README.md](../../install/README.md)).
+
+## Execução
+Só pode ser iniciado pelo MMenu, que passa `--launcher mmenu --mmenu-version <v> --production <pasta> --project-id <id> --revision <rNNNN>` (docs/specs/00-comum §4). Permite uma instância por vez.
 
 ## Situação
-Esqueleto inicial. Compila com `lazbuild` (Lazarus 3.0, Linux) e abre a janela vazia; nenhuma funcionalidade implementada. Ainda não lê `--production`, `--project-id` ou `--revision`, e não cria nem abre `project.json` (ver [docs/12-arquivos-de-projeto.md](../../docs/12-arquivos-de-projeto.md)).
+Primeira versão funcional:
+- Etapa 1: indexa personagens, locais, objetos e figurinos a partir de uma revisão **aprovada** do MScript (revisões não aprovadas são recusadas); personagens reutilizam o `character_id` do MScript.
+- Etapa 2: gera as 4 vistas (frontal, costas, direita, esquerda) pela IA de imagem configurada no MMenu, usando a frontal como referência; sem provedor, grava imagens provisórias (`.bmp`). Pode parar e retomar sem refazer o que já existe.
+- Etapa 3: aprovar/rejeitar item (gravado no SQLite da produção), filtro de nitidez, publicação. A revisão só recebe `approved` quando todos os itens foram aprovados; caso contrário é publicada como `published`.
+- Imagens e o índice em edição ficam no rascunho `work/draft/`; a revisão publicada nunca é reescrita.
+
+Pendente: ambiguidades/correferências, variantes, comparação de versões, atualização incremental e modo headless `visual.update_from_script`.

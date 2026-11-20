@@ -177,7 +177,7 @@ function FindProductionByIdInDir(const SearchDir, ExpectedProductionId: string;
   out FoundRootDir: string): Boolean;
 
 procedure BuildLaunchArgs(const RootDir, ProjectId, RevisionId: string;
-  Args: TStrings; const ProductionId: string = '');
+  Args: TStrings; const ProductionId: string = ''; const SceneId: string = '');
 
 type
   TMmpStageStatus = record
@@ -907,6 +907,7 @@ begin
           RevInfo.Sources[I].ProjectId := Item.Get('project_id', '');
           RevInfo.Sources[I].RevisionId := Item.Get('revision_id', '');
           RevInfo.Sources[I].ManifestSha256 := Item.Get('manifest_sha256', '');
+          RevInfo.Sources[I].ResolvedApp := Item.Get('application', '');
           RevInfo.Sources[I].Status := 'pendente';
         end;
       end;
@@ -1200,10 +1201,48 @@ begin
     PathDelim + 'archive');
 end;
 
+{ Revinculacoes registradas pelo MMenu em catalog.json (relinks[]): os
+  manifestos publicados nunca sao alterados, entao a auditoria precisa consultar
+  esse mapeamento antes de declarar um arquivo ausente (docs/specs/01-mmenu 8.3). }
+function FindCatalogRelink(const RootDir, ArtifactId: string; out NewPath: string): Boolean;
+var
+  Obj, Entry: TJSONObject;
+  Arr: TJSONArray;
+  I: Integer;
+  NewUri: string;
+begin
+  Result := False;
+  NewPath := '';
+  if ArtifactId = '' then Exit;
+  if not ParseJsonFile(IncludeTrailingPathDelimiter(RootDir) + 'catalog.json', Obj) then Exit;
+  try
+    if not (Obj.Find('relinks') is TJSONArray) then Exit;
+    Arr := TJSONArray(Obj.Find('relinks'));
+    for I := Arr.Count - 1 downto 0 do  // a revinculacao mais recente vale
+    begin
+      if not (Arr.Items[I] is TJSONObject) then Continue;
+      Entry := TJSONObject(Arr.Items[I]);
+      if not SameText(Entry.Get('artifact_id', ''), ArtifactId) then Continue;
+      NewUri := Entry.Get('new_uri', '');
+      if NewUri = '' then Continue;
+      if IsSafeRelativePath(NewUri) then
+      begin
+        if not ResolveSafePath(RootDir, NewUri, NewPath) then Continue;
+      end
+      else
+        NewPath := NewUri;
+      if FileExists(NewPath) then
+        Exit(True);
+    end;
+  finally
+    Obj.Free;
+  end;
+end;
+
 procedure AuditSourcesAndArtifacts(var Prod: TMmpProduction; CheckHashes: Boolean);
 var
   I, J, K, M, ArtCount: Integer;
-  RevDir, FullPath, MovedPath, MatchMethod, FileHash: string;
+  RevDir, FullPath, MovedPath, MatchMethod, FileHash, RelinkPath: string;
   FoundSource, HashMatch: Boolean;
   Link: TMmpMissingLink;
 begin
@@ -1373,6 +1412,12 @@ begin
               IntegrityStatus := 'no_hash'
             else
               IntegrityStatus := 'ok';
+          end
+          else if FindCatalogRelink(Prod.RootDir, ArtifactId, RelinkPath) and
+                  ((not CheckHashes) or (Sha256 = '') or SameText(SHA256File(RelinkPath), Sha256)) then
+          begin
+            ResolvedPath := RelinkPath;
+            IntegrityStatus := 'ok';
           end
           else
           begin
@@ -1658,7 +1703,7 @@ end;
 
 function RebuildCatalog(const Prod: TMmpProduction; out ErrorMsg: string): Boolean;
 var
-  CatObj, PObj, AObj: TJSONObject;
+  CatObj, PObj, AObj, OldCat: TJSONObject;
   PArr, AArr: TJSONArray;
   I: Integer;
   RelPath: string;
@@ -1714,6 +1759,22 @@ begin
       AArr.Add(AObj);
     end;
     CatObj.Add('artifacts', AArr);
+
+    { relinks[] nao e reconstruivel a partir dos manifestos (e decisao do usuario):
+      precisa ser preservado, senao a reconstrucao apagava as revinculacoes. }
+    if ParseJsonFile(Prod.RootDir + PathDelim + 'catalog.json', OldCat) then
+    begin
+      try
+        if OldCat.Find('relinks') is TJSONArray then
+          CatObj.Add('relinks', OldCat.Extract('relinks'))
+        else
+          CatObj.Add('relinks', TJSONArray.Create);
+      finally
+        OldCat.Free;
+      end;
+    end
+    else
+      CatObj.Add('relinks', TJSONArray.Create);
 
     Result := AtomicWriteTextFile(Prod.RootDir + PathDelim + 'catalog.json',
       CatObj.FormatJSON, True);
@@ -1777,7 +1838,7 @@ begin
 end;
 
 procedure BuildLaunchArgs(const RootDir, ProjectId, RevisionId: string;
-  Args: TStrings; const ProductionId: string);
+  Args: TStrings; const ProductionId: string; const SceneId: string);
 begin
   Args.Clear;
   Args.Add('--launcher');
@@ -1803,6 +1864,11 @@ begin
   begin
     Args.Add('--revision');
     Args.Add(RevisionId);
+  end;
+  if SceneId <> '' then
+  begin
+    Args.Add('--scene-id');
+    Args.Add(SceneId);
   end;
 end;
 
@@ -1915,6 +1981,43 @@ begin
     LockInfo := LockPath;
 end;
 
+function LocalHostName: string;
+begin
+  Result := GetEnvironmentVariable('COMPUTERNAME');
+  if Result = '' then Result := GetEnvironmentVariable('HOSTNAME');
+  {$IFDEF UNIX}
+  if (Result = '') and FileExists('/etc/hostname') then
+    ReadTextFileUtf8('/etc/hostname', Result);
+  {$ENDIF}
+  Result := Trim(Result);
+end;
+
+{ Lock orfao (docs/specs/00-comum 7.4): mesmo host, processo inexistente e
+  criado ha mais de 5 minutos. }
+function IsStaleProjectLock(const LockPath: string): Boolean;
+var
+  Obj: TJSONObject;
+  Pid: Integer;
+  Age: TDateTime;
+begin
+  Result := False;
+  if not ParseJsonFile(LockPath, Obj) then Exit;
+  try
+    if not SameText(Obj.Get('host', ''), LocalHostName) then Exit;
+    Pid := StrToIntDef(Obj.Get('pid', ''), 0);
+  finally
+    Obj.Free;
+  end;
+  if Pid <= 0 then Exit;
+  {$IFDEF UNIX}
+  if DirectoryExists('/proc/' + IntToStr(Pid)) then Exit;
+  {$ELSE}
+  Exit; // sem verificacao de processo portavel: nunca remover sozinho
+  {$ENDIF}
+  Age := Now - FileDateToDateTime(FileAge(LockPath));
+  Result := Age > (5 / (24 * 60));
+end;
+
 function AcquireProjectLock(const ProjectDir, AppName, Mode: string;
   out ErrorMsg: string): Boolean;
 var
@@ -1924,6 +2027,8 @@ begin
   Result := False;
   ErrorMsg := '';
   LockPath := IncludeTrailingPathDelimiter(ProjectDir) + '.lock';
+  if FileExists(LockPath) and IsStaleProjectLock(LockPath) then
+    DeleteFile(LockPath);
   if FileExists(LockPath) then
   begin
     ErrorMsg := 'Projeto ja possui lock ativo: ' + LockPath;
@@ -1932,7 +2037,7 @@ begin
   Obj := TJSONObject.Create;
   try
     Obj.Add('pid', IntToStr(GetProcessID));
-    Obj.Add('host', GetEnvironmentVariable('COMPUTERNAME'));
+    Obj.Add('host', LocalHostName);
     Obj.Add('application', AppName);
     Obj.Add('mode', Mode);
     Obj.Add('started_at', CurrentIsoUtc);
@@ -2559,5 +2664,10 @@ begin
     until not Swapped;
   end;
 end;
+
+initialization
+  { IDs combinam data, tick e Random: sem semente, processos iniciados juntos
+    (ex.: cascata headless) poderiam repetir a mesma sequencia. }
+  Randomize;
 
 end.

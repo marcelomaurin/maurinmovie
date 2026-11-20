@@ -726,8 +726,8 @@ begin
   S := TMMSettings.Create;
   try
     AssertTrue(S.ResolveProvider('text', maMScript, Prov), 'ResolveProvider picks persisted machine text AI');
-    AssertEq('chatgpt-lib', Prov.Adapter, 'Persisted machine adapter matches chatgpt-lib');
-    AssertEq('gpt-4o-mini', Prov.Model, 'Persisted machine model matches gpt-4o-mini');
+    AssertEq(Prov.Adapter, 'chatgpt-lib', 'Persisted machine adapter matches chatgpt-lib');
+    AssertEq(Prov.Model, 'gpt-4o-mini', 'Persisted machine model matches gpt-4o-mini');
     if HadOld then
     begin
       S.SetOrAddProvider(OldTextProv, True);
@@ -735,6 +735,95 @@ begin
     end;
   finally
     S.Free;
+  end;
+end;
+
+procedure TestRelinksAndLaunchArgs;
+var
+  TestRoot, ProdRoot, ErrMsg, RevDir, ArtPath, MovedPath, ManPath, Sha, CatStr: string;
+  Prod: TMmpProduction;
+  Man: TJSONObject;
+  Arts: TJSONArray;
+  A: TJSONObject;
+  SL: TStringList;
+  I: Integer;
+  Found: Boolean;
+begin
+  WriteLn('== TestRelinksAndLaunchArgs ==');
+  TestRoot := GetTempDir(False) + 'mmp_test_relink_' + IntToStr(Random(100000));
+  ForceDirectories(TestRoot);
+  AssertTrue(CreateProduction(TestRoot, 'Relink Teste', ProdRoot, ErrMsg), 'CreateProduction for relink: ' + ErrMsg);
+
+  // artefato registrado no manifesto r0001 do MVisual
+  RevDir := ProdRoot + PathDelim + 'projects' + PathDelim + '02-mvisual' + PathDelim +
+    'revisions' + PathDelim + 'r0001';
+  ArtPath := RevDir + PathDelim + 'images' + PathDelim + 'objetos' + PathDelim + 'ob_1_front.png';
+  ForceDirectories(ExtractFileDir(ArtPath));
+  SL := TStringList.Create;
+  try
+    SL.Text := 'conteudo-da-imagem';
+    SL.SaveToFile(ArtPath);
+  finally
+    SL.Free;
+  end;
+  Sha := SHA256File(ArtPath);
+  ManPath := RevDir + PathDelim + 'manifest.json';
+  Man := TJSONObject(GetJSON('{"schema":"mmp.manifest/1","revision_id":"r0001","state":"published","sources":[],"artifacts":[]}'));
+  try
+    Arts := TJSONArray(Man.Find('artifacts'));
+    A := TJSONObject.Create;
+    A.Add('artifact_id', 'a_relink_1');
+    A.Add('kind', 'visual.object.reference');
+    A.Add('uri', 'images/objetos/ob_1_front.png');
+    A.Add('sha256', Sha);
+    A.Add('bytes', 18);
+    A.Add('status', 'approved');
+    Arts.Add(A);
+    AssertTrue(AtomicWriteTextFile(ManPath, Man.FormatJSON, False), 'Write manifest with artifact');
+  finally
+    Man.Free;
+  end;
+
+  // move o arquivo para fora da revisao (nome sem o artifact_id) e revincula
+  MovedPath := ProdRoot + PathDelim + 'shared' + PathDelim + 'imports' + PathDelim + 'movida.png';
+  ForceDirectories(ExtractFileDir(MovedPath));
+  AssertTrue(RenameFile(ArtPath, MovedPath), 'Move artifact file away');
+  AssertTrue(LoadProduction(ProdRoot, True, Prod), 'LoadProduction after move');
+  Found := False;
+  for I := 0 to High(Prod.Artifacts) do
+    if Prod.Artifacts[I].ArtifactId = 'a_relink_1' then
+    begin
+      Found := True;
+      AssertTrue(Prod.Artifacts[I].IntegrityStatus <> 'ok', 'Moved artifact is not reported ok before relink');
+    end;
+  AssertTrue(Found, 'Artifact listed in audit');
+
+  AssertTrue(not SaveArtifactRelinkToCatalog(ProdRoot, 'a_relink_1', 'images/objetos/ob_1_front.png',
+    ManPath, Sha, ErrMsg), 'Relink with wrong file (hash differs) is refused');
+  AssertTrue(SaveArtifactRelinkToCatalog(ProdRoot, 'a_relink_1', 'images/objetos/ob_1_front.png',
+    MovedPath, Sha, ErrMsg), 'Relink with correct file accepted: ' + ErrMsg);
+  AssertTrue(LoadProduction(ProdRoot, True, Prod), 'LoadProduction after relink');
+  for I := 0 to High(Prod.Artifacts) do
+    if Prod.Artifacts[I].ArtifactId = 'a_relink_1' then
+    begin
+      AssertEq(Prod.Artifacts[I].IntegrityStatus, 'ok', 'Audit resolves artifact through catalog relinks');
+      AssertEq(Prod.Artifacts[I].ResolvedPath, MovedPath, 'Resolved path is the relinked file');
+    end;
+
+  AssertTrue(RebuildCatalog(Prod, ErrMsg), 'RebuildCatalog: ' + ErrMsg);
+  AssertTrue(ReadTextFileUtf8(ProdRoot + PathDelim + 'catalog.json', CatStr), 'Read rebuilt catalog');
+  AssertTrue(Pos('a_relink_1', CatStr) > 0, 'Rebuilt catalog keeps relinks[] entry');
+  AssertTrue(Pos('"relinks"', CatStr) > 0, 'Rebuilt catalog has relinks[] array');
+
+  SL := TStringList.Create;
+  try
+    BuildLaunchArgs('/prod', 'pr_scene_1', 'r0002', SL, 'p_1', 'sc_0004');
+    AssertTrue(SL.IndexOf('--scene-id') >= 0, 'Launch args include --scene-id for scene project');
+    AssertEq(SL[SL.IndexOf('--scene-id') + 1], 'sc_0004', 'Launch args scene id value');
+    BuildLaunchArgs('/prod', 'pr_script_1', 'r0002', SL, 'p_1');
+    AssertTrue(SL.IndexOf('--scene-id') < 0, 'Launch args omit --scene-id when not needed');
+  finally
+    SL.Free;
   end;
 end;
 
@@ -828,6 +917,7 @@ begin
   TestAccessControl;
   TestMachineAiSettingsPersistence;
   TestSqliteTemplateMediaAndCentralLogs;
+  TestRelinksAndLaunchArgs;
   WriteLn('---');
   WriteLn(Format('Total: %d passed, %d failed.', [PassCount, FailCount]));
   if FailCount > 0 then

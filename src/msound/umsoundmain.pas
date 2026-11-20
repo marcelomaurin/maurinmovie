@@ -393,13 +393,15 @@ begin
   try
     SetLength(FProfiles, 0);
     SetLength(FEvents, 0);
-    RevDir := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim + FCurrentRevId;
+    { audios novos vao para o rascunho (work/draft); a revisao publicada e imutavel }
+    RevDir := MmpDraftDir(FProjectDir);
 
     if Obj.Find('characters') is TJSONArray then
     begin
       Arr := TJSONArray(Obj.Find('characters'));
       for I := 0 to Arr.Count - 1 do
       begin
+        if not (Arr.Items[I] is TJSONObject) then Continue;
         Item := TJSONObject(Arr.Items[I]);
         N := Length(FProfiles);
         SetLength(FProfiles, N + 1);
@@ -528,8 +530,8 @@ begin
   if (FSelectedProfile < 0) or (FSelectedProfile > High(FProfiles)) then Exit;
   if SameText(FProfiles[FSelectedProfile].Kind, 'voice') then
   begin
-    WavPath := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim +
-      FCurrentRevId + PathDelim + 'audio' + PathDelim + FProfiles[FSelectedProfile].AssetId + '_test.wav';
+    WavPath := MmpDraftFilePath(FProjectDir, 'audio/' + FProfiles[FSelectedProfile].AssetId + '_test.wav');
+    ForceDirectories(ExtractFileDir(WavPath));
     if FAi.SynthesizeSpeech(FTestPhraseEdit.Text, WavPath, Err,
       FProfiles[FSelectedProfile].Timbre) and FPlayer.Play(WavPath) then
     begin
@@ -546,8 +548,13 @@ begin
   end
   else
   begin
-    WavPath := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim +
-      FCurrentRevId + PathDelim + StringReplace(FProfiles[FSelectedProfile].PreviewUri, '/', PathDelim, [rfReplaceAll]);
+    WavPath := MmpResolveDraftOrRevisionFile(FProjectDir, FCurrentRevId,
+      FProfiles[FSelectedProfile].PreviewUri);
+    if WavPath = '' then
+    begin
+      WavPath := MmpDraftFilePath(FProjectDir, FProfiles[FSelectedProfile].PreviewUri);
+      ForceDirectories(ExtractFileDir(WavPath));
+    end;
     if (not FileExists(WavPath)) and FAi.GenerateSFX(FProfiles[FSelectedProfile].EntityName, WavPath, Err, 3.0) then
       LogMsg('Efeito sonoro IA gerado: ' + WavPath);
     if FPlayer.Play(WavPath) then
@@ -644,7 +651,7 @@ end;
 
 procedure TMsoundMainForm.OnPublishClick(Sender: TObject);
 var
-  PrepRev, RevDir, OldRevDir, NewRev, ErrMsg, SrcF, DstF: string;
+  PrepRev, RevDir, NewRev, ErrMsg, SrcF, DstF, RevState: string;
   Srcs: array of TMmpSourceRef;
   Arts: array of TMmpArtifactInput;
   RevInfo: TMmpRevisionInfo;
@@ -652,22 +659,37 @@ var
   FS1, FS2: TFileStream;
 begin
   if not FProd.Loaded then Exit;
-  if not PrepareNextRevisionDir(FProj.ProjectFilePath, PrepRev, RevDir) then Exit;
-  OldRevDir := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim + FCurrentRevId;
+  { revisao "approved" so quando todos os perfis/efeitos foram aprovados por
+    pessoa (docs/specs/00-comum 6.5); senao a revisao fica "published". }
+  RevState := 'approved';
+  if Length(FProfiles) = 0 then RevState := 'published';
+  for I := 0 to High(FProfiles) do
+    if not SameText(FProfiles[I].Status, 'approved') then
+    begin
+      RevState := 'published';
+      Break;
+    end;
 
-  AtomicWriteTextFile(RevDir + PathDelim + 'voices' + PathDelim + 'profiles.json',
-    ProfilesToJson, False);
+  if not PrepareNextRevisionDir(FProj.ProjectFilePath, PrepRev, RevDir) then Exit;
+
+  if not AtomicWriteTextFile(RevDir + PathDelim + 'voices' + PathDelim + 'profiles.json',
+    ProfilesToJson, False) then
+  begin
+    MmpDiscardUnpublishedRevisionDir(RevDir);
+    MessageDlg('Falha ao gravar voices/profiles.json.', mtError, [mbOK], 0);
+    Exit;
+  end;
 
   SetLength(Arts, 1 + Length(FProfiles));
   Arts[0].ArtifactId := GenerateMmpId('a');
   Arts[0].Kind := 'audio.voice.profile';
   Arts[0].RelUri := 'voices/profiles.json';
   Arts[0].MimeType := 'application/json';
-  Arts[0].Status := 'approved';
+  Arts[0].Status := RevState;
 
   for I := 0 to High(FProfiles) do
   begin
-    SrcF := OldRevDir + PathDelim + StringReplace(FProfiles[I].PreviewUri, '/', PathDelim, [rfReplaceAll]);
+    SrcF := MmpResolveDraftOrRevisionFile(FProjectDir, FCurrentRevId, FProfiles[I].PreviewUri);
     DstF := RevDir + PathDelim + StringReplace(FProfiles[I].PreviewUri, '/', PathDelim, [rfReplaceAll]);
     if FileExists(SrcF) and not SameText(SrcF, DstF) then
     begin
@@ -695,6 +717,9 @@ begin
   end;
 
   SetLength(Srcs, 3);
+  Srcs[0].ResolvedApp := 'MScript';
+  Srcs[1].ResolvedApp := 'MVisual';
+  Srcs[2].ResolvedApp := 'MBoard';
   Srcs[0].ProjectId := FScriptProj.ProjectId;
   Srcs[0].RevisionId := FScriptProj.ActiveRevision;
   if FindRevisionInProject(FScriptProj, FScriptProj.ActiveRevision, RevInfo) then
@@ -711,13 +736,17 @@ begin
     Srcs[2].ManifestSha256 := RevInfo.ManifestSha256;
 
   if PublishProjectRevision(FProd.ProductionId, FProj.ProjectFilePath, 'MSound',
-    FCurrentRevId, 'approved', '', Srcs, Arts, NewRev, ErrMsg, PrepRev) then
+    FCurrentRevId, RevState, '', Srcs, Arts, NewRev, ErrMsg, PrepRev) then
   begin
-    LogMsg('Revisao MSound publicada: ' + NewRev);
+    MmpClearDraftDir(FProjectDir);
+    LogMsg('Revisao MSound publicada: ' + NewRev + ' [' + RevState + ']');
     LoadProductionAndRevision(FProd.RootDir, FProj.ProjectId, NewRev);
   end
   else
+  begin
+    MmpDiscardUnpublishedRevisionDir(RevDir);
     MessageDlg(ErrMsg, mtError, [mbOK], 0);
+  end;
 end;
 
 procedure TMsoundMainForm.OnOpenProdClick(Sender: TObject);

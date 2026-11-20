@@ -33,17 +33,26 @@ Legenda de impacto: **Alto** = bloqueia ou muda a arquitetura; **Médio** = afet
 | L-26 | Médio | Recursos não previstos nos documentos: identidade do usuário que aprova, custo/orçamento de IA, IA de visão para continuidade, transcrição para conferir falas, perfis de render, modelos de termo (voz e público), backup, proxy, modo offline | Incluídos no catálogo e na tela Configurações do MMenu como [PROPOSTA] | Quais manter |
 | L-24 | Baixo | Esquemas JSON formais (docs/11 "Pendências") | Exemplos completos em cada especificação; gerar JSON Schema em `docs/schemas/` na implementação | — |
 
-## Inconsistências encontradas no código atual
+## Inconsistências encontradas no código
 
-Sem alteração de código nesta tarefa; registradas para quem for implementar.
-
-| ID | Local | Observação |
-|---|---|---|
-| C-01 | `src/common/mmpcommon.pas` | Comentário diz "não compilado nem testado", mas `src/common/README.md` diz que compila com FPC; nenhum app usa a unidade ainda |
-| C-02 | `mmpcommon.ParseLaunchArgs` | Não aceita `--chave=valor`; não reconhece `--scene-id`, `--focus`, `--headless`, `--event`; não valida revisão no formato `rNNNN` |
-| C-03 | `src/mmenu/ummenumain.pas` | Formulário montado em código (sem `.lfm`), enquanto os outros apps usam `.lfm`; duplica nomes dos apps em `AppNames` em vez de usar `MMAppNames` |
-| C-04 | `src/mmenu/ummenumain.pas` | Envia só `--production`; falta `--project-id` e `--revision` (docs/00 §3) |
-| C-05 | `src/<app>/README.md` | Apontam para a especificação funcional antiga; podem passar a apontar também para `docs/specs/<nn>-<app>.md` |
+| ID | Local | Observação | Situação |
+|---|---|---|---|
+| C-01 | `src/common/mmpcommon.pas` | Comentário dizia "não compilado nem testado" | Resolvida: usada por todos os apps e pelos testes |
+| C-02 | `mmpcommon.ParseLaunchArgs` | Não aceitava `--chave=valor` nem `--scene-id`, `--focus`, `--headless`, `--event` | Resolvida |
+| C-03 | `src/mmenu/ummenumain.pas` | Formulário montado em código (sem `.lfm`), como agora todos os apps; `ummpprotocol.MmpAppNames` ainda duplica `mmpcommon.MMAppNames` | Aberta (baixo impacto) |
+| C-04 | `src/mmenu/ummenumain.pas` | Enviava só `--production` | Resolvida: envia `--project-id`, `--revision` e, para projeto de cena, `--scene-id` |
+| C-05 | `src/<app>/README.md` | Descreviam os apps como esqueletos vazios | Resolvida (20/11/2026) |
+| C-06 | `src/common/ummpappbase.pas` | No Linux não compilava (faltava a unidade `Unix` para `FpFlock`) | Resolvida (20/11/2026) |
+| C-07 | `src/common/ummpdb.pas` | Procurava só `sqlite3.dll`; no Linux a produção não era criada | Resolvida: `libsqlite3.so.0`/`.dylib` |
+| C-08 | `mmpsettings.LoadMachineIni` | Sem `mmenu.ini`, os provedores de IA salvos na máquina eram ignorados | Resolvida |
+| C-09 | MVisual, MBoard, MSound, MScene | Gravavam imagens/áudios/índices dentro da revisão publicada aberta (quebrava a imutabilidade e os hashes do manifesto) | Resolvida: rascunho em `work/draft/` |
+| C-10 | `PublishProjectRevision` | Artefatos sem ID recebiam um `artifact_id` no manifesto e outro no SQLite | Resolvida |
+| C-11 | `RebuildCatalog` / auditoria | Reconstruir o catálogo apagava `relinks[]`, e a auditoria não consultava as revinculações | Resolvida |
+| C-12 | MScript | `character_id` mudava a cada extração e objetos entravam no mapa de personagens (o MSound criava voz para objetos) | Resolvida |
+| C-13 | MScript headless | Evento sem `event_id` era dado como "já aplicado"; campo `dialogue` não casava com `dialogue_text`; `replace_entity` e eventos sem operações publicavam revisão sem mudança; fonte desatualizada não era verificada | Resolvida |
+| C-14 | MVisual, MBoard, MSound | "Publicar" gravava `approved` mesmo com itens não aprovados | Resolvida: `published` até todos serem aprovados |
+| C-15 | Cascata | Nenhum programa processava os eventos; o evento do MBoard não tinha operações | Parcial: o MBoard gera `script.patch` e executa o MScript headless; estágios MVisual/MBoard continuam manuais |
+| C-16 | Executáveis LCL no Linux | GTK2 exige display até em `--version`/`--headless` | Aberta: usar `xvfb-run` ou separar um executável sem LCL para o modo headless |
 
 ## Inconsistências entre documentos
 

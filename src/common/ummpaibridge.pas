@@ -385,11 +385,24 @@ begin
       Copy(Trim(UserPrompt), 1, 140);
 end;
 
+function IsTransientAiError(const Msg: string): Boolean;
+var
+  M: string;
+begin
+  M := LowerCase(Msg);
+  Result := (Pos('429', M) > 0) or (Pos('rate limit', M) > 0) or
+    (Pos('timeout', M) > 0) or (Pos('timed out', M) > 0) or
+    (Pos(' 500', M) > 0) or (Pos(' 502', M) > 0) or (Pos(' 503', M) > 0) or
+    (Pos(' 504', M) > 0) or (Pos('overloaded', M) > 0) or
+    (Pos('connection reset', M) > 0);
+end;
+
 function TMmpAiBridge.Ask(const SystemPrompt, UserPrompt: string;
   out ResponseText, ErrorMsg: string): Boolean;
 var
   Prov: TMmpAiProviderCfg;
   Secret: string;
+  Attempt: Integer;
 begin
   Result := False;
   ResponseText := '';
@@ -429,13 +442,20 @@ begin
     Exit;
   end;
 
-  if FLLM.Ask(UserPrompt) then
-  begin
-    ResponseText := FLLM.LastResult;
-    Result := True;
-  end
-  else
+  { docs/specs/00-comum 9.2: erros transitorios / limite de taxa sao repetidos
+    com espera exponencial (1, 2, 4... s) ate max_retries; os demais falham. }
+  Attempt := 0;
+  repeat
+    if FLLM.Ask(UserPrompt) then
+    begin
+      ResponseText := FLLM.LastResult;
+      Exit(True);
+    end;
     ErrorMsg := FLLM.LastError;
+    if (Attempt >= Prov.MaxRetries) or not IsTransientAiError(ErrorMsg) then Break;
+    Sleep(1000 shl Attempt);
+    Inc(Attempt);
+  until False;
 end;
 
 function TMmpAiBridge.GenerateImage(const Prompt, OutputFile: string;
