@@ -72,6 +72,10 @@ type
       const AudioFile: string = ''; DurationSec: Integer = 5): Boolean;
 
     // Teste de conectividade por categoria ('text','image','voice','sfx','video')
+    { Verdadeiro quando o tipo (voice, video, image...) usa um provedor real:
+      habilitado, não simulado, fora do modo offline e, para vídeo, que não
+      seja só o ffmpeg local. Serve para não chamar o provedor simulado à toa. }
+    function HasLiveProvider(const Kind: string): Boolean;
     function TestProviderByKind(const Kind: string;
       out InfoMsg, ErrorMsg: string): Boolean;
 
@@ -656,6 +660,20 @@ begin
   Result := FVideo.GenerateTextToVideo(Prompt, OutputFile);
   if not Result then
     ErrorMsg := FVideo.LastError;
+end;
+
+function TMmpAiBridge.HasLiveProvider(const Kind: string): Boolean;
+var
+  Prov: TMmpAiProviderCfg;
+begin
+  Result := False;
+  if FProductionRoot <> '' then FSettings.ReloadIfChanged(FAppEnum);
+  if FSettings.OfflineMode then Exit;
+  if not FSettings.ResolveProvider(Kind, FAppEnum, Prov) then Exit;
+  if not Prov.Enabled or SameText(Prov.Adapter, 'mock') or (Trim(Prov.Adapter) = '') then Exit;
+  if SameText(Kind, 'video') and (MapAdapterToVideoKind(Prov.Adapter, Prov.BaseUrl) = vidLocalFFmpegCPU) then
+    Exit;
+  Result := True;
 end;
 
 function TMmpAiBridge.TestProviderByKind(const Kind: string;

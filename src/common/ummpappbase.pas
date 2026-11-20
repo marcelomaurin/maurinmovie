@@ -93,6 +93,9 @@ function MmpRunHeadlessEvent(App: TMMApp; const ProdRoot, ProjectId, EventFile: 
 { Area de rascunho mutavel do projeto (docs/specs/00-comum 5.1): projects/NN-app/work/draft.
   Revisoes publicadas em revisions/rNNNN sao imutaveis; todo arquivo gerado ou
   editado antes de publicar deve ir para esta pasta. }
+{ Abre um arquivo de mídia no reprodutor configurado (mpv) ou no programa padrão. }
+function MmpOpenMedia(const FileName, Player: string): Boolean;
+
 function MmpDraftDir(const ProjectDir: string): string;
 function MmpDraftFilePath(const ProjectDir, RelUri: string): string;
 { Resolve um arquivo relativo: primeiro no rascunho, depois na revisao indicada. }
@@ -126,7 +129,31 @@ procedure MmpPrepareTabSheet(Tab: TControl);
 implementation
 
 uses
-  {$IFDEF WINDOWS}Windows{$ELSE}BaseUnix, Unix{$ENDIF};
+  {$IFDEF WINDOWS}Windows{$ELSE}BaseUnix, Unix{$ENDIF}, LCLIntf;
+
+function MmpOpenMedia(const FileName, Player: string): Boolean;
+var P: TProcess;
+begin
+  Result := False;
+  if not FileExists(FileName) then Exit;
+  if (Player <> '') and FileExists(Player) then
+  begin
+    P := TProcess.Create(nil);
+    try
+      P.Executable := Player;
+      P.Parameters.Add(FileName);
+      P.Options := [];
+      try
+        P.Execute;
+        Exit(True);
+      except
+      end;
+    finally
+      P.Free;
+    end;
+  end;
+  Result := OpenDocument(FileName);
+end;
 
 function HandleStandardCliEarlyExit(App: TMMApp): Boolean;
 var

@@ -6,8 +6,8 @@ interface
 
 uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
-  ComCtrls, Grids, fpjson, jsonparser, aih264decoder,
-  ummpprotocol, ummpappbase, ummpaibridge;
+  ComCtrls, Grids, Math, fpjson, jsonparser, aih264decoder,
+  ummpprotocol, ummpappbase, ummpaibridge, ummpmedia, ummpsha256;
 
 type
   TTimelineClip = record
@@ -19,7 +19,8 @@ type
     OutPointSec: Integer;
     TransitionOut: string; // cut | fade_out | dissolve
     TransitionSec: Integer;
-    SceneStatus: string; // ok | missing_scene | pending_approval
+    SceneStatus: string; // ok | missing_scene | pending_approval | missing_video
+    VideoFile: string;   // video costurado da cena no MScene (revisao ativa)
   end;
 
   TAudienceRating = record
@@ -77,6 +78,11 @@ type
     procedure OnAnalyzeFeedbackClick(Sender: TObject);
     procedure OnRequestSceneCorrectionClick(Sender: TObject);
     procedure OnSaveAndExportClick(Sender: TObject);
+    procedure OnWatchFilmClick(Sender: TObject);
+    procedure OnMediaProgress(Sender: TObject);
+    function SceneVideoFile(const SceneId: string; out SceneRev: string): string;
+    function RenderFilm(const RevDir, RevId: string; out RelUri, Err: string;
+      out DurationSec: Double): Boolean;
   public
     constructor Create(TheOwner: TComponent); override;
     destructor Destroy; override;
@@ -86,6 +92,21 @@ var
   mcutMainForm: TMcutMainForm;
 
 implementation
+
+function MediaFileSize(const F: string): Int64;
+var Fs: TFileStream;
+begin
+  Result := 0;
+  try
+    Fs := TFileStream.Create(F, fmOpenRead or fmShareDenyNone);
+    try
+      Result := Fs.Size;
+    finally
+      Fs.Free;
+    end;
+  except
+  end;
+end;
 
 constructor TMcutMainForm.Create(TheOwner: TComponent);
 var
@@ -124,7 +145,7 @@ var
   Head, Sidebar, Bottom, ClipEditBar, FeedBar: TPanel;
   PC: TPageControl;
   TabTimeline, TabFeedback, TabAnalysis, TabLog: TTabSheet;
-  BtnOpen, BtnAiCfg, BtnBuildTL, BtnApplyCut, BtnAddRate, BtnAnalyze, BtnCorr, BtnExport: TButton;
+  BtnOpen, BtnAiCfg, BtnBuildTL, BtnApplyCut, BtnAddRate, BtnAnalyze, BtnCorr, BtnExport, BtnWatch: TButton;
   L: TLabel;
 begin
   Head := TPanel.Create(Self); Head.Parent := Self; Head.Align := alTop; MmpPrepareAligned(Head); Head.Height := 68;
@@ -180,6 +201,16 @@ begin
 
   BtnCorr := TButton.Create(Self); BtnCorr.Parent := Sidebar; BtnCorr.Caption := 'Etapa 4: Solicitar Correcao (MScene)';
   BtnCorr.SetBounds(12, 170, 231, 34); BtnCorr.OnClick := @OnRequestSceneCorrectionClick;
+
+  BtnWatch := TButton.Create(Self); BtnWatch.Parent := Sidebar; BtnWatch.Caption := 'Assistir filme exportado';
+  BtnWatch.SetBounds(12, 212, 231, 34); BtnWatch.OnClick := @OnWatchFilmClick;
+
+  L := TLabel.Create(Self); L.Parent := Sidebar; L.WordWrap := True; L.AutoSize := False;
+  L.SetBounds(12, 258, 231, 140); L.Font.Color := $00555555;
+  L.Caption := '"Salvar e Exportar" grava o filme em video/exports da nova revisao: cada cena ' +
+    'costurada no MScene, cortada pelos pontos In/Out e unida pela transicao escolhida ' +
+    '(corte, fusao ou fade para preto), no formato acima. Com cenas pendentes, so a ' +
+    'montagem e salva.';
 
   PC := TPageControl.Create(Self); PC.Parent := Self; PC.Align := alClient; MmpPrepareAligned(PC);
   TabTimeline := TTabSheet.Create(PC); TabTimeline.PageControl := PC; MmpPrepareTabSheet(TabTimeline); TabTimeline.Caption := 'Etapa 1 && 2: Timeline && Transicoes';
@@ -355,12 +386,21 @@ var
   Arr: TJSONArray;
   I, J: Integer;
   FoundSceneProj: Boolean;
+  Rev: string;
+  Media: TMmpMedia;
+  Dur: Double;
 begin
   if not FProd.Loaded then
   begin
     MessageDlg('Abra uma producao primeiro.', mtWarning, [mbOK], 0);
     Exit;
   end;
+  { recarrega a producao: cenas podem ter sido salvas no MScene desde a abertura }
+  Rev := FProd.RootDir;
+  if not LoadProduction(Rev, False, FProd) then Exit;
+  Media := TMmpMedia.Create(FAi.Settings.ToolFfmpeg, FAi.Settings.ToolFfprobe);
+  if Media.Ffprobe = '' then FreeAndNil(Media);
+  try
   ScriptPath := ExtractFileDir(FScriptProj.ProjectFilePath) + PathDelim + 'revisions' +
     PathDelim + FScriptProj.ActiveRevision + PathDelim + 'scripts' + PathDelim + 'roteiro.json';
   if not FileExists(ScriptPath) then
@@ -391,6 +431,7 @@ begin
       FoundSceneProj := False;
       FClips[I].SceneRevision := '-';
       FClips[I].SceneStatus := 'missing_scene';
+      FClips[I].VideoFile := '';
       for J := 0 to High(FProd.Projects) do
       begin
         if (FProd.Projects[J].SoftwareIndex = 5) and SameText(FProd.Projects[J].SceneId, SId) then
@@ -403,6 +444,20 @@ begin
             FClips[I].SceneStatus := 'ok'
           else
             FClips[I].SceneStatus := 'pending_approval';
+          FClips[I].VideoFile := SceneVideoFile(SId, Rev);
+          if FClips[I].VideoFile = '' then
+          begin
+            if FClips[I].SceneStatus = 'ok' then FClips[I].SceneStatus := 'missing_video';
+          end
+          else
+          begin
+            FClips[I].SceneRevision := Rev;
+            if Media <> nil then
+            begin
+              Dur := Media.Duration(FClips[I].VideoFile);
+              if Dur > 0 then FClips[I].OutPointSec := Max(1, Trunc(Dur));
+            end;
+          end;
           Break;
         end;
       end;
@@ -411,6 +466,9 @@ begin
     end;
   finally
     Obj.Free;
+  end;
+  finally
+    Media.Free;
   end;
 
   RefreshTimelineGrid;
@@ -699,7 +757,11 @@ end;
 
 procedure TMcutMainForm.OnSaveAndExportClick(Sender: TObject);
 var
-  PrepRev, RevDir, NewRev, ErrMsg, ExportStatus: string;
+  PrepRev, RevDir, NewRev, ErrMsg, ExportStatus, FilmRel, FilmErr, FilmPath: string;
+  FilmSec: Double;
+  W, H: Integer;
+  Lossless: Boolean;
+  ClipsArr: TJSONArray;
   Srcs: array of TMmpSourceRef;
   Arts: array of TMmpArtifactInput;
   RevInfo: TMmpRevisionInfo;
@@ -707,18 +769,46 @@ var
   ExportObj: TJSONObject;
 begin
   if not FProd.Loaded then Exit;
+  if Length(FClips) = 0 then
+  begin
+    MessageDlg('Monte a ordem narrativa (Etapa 1) antes de exportar.', mtWarning, [mbOK], 0);
+    Exit;
+  end;
 
   MissingCnt := 0;
   for I := 0 to High(FClips) do
+  begin
+    { timeline carregada de uma revisao: localiza de novo o video de cada cena }
+    if (FClips[I].SceneStatus = 'ok') and (FClips[I].VideoFile = '') then
+      FClips[I].VideoFile := SceneVideoFile(FClips[I].SceneId, ErrMsg);
+    if (FClips[I].SceneStatus = 'ok') and (FClips[I].VideoFile = '') then
+      FClips[I].SceneStatus := 'missing_video';
     if FClips[I].SceneStatus <> 'ok' then
       Inc(MissingCnt);
+  end;
+  RefreshTimelineGrid;
 
   if MissingCnt > 0 then
     ExportStatus := 'pending_scenes_missing'
   else
-    ExportStatus := 'exported_manifest';
+    ExportStatus := 'exported';
 
   if not PrepareNextRevisionDir(FProj.ProjectFilePath, PrepRev, RevDir) then Exit;
+
+  FilmRel := ''; FilmErr := ''; FilmSec := 0;
+  if MissingCnt = 0 then
+  begin
+    Screen.Cursor := crHourGlass;
+    try
+      if not RenderFilm(RevDir, PrepRev, FilmRel, FilmErr, FilmSec) then
+      begin
+        ExportStatus := 'export_failed';
+        LogMsg('Falha ao gravar o filme: ' + FilmErr);
+      end;
+    finally
+      Screen.Cursor := crDefault;
+    end;
+  end;
 
   RunAudienceAnalysis;
   AtomicWriteTextFile(RevDir + PathDelim + 'timeline' + PathDelim + 'timeline.json', TimelineToJson, False);
@@ -733,6 +823,25 @@ begin
     ExportObj.Add('format', FExportFormatCombo.Text);
     ExportObj.Add('missing_scenes', MissingCnt);
     ExportObj.Add('status', ExportStatus);
+    if FilmRel <> '' then
+    begin
+      FilmPath := RevDir + PathDelim + StringReplace(FilmRel, '/', PathDelim, [rfReplaceAll]);
+      ExportObj.Add('file', FilmRel);
+      ExportObj.Add('duration_sec', FilmSec);
+      ExportObj.Add('size_bytes', MediaFileSize(FilmPath));
+      ExportObj.Add('sha256', SHA256File(FilmPath));
+      MmpFormatSize(FExportFormatCombo.Text, W, H, Lossless);
+      ExportObj.Add('width', W);
+      ExportObj.Add('height', H);
+      ClipsArr := TJSONArray.Create;
+      for I := 0 to High(FClips) do
+        ClipsArr.Add(TJSONObject.Create(['scene_id', FClips[I].SceneId,
+          'scene_revision', FClips[I].SceneRevision, 'in_point', FClips[I].InPointSec,
+          'out_point', FClips[I].OutPointSec, 'transition_out', FClips[I].TransitionOut,
+          'transition_sec', FClips[I].TransitionSec]));
+      ExportObj.Add('clips', ClipsArr);
+    end;
+    if FilmErr <> '' then ExportObj.Add('error', FilmErr);
     ExportObj.Add('created_at', CurrentIsoUtc);
     AtomicWriteTextFile(RevDir + PathDelim + 'video' + PathDelim + 'exports' + PathDelim + 'export_report.json',
       ExportObj.FormatJSON, False);
@@ -745,6 +854,14 @@ begin
   Arts[1].ArtifactId := GenerateMmpId('a'); Arts[1].Kind := 'feedback.rating'; Arts[1].RelUri := 'feedback/ratings.json'; Arts[1].MimeType := 'application/json'; Arts[1].Status := 'approved';
   Arts[2].ArtifactId := GenerateMmpId('a'); Arts[2].Kind := 'analysis.report'; Arts[2].RelUri := 'analysis/report.json'; Arts[2].MimeType := 'application/json'; Arts[2].Status := 'approved';
   Arts[3].ArtifactId := GenerateMmpId('a'); Arts[3].Kind := 'video.film.export'; Arts[3].RelUri := 'video/exports/export_report.json'; Arts[3].MimeType := 'application/json'; Arts[3].Status := ExportStatus;
+  if FilmRel <> '' then
+  begin
+    SetLength(Arts, 5);
+    Arts[4].ArtifactId := GenerateMmpId('a'); Arts[4].Kind := 'video.film'; Arts[4].RelUri := FilmRel;
+    if SameText(ExtractFileExt(FilmRel), '.mkv') then Arts[4].MimeType := 'video/x-matroska'
+    else Arts[4].MimeType := 'video/mp4';
+    Arts[4].Status := 'approved';
+  end;
 
   SetLength(Srcs, 1);
   Srcs[0].ResolvedApp := 'MScript';
@@ -776,15 +893,128 @@ begin
     LogMsg('Revisao MCut salva (' + NewRev + '): ' + ExportStatus);
     if MissingCnt > 0 then
       MessageDlg('Revisao ' + NewRev + ' salva, mas ' + IntToStr(MissingCnt) +
-        ' cena(s) ainda estao pendentes no MScene. Exportacao nao declarada como concluida.',
+        ' cena(s) ainda estao pendentes no MScene (sem video costurado ou nao finalizadas). ' +
+        'O filme nao foi gravado.', mtWarning, [mbOK], 0)
+    else if FilmRel = '' then
+      MessageDlg('Revisao ' + NewRev + ' salva, mas o filme nao foi gravado: ' + FilmErr,
         mtWarning, [mbOK], 0)
     else
-      MessageDlg('Revisao ' + NewRev + ' e pacote de exportacao salvos com sucesso.',
-        mtInformation, [mbOK], 0);
+      MessageDlg(Format('Revisao %s salva. Filme gravado em %s (%.0f s).',
+        [NewRev, FilmRel, FilmSec]), mtInformation, [mbOK], 0);
     LoadProductionAndRevision(FProd.RootDir, FProj.ProjectId, NewRev);
   end
   else
     MessageDlg(ErrMsg, mtError, [mbOK], 0);
+end;
+
+function TMcutMainForm.SceneVideoFile(const SceneId: string; out SceneRev: string): string;
+var
+  J: Integer;
+  Dir: string;
+begin
+  Result := '';
+  SceneRev := '';
+  for J := 0 to High(FProd.Projects) do
+    if (FProd.Projects[J].SoftwareIndex = 5) and SameText(FProd.Projects[J].SceneId, SceneId) then
+    begin
+      SceneRev := FProd.Projects[J].ActiveRevision;
+      Dir := ExtractFileDir(FProd.Projects[J].ProjectFilePath) + PathDelim + 'revisions' + PathDelim +
+        SceneRev + PathDelim + 'video' + PathDelim + 'assembled' + PathDelim + SceneId + '.mp4';
+      if FileExists(Dir) then Result := Dir;
+      Exit;
+    end;
+end;
+
+procedure TMcutMainForm.OnMediaProgress(Sender: TObject);
+begin
+  Application.ProcessMessages;
+end;
+
+{ Grava o filme: cada cena com seus pontos In/Out e a transicao de saida,
+  na resolucao do formato escolhido (MKV = sem perdas). }
+function TMcutMainForm.RenderFilm(const RevDir, RevId: string; out RelUri, Err: string;
+  out DurationSec: Double): Boolean;
+var
+  M: TMmpMedia;
+  Clips: array of TMmpClip;
+  I, W, H: Integer;
+  Lossless: Boolean;
+  Ext, OutF: string;
+begin
+  Result := False;
+  RelUri := '';
+  Err := '';
+  DurationSec := 0;
+  M := TMmpMedia.Create(FAi.Settings.ToolFfmpeg, FAi.Settings.ToolFfprobe);
+  try
+    if not M.Available then
+    begin
+      Err := 'ffmpeg nao encontrado (configure em MMenu > Configuracoes > Ferramentas).';
+      Exit;
+    end;
+    MmpFormatSize(FExportFormatCombo.Text, W, H, Lossless);
+    M.Width := W; M.Height := H; M.Fps := 25;
+    M.OnProgress := @OnMediaProgress;
+    SetLength(Clips, Length(FClips));
+    for I := 0 to High(FClips) do
+    begin
+      Clips[I].FileName := FClips[I].VideoFile;
+      Clips[I].InSec := FClips[I].InPointSec;
+      Clips[I].OutSec := FClips[I].OutPointSec;
+      Clips[I].Transition := FClips[I].TransitionOut;
+      Clips[I].TransitionSec := Max(0.5, FClips[I].TransitionSec);
+    end;
+    if Lossless then Ext := '.mkv' else Ext := '.mp4';
+    RelUri := 'video/exports/filme_' + RevId + Ext;
+    OutF := RevDir + PathDelim + StringReplace(RelUri, '/', PathDelim, [rfReplaceAll]);
+    FStatusLabel.Caption := Format('Gravando o filme (%dx%d)... pode levar alguns minutos.', [W, H]);
+    Application.ProcessMessages;
+    Result := M.RenderTimeline(Clips, OutF, Err);
+    if Result then
+    begin
+      DurationSec := M.Duration(OutF);
+      LogMsg(Format('Filme gravado: %s (%.1f s, %dx%d).', [RelUri, DurationSec, W, H]));
+    end
+    else
+    begin
+      RelUri := '';
+      DeleteFile(OutF);
+    end;
+  finally
+    M.Free;
+  end;
+end;
+
+procedure TMcutMainForm.OnWatchFilmClick(Sender: TObject);
+var
+  RepPath, Content, Rel, F: string;
+  Data: TJSONData;
+begin
+  if not FProd.Loaded then Exit;
+  RepPath := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim + FCurrentRevId +
+    PathDelim + 'video' + PathDelim + 'exports' + PathDelim + 'export_report.json';
+  Rel := '';
+  if ReadTextFileUtf8(RepPath, Content) then
+  begin
+    Data := GetJSON(Content);
+    try
+      if Data is TJSONObject then Rel := TJSONObject(Data).Get('file', '');
+    finally
+      Data.Free;
+    end;
+  end;
+  F := '';
+  if Rel <> '' then
+    F := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim + FCurrentRevId +
+      PathDelim + StringReplace(Rel, '/', PathDelim, [rfReplaceAll]);
+  if (F = '') or not FileExists(F) then
+  begin
+    MessageDlg('A revisao ' + FCurrentRevId + ' nao tem filme gravado. Use "Salvar e Exportar Filme".',
+      mtInformation, [mbOK], 0);
+    Exit;
+  end;
+  if not MmpOpenMedia(F, FAi.Settings.ToolMpv) then
+    LogMsg('Nao foi possivel abrir o reprodutor para ' + F);
 end;
 
 procedure TMcutMainForm.OnOpenProdClick(Sender: TObject);
