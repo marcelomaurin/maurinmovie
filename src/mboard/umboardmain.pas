@@ -135,7 +135,7 @@ var
 begin
   Head := TPanel.Create(Self);
   Head.Parent := Self;
-  Head.Align := alTop;
+  Head.Align := alTop; MmpPrepareAligned(Head);
   Head.Height := 68;
   Head.BevelOuter := bvNone;
   Head.Color := $003A3028;
@@ -185,7 +185,7 @@ begin
 
   Bottom := TPanel.Create(Self);
   Bottom.Parent := Self;
-  Bottom.Align := alBottom;
+  Bottom.Align := alBottom; MmpPrepareAligned(Bottom);
   Bottom.Height := 34;
   Bottom.BevelOuter := bvLowered;
 
@@ -196,7 +196,7 @@ begin
 
   Sidebar := TPanel.Create(Self);
   Sidebar.Parent := Self;
-  Sidebar.Align := alLeft;
+  Sidebar.Align := alLeft; MmpPrepareAligned(Sidebar);
   Sidebar.Width := 255;
   Sidebar.BevelOuter := bvNone;
   Sidebar.Color := $00EFEFEF;
@@ -235,15 +235,15 @@ begin
 
   PC := TPageControl.Create(Self);
   PC.Parent := Self;
-  PC.Align := alClient;
+  PC.Align := alClient; MmpPrepareAligned(PC);
 
-  TabBoard := TTabSheet.Create(PC); TabBoard.PageControl := PC; TabBoard.Caption := 'Quadros & Edicao';
-  TabSegs := TTabSheet.Create(PC); TabSegs.PageControl := PC; TabSegs.Caption := 'Segmentos & Continuidade';
-  TabLog := TTabSheet.Create(PC); TabLog.PageControl := PC; TabLog.Caption := 'Log Operacional';
+  TabBoard := TTabSheet.Create(PC); TabBoard.PageControl := PC; MmpPrepareTabSheet(TabBoard); TabBoard.Caption := 'Quadros && Edicao';
+  TabSegs := TTabSheet.Create(PC); TabSegs.PageControl := PC; MmpPrepareTabSheet(TabSegs); TabSegs.Caption := 'Segmentos && Continuidade';
+  TabLog := TTabSheet.Create(PC); TabLog.PageControl := PC; MmpPrepareTabSheet(TabLog); TabLog.Caption := 'Log Operacional';
 
   FBoardsGrid := TStringGrid.Create(Self);
   FBoardsGrid.Parent := TabBoard;
-  FBoardsGrid.Align := alTop;
+  FBoardsGrid.Align := alTop; MmpPrepareAligned(FBoardsGrid);
   FBoardsGrid.Height := 190;
   FBoardsGrid.FixedCols := 0;
   FBoardsGrid.FixedRows := 1;
@@ -266,7 +266,7 @@ begin
 
   DetailPanel := TPanel.Create(Self);
   DetailPanel.Parent := TabBoard;
-  DetailPanel.Align := alClient;
+  DetailPanel.Align := alClient; MmpPrepareAligned(DetailPanel);
   DetailPanel.BevelOuter := bvNone;
 
   L := TLabel.Create(Self); L.Parent := DetailPanel; L.Caption := 'Quadro Inicial:'; L.Font.Style := [fsBold]; L.SetBounds(12, 8, 150, 18);
@@ -294,7 +294,7 @@ begin
 
   FSegmentsGrid := TStringGrid.Create(Self);
   FSegmentsGrid.Parent := TabSegs;
-  FSegmentsGrid.Align := alClient;
+  FSegmentsGrid.Align := alClient; MmpPrepareAligned(FSegmentsGrid);
   FSegmentsGrid.FixedCols := 0;
   FSegmentsGrid.FixedRows := 1;
   FSegmentsGrid.ColCount := 6;
@@ -315,7 +315,7 @@ begin
 
   FLogMemo := TMemo.Create(Self);
   FLogMemo.Parent := TabLog;
-  FLogMemo.Align := alClient;
+  FLogMemo.Align := alClient; MmpPrepareAligned(FLogMemo);
   FLogMemo.ReadOnly := True;
   FLogMemo.ScrollBars := ssBoth;
 end;

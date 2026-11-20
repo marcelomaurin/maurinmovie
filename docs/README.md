@@ -3,6 +3,8 @@
 ## Visão geral
 Suíte modular de produção audiovisual com IA. Os projetos dos aplicativos são independentes, versionados e interligados por IDs e referências exatas às revisões. Aprovações editoriais pertencem ao usuário.
 
+**Manual de uso com telas de cada executável:** [manual/README.md](manual/README.md).
+
 ## Aplicativos — nomes oficiais
 0. **MMenu** — portal de entrada, navegação, abertura de projetos e acompanhamento das revisões.
 1. **MScript** — sinopse, roteiro, cenas e personagens.

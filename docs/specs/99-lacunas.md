@@ -52,6 +52,7 @@ Legenda de impacto: **Alto** = bloqueia ou muda a arquitetura; **Médio** = afet
 | C-13 | MScript headless | Evento sem `event_id` era dado como "já aplicado"; campo `dialogue` não casava com `dialogue_text`; `replace_entity` e eventos sem operações publicavam revisão sem mudança; fonte desatualizada não era verificada | Resolvida |
 | C-14 | MVisual, MBoard, MSound | "Publicar" gravava `approved` mesmo com itens não aprovados | Resolvida: `published` até todos serem aprovados |
 | C-15 | Cascata | Nenhum programa processava os eventos; o evento do MBoard não tinha operações | Parcial: o MBoard gera `script.patch` e executa o MScript headless; estágios MVisual/MBoard continuam manuais |
+| C-17 | Telas montadas em código | Controles ancorados à direita/abaixo saíam da janela (botões do cabeçalho e das abas invisíveis no GTK2) e o `&` das abas virava atalho ("Sinopse _IA") | Resolvida: `MmpPrepareAligned`/`MmpPrepareTabSheet` e `&&` nos títulos |
 | C-16 | Executáveis LCL no Linux | GTK2 exige display até em `--version`/`--headless` | Aberta: usar `xvfb-run` ou separar um executável sem LCL para o modo headless |
 
 ## Inconsistências entre documentos

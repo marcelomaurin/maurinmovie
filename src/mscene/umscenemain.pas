@@ -116,7 +116,7 @@ var
   BtnOpen, BtnAiCfg, BtnGen, BtnAppSeg, BtnAssemble, BtnPrevOk, BtnNextOk, BtnSave: TButton;
   L: TLabel;
 begin
-  Head := TPanel.Create(Self); Head.Parent := Self; Head.Align := alTop; Head.Height := 68;
+  Head := TPanel.Create(Self); Head.Parent := Self; Head.Align := alTop; MmpPrepareAligned(Head); Head.Height := 68;
   Head.BevelOuter := bvNone; Head.Color := $003A3028; Head.ParentBackground := False;
 
   L := TLabel.Create(Self); L.Parent := Head; L.Caption := 'MaurinMovie  |  5 - MScene';
@@ -138,12 +138,12 @@ begin
   BtnSave.Anchors := [akTop, akRight]; BtnSave.SetBounds(918, 17, 136, 34);
   BtnSave.OnClick := @OnSaveSceneProjectClick;
 
-  Bottom := TPanel.Create(Self); Bottom.Parent := Self; Bottom.Align := alBottom; Bottom.Height := 34;
+  Bottom := TPanel.Create(Self); Bottom.Parent := Self; Bottom.Align := alBottom; MmpPrepareAligned(Bottom); Bottom.Height := 34;
   Bottom.BevelOuter := bvLowered;
   FStatusLabel := TLabel.Create(Self); FStatusLabel.Parent := Bottom; FStatusLabel.SetBounds(12, 9, 1100, 18);
   FStatusLabel.Caption := 'Pronto.';
 
-  Sidebar := TPanel.Create(Self); Sidebar.Parent := Self; Sidebar.Align := alLeft; Sidebar.Width := 270;
+  Sidebar := TPanel.Create(Self); Sidebar.Parent := Self; Sidebar.Align := alLeft; MmpPrepareAligned(Sidebar); Sidebar.Width := 270;
   Sidebar.BevelOuter := bvNone; Sidebar.Color := $00EFEFEF; Sidebar.ParentBackground := False;
 
   BtnOpen := TButton.Create(Self); BtnOpen.Parent := Sidebar; BtnOpen.Caption := 'Abrir producao...';
@@ -180,11 +180,11 @@ begin
   BtnNextOk := TButton.Create(Self); BtnNextOk.Parent := Sidebar; BtnNextOk.Caption := 'Validar Ligacao Proxima';
   BtnNextOk.SetBounds(12, 360, 246, 30); BtnNextOk.OnClick := @OnApproveNextLinkClick;
 
-  PC := TPageControl.Create(Self); PC.Parent := Self; PC.Align := alClient;
-  TabWork := TTabSheet.Create(PC); TabWork.PageControl := PC; TabWork.Caption := 'Sub-blocos & Montagem da Cena';
-  TabLog := TTabSheet.Create(PC); TabLog.PageControl := PC; TabLog.Caption := 'Log Operacional';
+  PC := TPageControl.Create(Self); PC.Parent := Self; PC.Align := alClient; MmpPrepareAligned(PC);
+  TabWork := TTabSheet.Create(PC); TabWork.PageControl := PC; MmpPrepareTabSheet(TabWork); TabWork.Caption := 'Sub-blocos && Montagem da Cena';
+  TabLog := TTabSheet.Create(PC); TabLog.PageControl := PC; MmpPrepareTabSheet(TabLog); TabLog.Caption := 'Log Operacional';
 
-  FSegmentsGrid := TStringGrid.Create(Self); FSegmentsGrid.Parent := TabWork; FSegmentsGrid.Align := alClient;
+  FSegmentsGrid := TStringGrid.Create(Self); FSegmentsGrid.Parent := TabWork; FSegmentsGrid.Align := alClient; MmpPrepareAligned(FSegmentsGrid);
   FSegmentsGrid.FixedCols := 0; FSegmentsGrid.FixedRows := 1; FSegmentsGrid.ColCount := 6; FSegmentsGrid.RowCount := 2;
   FSegmentsGrid.Options := FSegmentsGrid.Options + [goRowSelect, goColSizing];
   FSegmentsGrid.Cells[0, 0] := 'Segment ID'; FSegmentsGrid.Cells[1, 0] := 'Ordem';
@@ -193,13 +193,13 @@ begin
   FSegmentsGrid.ColWidths[0] := 125; FSegmentsGrid.ColWidths[1] := 55; FSegmentsGrid.ColWidths[2] := 65;
   FSegmentsGrid.ColWidths[3] := 95; FSegmentsGrid.ColWidths[4] := 280; FSegmentsGrid.ColWidths[5] := 240;
 
-  PrevPanel := TPanel.Create(Self); PrevPanel.Parent := TabWork; PrevPanel.Align := alBottom;
+  PrevPanel := TPanel.Create(Self); PrevPanel.Parent := TabWork; PrevPanel.Align := alBottom; MmpPrepareAligned(PrevPanel);
   PrevPanel.Height := 230; PrevPanel.BevelOuter := bvLowered;
   FPreviewImg := TImage.Create(Self); FPreviewImg.Parent := PrevPanel;
   FPreviewImg.Stretch := True; FPreviewImg.Proportional := True;
   FPreviewImg.SetBounds(12, 12, 380, 206);
 
-  FLogMemo := TMemo.Create(Self); FLogMemo.Parent := TabLog; FLogMemo.Align := alClient;
+  FLogMemo := TMemo.Create(Self); FLogMemo.Parent := TabLog; FLogMemo.Align := alClient; MmpPrepareAligned(FLogMemo);
   FLogMemo.ReadOnly := True; FLogMemo.ScrollBars := ssBoth;
 end;
 

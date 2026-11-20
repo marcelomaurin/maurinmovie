@@ -130,7 +130,7 @@ var
   BtnOpen, BtnAiCfg, BtnBuild, BtnTest, BtnStop, BtnSaveProf, BtnApprove, BtnRehearse, BtnPublish: TButton;
   L: TLabel;
 begin
-  Head := TPanel.Create(Self); Head.Parent := Self; Head.Align := alTop; Head.Height := 68;
+  Head := TPanel.Create(Self); Head.Parent := Self; Head.Align := alTop; MmpPrepareAligned(Head); Head.Height := 68;
   Head.BevelOuter := bvNone; Head.Color := $003A3028; Head.ParentBackground := False;
 
   L := TLabel.Create(Self); L.Parent := Head; L.Caption := 'MaurinMovie  |  4 - MSound';
@@ -152,12 +152,12 @@ begin
   BtnPublish.Anchors := [akTop, akRight]; BtnPublish.SetBounds(914, 17, 140, 34);
   BtnPublish.OnClick := @OnPublishClick;
 
-  Bottom := TPanel.Create(Self); Bottom.Parent := Self; Bottom.Align := alBottom; Bottom.Height := 34;
+  Bottom := TPanel.Create(Self); Bottom.Parent := Self; Bottom.Align := alBottom; MmpPrepareAligned(Bottom); Bottom.Height := 34;
   Bottom.BevelOuter := bvLowered;
   FStatusLabel := TLabel.Create(Self); FStatusLabel.Parent := Bottom; FStatusLabel.SetBounds(12, 9, 1100, 18);
   FStatusLabel.Caption := 'Pronto.';
 
-  Sidebar := TPanel.Create(Self); Sidebar.Parent := Self; Sidebar.Align := alLeft; Sidebar.Width := 255;
+  Sidebar := TPanel.Create(Self); Sidebar.Parent := Self; Sidebar.Align := alLeft; MmpPrepareAligned(Sidebar); Sidebar.Width := 255;
   Sidebar.BevelOuter := bvNone; Sidebar.Color := $00EFEFEF; Sidebar.ParentBackground := False;
 
   BtnOpen := TButton.Create(Self); BtnOpen.Parent := Sidebar; BtnOpen.Caption := 'Abrir producao...';
@@ -175,12 +175,12 @@ begin
   BtnStop := TButton.Create(Self); BtnStop.Parent := Sidebar; BtnStop.Caption := 'Parar Audio';
   BtnStop.SetBounds(12, 184, 231, 32); BtnStop.OnClick := @OnStopAudioClick;
 
-  PC := TPageControl.Create(Self); PC.Parent := Self; PC.Align := alClient;
-  TabBank := TTabSheet.Create(PC); TabBank.PageControl := PC; TabBank.Caption := 'Etapa 1 & 2: Vozes e Efeitos';
-  TabRehearsal := TTabSheet.Create(PC); TabRehearsal.PageControl := PC; TabRehearsal.Caption := 'Etapa 3: Ensaio Sincronizado';
-  TabLog := TTabSheet.Create(PC); TabLog.PageControl := PC; TabLog.Caption := 'Log Operacional';
+  PC := TPageControl.Create(Self); PC.Parent := Self; PC.Align := alClient; MmpPrepareAligned(PC);
+  TabBank := TTabSheet.Create(PC); TabBank.PageControl := PC; MmpPrepareTabSheet(TabBank); TabBank.Caption := 'Etapa 1 && 2: Vozes e Efeitos';
+  TabRehearsal := TTabSheet.Create(PC); TabRehearsal.PageControl := PC; MmpPrepareTabSheet(TabRehearsal); TabRehearsal.Caption := 'Etapa 3: Ensaio Sincronizado';
+  TabLog := TTabSheet.Create(PC); TabLog.PageControl := PC; MmpPrepareTabSheet(TabLog); TabLog.Caption := 'Log Operacional';
 
-  FProfilesGrid := TStringGrid.Create(Self); FProfilesGrid.Parent := TabBank; FProfilesGrid.Align := alClient;
+  FProfilesGrid := TStringGrid.Create(Self); FProfilesGrid.Parent := TabBank; FProfilesGrid.Align := alClient; MmpPrepareAligned(FProfilesGrid);
   FProfilesGrid.FixedCols := 0; FProfilesGrid.FixedRows := 1; FProfilesGrid.ColCount := 7; FProfilesGrid.RowCount := 2;
   FProfilesGrid.Options := FProfilesGrid.Options + [goRowSelect, goColSizing];
   FProfilesGrid.Cells[0, 0] := 'Asset ID'; FProfilesGrid.Cells[1, 0] := 'Tipo';
@@ -192,7 +192,7 @@ begin
   FProfilesGrid.ColWidths[6] := 180;
   FProfilesGrid.OnSelection := @OnProfilesGridSelection;
 
-  EditPanel := TPanel.Create(Self); EditPanel.Parent := TabBank; EditPanel.Align := alBottom;
+  EditPanel := TPanel.Create(Self); EditPanel.Parent := TabBank; EditPanel.Align := alBottom; MmpPrepareAligned(EditPanel);
   EditPanel.Height := 165; EditPanel.BevelOuter := bvLowered;
 
   L := TLabel.Create(Self); L.Parent := EditPanel; L.Caption := 'Timbre/Sotaque:'; L.SetBounds(12, 14, 110, 18);
@@ -216,7 +216,7 @@ begin
   BtnTest := TButton.Create(Self); BtnTest.Parent := EditPanel; BtnTest.Caption := 'Escutar Item Isolado (Etapa 2)';
   BtnTest.SetBounds(174, 116, 230, 32); BtnTest.OnClick := @OnTestIsolatedClick;
 
-  FEventsGrid := TStringGrid.Create(Self); FEventsGrid.Parent := TabRehearsal; FEventsGrid.Align := alClient;
+  FEventsGrid := TStringGrid.Create(Self); FEventsGrid.Parent := TabRehearsal; FEventsGrid.Align := alClient; MmpPrepareAligned(FEventsGrid);
   FEventsGrid.FixedCols := 0; FEventsGrid.FixedRows := 1; FEventsGrid.ColCount := 5; FEventsGrid.RowCount := 2;
   FEventsGrid.Options := FEventsGrid.Options + [goRowSelect, goColSizing];
   FEventsGrid.Cells[0, 0] := 'Cena ID'; FEventsGrid.Cells[1, 0] := 'Inicio (s)';
@@ -225,7 +225,7 @@ begin
   FEventsGrid.ColWidths[0] := 130; FEventsGrid.ColWidths[1] := 80; FEventsGrid.ColWidths[2] := 80;
   FEventsGrid.ColWidths[3] := 140; FEventsGrid.ColWidths[4] := 420;
 
-  FLogMemo := TMemo.Create(Self); FLogMemo.Parent := TabLog; FLogMemo.Align := alClient;
+  FLogMemo := TMemo.Create(Self); FLogMemo.Parent := TabLog; FLogMemo.Align := alClient; MmpPrepareAligned(FLogMemo);
   FLogMemo.ReadOnly := True; FLogMemo.ScrollBars := ssBoth;
 end;
 

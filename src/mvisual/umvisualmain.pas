@@ -151,7 +151,7 @@ var
 begin
   Head := TPanel.Create(Self);
   Head.Parent := Self;
-  Head.Align := alTop;
+  Head.Align := alTop; MmpPrepareAligned(Head);
   Head.Height := 68;
   Head.BevelOuter := bvNone;
   Head.Color := $003A3028;
@@ -194,7 +194,7 @@ begin
 
   Bottom := TPanel.Create(Self);
   Bottom.Parent := Self;
-  Bottom.Align := alBottom;
+  Bottom.Align := alBottom; MmpPrepareAligned(Bottom);
   Bottom.Height := 34;
   Bottom.BevelOuter := bvLowered;
 
@@ -205,7 +205,7 @@ begin
 
   Sidebar := TPanel.Create(Self);
   Sidebar.Parent := Self;
-  Sidebar.Align := alLeft;
+  Sidebar.Align := alLeft; MmpPrepareAligned(Sidebar);
   Sidebar.Width := 270;
   Sidebar.BevelOuter := bvNone;
   Sidebar.Color := $00EFEFEF;
@@ -280,19 +280,19 @@ begin
 
   PC := TPageControl.Create(Self);
   PC.Parent := Self;
-  PC.Align := alClient;
+  PC.Align := alClient; MmpPrepareAligned(PC);
 
   TabWork := TTabSheet.Create(PC);
-  TabWork.PageControl := PC;
-  TabWork.Caption := 'Catalogo & Validacao Visual';
+  TabWork.PageControl := PC; MmpPrepareTabSheet(TabWork);
+  TabWork.Caption := 'Catalogo && Validacao Visual';
 
   TabLog := TTabSheet.Create(PC);
-  TabLog.PageControl := PC;
+  TabLog.PageControl := PC; MmpPrepareTabSheet(TabLog);
   TabLog.Caption := 'Log Operacional';
 
   FilterBar := TPanel.Create(Self);
   FilterBar.Parent := TabWork;
-  FilterBar.Align := alTop;
+  FilterBar.Align := alTop; MmpPrepareAligned(FilterBar);
   FilterBar.Height := 46;
   FilterBar.BevelOuter := bvNone;
 
@@ -317,7 +317,7 @@ begin
 
   RightPanel := TPanel.Create(Self);
   RightPanel.Parent := TabWork;
-  RightPanel.Align := alBottom;
+  RightPanel.Align := alBottom; MmpPrepareAligned(RightPanel);
   RightPanel.Height := 270;
   RightPanel.BevelOuter := bvLowered;
 
@@ -363,7 +363,7 @@ begin
 
   FEntitiesGrid := TStringGrid.Create(Self);
   FEntitiesGrid.Parent := TabWork;
-  FEntitiesGrid.Align := alClient;
+  FEntitiesGrid.Align := alClient; MmpPrepareAligned(FEntitiesGrid);
   FEntitiesGrid.FixedCols := 0;
   FEntitiesGrid.FixedRows := 1;
   FEntitiesGrid.ColCount := 6;
@@ -396,7 +396,7 @@ begin
 
   FLogMemo := TMemo.Create(Self);
   FLogMemo.Parent := TabLog;
-  FLogMemo.Align := alClient;
+  FLogMemo.Align := alClient; MmpPrepareAligned(FLogMemo);
   FLogMemo.ReadOnly := True;
   FLogMemo.ScrollBars := ssBoth;
 

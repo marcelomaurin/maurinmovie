@@ -528,10 +528,10 @@ begin
     Item := TMenuItem.Create(Self);
     case I of
       0: Item.Caption := 'Portal (Aplicativos)';
-      1: Item.Caption := 'Historico & Controle';
-      2: Item.Caption := 'Projetos & Revisoes';
-      3: Item.Caption := 'Sincronizacoes & Pendencias';
-      4: Item.Caption := 'Artefatos & Catalogo';
+      1: Item.Caption := 'Historico && Controle';
+      2: Item.Caption := 'Projetos && Revisoes';
+      3: Item.Caption := 'Sincronizacoes && Pendencias';
+      4: Item.Caption := 'Artefatos && Catalogo';
       5: Item.Caption := 'Log Centralizado (SQLite)';
     end;
     Item.Tag := I;
@@ -586,7 +586,7 @@ var
 begin
   Head := TPanel.Create(Self);
   Head.Parent := AParent;
-  Head.Align := alTop;
+  Head.Align := alTop; MmpPrepareAligned(Head);
   Head.Height := 66;
   Head.Caption := '';
   Head.BevelOuter := bvNone;
@@ -595,7 +595,7 @@ begin
 
   AccentLine := TPanel.Create(Self);
   AccentLine.Parent := Head;
-  AccentLine.Align := alBottom;
+  AccentLine.Align := alBottom; MmpPrepareAligned(AccentLine);
   AccentLine.Height := 3;
   AccentLine.Caption := '';
   AccentLine.BevelOuter := bvNone;
@@ -605,7 +605,7 @@ begin
   // Bloco esquerdo: Identidade MaurinMovie
   BrandPanel := TPanel.Create(Self);
   BrandPanel.Parent := Head;
-  BrandPanel.Align := alLeft;
+  BrandPanel.Align := alLeft; MmpPrepareAligned(BrandPanel);
   BrandPanel.Width := 272;
   BrandPanel.Caption := '';
   BrandPanel.BevelOuter := bvNone;
@@ -630,7 +630,7 @@ begin
   // Bloco direito ancorado por Align=alRight (nunca some fora da janela!)
   RightPanel := TPanel.Create(Self);
   RightPanel.Parent := Head;
-  RightPanel.Align := alRight;
+  RightPanel.Align := alRight; MmpPrepareAligned(RightPanel);
   RightPanel.Width := 424;
   RightPanel.Caption := '';
   RightPanel.BevelOuter := bvNone;
@@ -674,7 +674,7 @@ begin
 
   FGearArrowBox := TPaintBox.Create(Self);
   FGearArrowBox.Parent := FHeaderGearPanel;
-  FGearArrowBox.Align := alRight;
+  FGearArrowBox.Align := alRight; MmpPrepareAligned(FGearArrowBox);
   FGearArrowBox.Width := 24;
   FGearArrowBox.Cursor := crHandPoint;
   FGearArrowBox.ShowHint := True;
@@ -686,7 +686,7 @@ begin
 
   GearDivider := TPanel.Create(Self);
   GearDivider.Parent := FHeaderGearPanel;
-  GearDivider.Align := alRight;
+  GearDivider.Align := alRight; MmpPrepareAligned(GearDivider);
   GearDivider.Width := 1;
   GearDivider.BevelOuter := bvNone;
   GearDivider.Color := CLR_BLUE_ACCENT;
@@ -695,7 +695,7 @@ begin
 
   FGearPaintBox := TPaintBox.Create(Self);
   FGearPaintBox.Parent := FHeaderGearPanel;
-  FGearPaintBox.Align := alClient;
+  FGearPaintBox.Align := alClient; MmpPrepareAligned(FGearPaintBox);
   FGearPaintBox.Cursor := crHandPoint;
   FGearPaintBox.ShowHint := True;
   FGearPaintBox.Hint := 'Abrir Configuracoes Centralizadas...';
@@ -707,7 +707,7 @@ begin
   // Bloco central: Contexto da producao ativa
   CenterPanel := TPanel.Create(Self);
   CenterPanel.Parent := Head;
-  CenterPanel.Align := alClient;
+  CenterPanel.Align := alClient; MmpPrepareAligned(CenterPanel);
   CenterPanel.Caption := '';
   CenterPanel.BevelOuter := bvNone;
   CenterPanel.Color := CLR_NAVY_HEADER;
@@ -737,7 +737,7 @@ var
 begin
   Bottom := TPanel.Create(Self);
   Bottom.Parent := AParent;
-  Bottom.Align := alBottom;
+  Bottom.Align := alBottom; MmpPrepareAligned(Bottom);
   Bottom.Height := 34;
   Bottom.Caption := '';
   Bottom.BevelOuter := bvNone;
@@ -746,7 +746,7 @@ begin
 
   TopLine := TPanel.Create(Self);
   TopLine.Parent := Bottom;
-  TopLine.Align := alTop;
+  TopLine.Align := alTop; MmpPrepareAligned(TopLine);
   TopLine.Height := 1;
   TopLine.Caption := '';
   TopLine.BevelOuter := bvNone;
@@ -779,7 +779,7 @@ var
 begin
   Sidebar := TPanel.Create(Self);
   Sidebar.Parent := AParent;
-  Sidebar.Align := alLeft;
+  Sidebar.Align := alLeft; MmpPrepareAligned(Sidebar);
   Sidebar.Width := 258;
   Sidebar.Caption := '';
   Sidebar.BevelOuter := bvNone;
@@ -788,7 +788,7 @@ begin
 
   SepLine := TPanel.Create(Self);
   SepLine.Parent := Sidebar;
-  SepLine.Align := alRight;
+  SepLine.Align := alRight; MmpPrepareAligned(SepLine);
   SepLine.Width := 1;
   SepLine.Caption := '';
   SepLine.BevelOuter := bvNone;
@@ -798,7 +798,7 @@ begin
   // Cartao limpo da Producao Ativa
   CardWrap := TPanel.Create(Self);
   CardWrap.Parent := Sidebar;
-  CardWrap.Align := alTop;
+  CardWrap.Align := alTop; MmpPrepareAligned(CardWrap);
   CardWrap.Height := 204;
   CardWrap.Caption := '';
   CardWrap.BevelOuter := bvNone;
@@ -817,7 +817,7 @@ begin
 
   Stripe := TPanel.Create(Self);
   Stripe.Parent := ProdCard;
-  Stripe.Align := alLeft;
+  Stripe.Align := alLeft; MmpPrepareAligned(Stripe);
   Stripe.Width := 4;
   Stripe.BevelOuter := bvNone;
   Stripe.Color := CLR_BLUE_PRIMARY;
@@ -886,7 +886,7 @@ begin
   // Lista de Producoes Recentes (com rodape sempre visivel!)
   RecentsWrap := TPanel.Create(Self);
   RecentsWrap.Parent := Sidebar;
-  RecentsWrap.Align := alClient;
+  RecentsWrap.Align := alClient; MmpPrepareAligned(RecentsWrap);
   RecentsWrap.Caption := '';
   RecentsWrap.BevelOuter := bvNone;
   RecentsWrap.Color := CLR_BLUE_ICE;
@@ -895,7 +895,7 @@ begin
 
   L := TLabel.Create(Self);
   L.Parent := RecentsWrap;
-  L.Align := alTop;
+  L.Align := alTop; MmpPrepareAligned(L);
   L.Height := 22;
   L.Caption := 'RECENTES (duplo clique)';
   L.Font.Size := 8;
@@ -904,7 +904,7 @@ begin
 
   RecentsBottom := TPanel.Create(Self);
   RecentsBottom.Parent := RecentsWrap;
-  RecentsBottom.Align := alBottom;
+  RecentsBottom.Align := alBottom; MmpPrepareAligned(RecentsBottom);
   RecentsBottom.Height := 38;
   RecentsBottom.Caption := '';
   RecentsBottom.BevelOuter := bvNone;
@@ -925,7 +925,7 @@ begin
 
   FRecentsList := TListBox.Create(Self);
   FRecentsList.Parent := RecentsWrap;
-  FRecentsList.Align := alClient;
+  FRecentsList.Align := alClient; MmpPrepareAligned(FRecentsList);
   FRecentsList.Color := clWhite;
   FRecentsList.Font.Color := CLR_TEXT_NAVY;
   FRecentsList.OnDblClick := @OnRecentDblClick;
@@ -939,7 +939,7 @@ var
 begin
   FManagerPanel := TPanel.Create(Self);
   FManagerPanel.Parent := AParent;
-  FManagerPanel.Align := alClient;
+  FManagerPanel.Align := alClient; MmpPrepareAligned(FManagerPanel);
   FManagerPanel.BevelOuter := bvNone;
   FManagerPanel.Color := CLR_BLUE_ICE;
   FManagerPanel.ParentBackground := False;
@@ -948,7 +948,7 @@ begin
 
   Banner := TPanel.Create(Self);
   Banner.Parent := FManagerPanel;
-  Banner.Align := alTop;
+  Banner.Align := alTop; MmpPrepareAligned(Banner);
   Banner.Height := 84;
   Banner.BevelOuter := bvNone;
   Banner.Color := CLR_BLUE_PRIMARY;
@@ -974,7 +974,7 @@ begin
 
   ActionsBar := TPanel.Create(Self);
   ActionsBar.Parent := FManagerPanel;
-  ActionsBar.Align := alTop;
+  ActionsBar.Align := alTop; MmpPrepareAligned(ActionsBar);
   ActionsBar.Height := 62;
   ActionsBar.BevelOuter := bvNone;
   ActionsBar.Color := CLR_BLUE_ICE;
@@ -1001,7 +1001,7 @@ begin
 
   BodyCard := TPanel.Create(Self);
   BodyCard.Parent := FManagerPanel;
-  BodyCard.Align := alClient;
+  BodyCard.Align := alClient; MmpPrepareAligned(BodyCard);
   BodyCard.BevelOuter := bvNone;
   BodyCard.Color := clWhite;
   BodyCard.ParentBackground := False;
@@ -1011,7 +1011,7 @@ begin
 
   ListHeader := TLabel.Create(Self);
   ListHeader.Parent := BodyCard;
-  ListHeader.Align := alTop;
+  ListHeader.Align := alTop; MmpPrepareAligned(ListHeader);
   ListHeader.Height := 26;
   ListHeader.Caption := 'PRODUCOES RECENTES (duplo clique para abrir)';
   ListHeader.Font.Size := 9;
@@ -1020,7 +1020,7 @@ begin
 
   GridBottom := TPanel.Create(Self);
   GridBottom.Parent := BodyCard;
-  GridBottom.Align := alBottom;
+  GridBottom.Align := alBottom; MmpPrepareAligned(GridBottom);
   GridBottom.Height := 46;
   GridBottom.BevelOuter := bvNone;
   GridBottom.Color := clWhite;
@@ -1047,7 +1047,7 @@ begin
 
   FManagerGrid := TStringGrid.Create(Self);
   FManagerGrid.Parent := BodyCard;
-  FManagerGrid.Align := alClient;
+  FManagerGrid.Align := alClient; MmpPrepareAligned(FManagerGrid);
   FManagerGrid.FixedCols := 0;
   FManagerGrid.FixedRows := 1;
   FManagerGrid.ColCount := 4;
@@ -1070,31 +1070,31 @@ begin
 
   FPageControl := TPageControl.Create(Self);
   FPageControl.Parent := AParent;
-  FPageControl.Align := alClient;
+  FPageControl.Align := alClient; MmpPrepareAligned(FPageControl);
   FPageControl.Visible := False;
 
   FTabPortal := TTabSheet.Create(FPageControl);
-  FTabPortal.PageControl := FPageControl;
+  FTabPortal.PageControl := FPageControl; MmpPrepareTabSheet(FTabPortal);
   FTabPortal.Caption := 'Portal (Aplicativos)';
 
   FTabHistory := TTabSheet.Create(FPageControl);
-  FTabHistory.PageControl := FPageControl;
-  FTabHistory.Caption := 'Historico & Controle';
+  FTabHistory.PageControl := FPageControl; MmpPrepareTabSheet(FTabHistory);
+  FTabHistory.Caption := 'Historico && Controle';
 
   FTabProjects := TTabSheet.Create(FPageControl);
-  FTabProjects.PageControl := FPageControl;
-  FTabProjects.Caption := 'Projetos & Revisoes';
+  FTabProjects.PageControl := FPageControl; MmpPrepareTabSheet(FTabProjects);
+  FTabProjects.Caption := 'Projetos && Revisoes';
 
   FTabSync := TTabSheet.Create(FPageControl);
-  FTabSync.PageControl := FPageControl;
-  FTabSync.Caption := 'Sincronizacoes & Pendencias';
+  FTabSync.PageControl := FPageControl; MmpPrepareTabSheet(FTabSync);
+  FTabSync.Caption := 'Sincronizacoes && Pendencias';
 
   FTabArtifacts := TTabSheet.Create(FPageControl);
-  FTabArtifacts.PageControl := FPageControl;
-  FTabArtifacts.Caption := 'Artefatos & Catalogo';
+  FTabArtifacts.PageControl := FPageControl; MmpPrepareTabSheet(FTabArtifacts);
+  FTabArtifacts.Caption := 'Artefatos && Catalogo';
 
   FTabLog := TTabSheet.Create(FPageControl);
-  FTabLog.PageControl := FPageControl;
+  FTabLog.PageControl := FPageControl; MmpPrepareTabSheet(FTabLog);
   FTabLog.Caption := 'Log Centralizado (SQLite)';
 
   BuildPortalTab;
@@ -1117,7 +1117,7 @@ var
 begin
   FPortalScroll := TScrollBox.Create(Self);
   FPortalScroll.Parent := FTabPortal;
-  FPortalScroll.Align := alClient;
+  FPortalScroll.Align := alClient; MmpPrepareAligned(FPortalScroll);
   FPortalScroll.BorderStyle := bsNone;
   FPortalScroll.Color := CLR_BLUE_ICE;
   FPortalScroll.ParentBackground := False;
@@ -1248,15 +1248,15 @@ begin
     // Par (Azul):     Texto na Esquerda -> Pilula no Centro -> Imagem na Direita
     if IsBlueStrip then
     begin
-      IllustBox.Align := alRight;
-      ActionBox.Align := alRight;
-      TextZone.Align := alClient;
+      IllustBox.Align := alRight; MmpPrepareAligned(IllustBox);
+      ActionBox.Align := alRight; MmpPrepareAligned(ActionBox);
+      TextZone.Align := alClient; MmpPrepareAligned(TextZone);
     end
     else
     begin
-      IllustBox.Align := alLeft;
-      ActionBox.Align := alLeft;
-      TextZone.Align := alClient;
+      IllustBox.Align := alLeft; MmpPrepareAligned(IllustBox);
+      ActionBox.Align := alLeft; MmpPrepareAligned(ActionBox);
+      TextZone.Align := alClient; MmpPrepareAligned(TextZone);
     end;
 
     TitleL := TLabel.Create(Self);
@@ -1644,7 +1644,7 @@ var
 begin
   FProjectsGrid := TStringGrid.Create(Self);
   FProjectsGrid.Parent := FTabProjects;
-  FProjectsGrid.Align := alClient;
+  FProjectsGrid.Align := alClient; MmpPrepareAligned(FProjectsGrid);
   FProjectsGrid.FixedCols := 0;
   FProjectsGrid.FixedRows := 1;
   FProjectsGrid.ColCount := 8;
@@ -1670,7 +1670,7 @@ begin
 
   DetailPanel := TPanel.Create(Self);
   DetailPanel.Parent := FTabProjects;
-  DetailPanel.Align := alBottom;
+  DetailPanel.Align := alBottom; MmpPrepareAligned(DetailPanel);
   DetailPanel.Height := 250;
   DetailPanel.Caption := '';
   DetailPanel.BevelOuter := bvLowered;
@@ -1719,7 +1719,7 @@ var
 begin
   TopBar := TPanel.Create(Self);
   TopBar.Parent := FTabSync;
-  TopBar.Align := alTop;
+  TopBar.Align := alTop; MmpPrepareAligned(TopBar);
   TopBar.Height := 46;
   TopBar.Caption := '';
   TopBar.BevelOuter := bvNone;
@@ -1746,7 +1746,7 @@ begin
 
   FSyncJobsGrid := TStringGrid.Create(Self);
   FSyncJobsGrid.Parent := FTabSync;
-  FSyncJobsGrid.Align := alClient;
+  FSyncJobsGrid.Align := alClient; MmpPrepareAligned(FSyncJobsGrid);
   FSyncJobsGrid.FixedCols := 0;
   FSyncJobsGrid.FixedRows := 1;
   FSyncJobsGrid.ColCount := 7;
@@ -1769,14 +1769,14 @@ begin
 
   MissingPanel := TPanel.Create(Self);
   MissingPanel.Parent := FTabSync;
-  MissingPanel.Align := alBottom;
+  MissingPanel.Align := alBottom; MmpPrepareAligned(MissingPanel);
   MissingPanel.Height := 260;
   MissingPanel.Caption := '';
   MissingPanel.BevelOuter := bvNone;
 
   MidBar := TPanel.Create(Self);
   MidBar.Parent := MissingPanel;
-  MidBar.Align := alTop;
+  MidBar.Align := alTop; MmpPrepareAligned(MidBar);
   MidBar.Height := 42;
   MidBar.Caption := '';
   MidBar.BevelOuter := bvNone;
@@ -1803,7 +1803,7 @@ begin
 
   FMissingGrid := TStringGrid.Create(Self);
   FMissingGrid.Parent := MissingPanel;
-  FMissingGrid.Align := alClient;
+  FMissingGrid.Align := alClient; MmpPrepareAligned(FMissingGrid);
   FMissingGrid.FixedCols := 0;
   FMissingGrid.FixedRows := 1;
   FMissingGrid.ColCount := 7;
@@ -1833,7 +1833,7 @@ var
 begin
   FilterBar := TPanel.Create(Self);
   FilterBar.Parent := FTabArtifacts;
-  FilterBar.Align := alTop;
+  FilterBar.Align := alTop; MmpPrepareAligned(FilterBar);
   FilterBar.Height := 50;
   FilterBar.Caption := '';
   FilterBar.BevelOuter := bvNone;
@@ -1898,7 +1898,7 @@ begin
 
   FArtifactsGrid := TStringGrid.Create(Self);
   FArtifactsGrid.Parent := FTabArtifacts;
-  FArtifactsGrid.Align := alClient;
+  FArtifactsGrid.Align := alClient; MmpPrepareAligned(FArtifactsGrid);
   FArtifactsGrid.FixedCols := 0;
   FArtifactsGrid.FixedRows := 1;
   FArtifactsGrid.ColCount := 9;
@@ -1934,7 +1934,7 @@ var
 begin
   SumBar := TPanel.Create(Self);
   SumBar.Parent := FTabLog;
-  SumBar.Align := alTop;
+  SumBar.Align := alTop; MmpPrepareAligned(SumBar);
   SumBar.Height := 42;
   SumBar.BevelOuter := bvNone;
   SumBar.Color := CLR_BLUE_ICE;
@@ -1948,7 +1948,7 @@ begin
 
   FilterBar := TPanel.Create(Self);
   FilterBar.Parent := FTabLog;
-  FilterBar.Align := alTop;
+  FilterBar.Align := alTop; MmpPrepareAligned(FilterBar);
   FilterBar.Height := 44;
   FilterBar.Caption := '';
   FilterBar.BevelOuter := bvNone;
@@ -2002,13 +2002,13 @@ begin
 
   BottomBox := TPanel.Create(Self);
   BottomBox.Parent := FTabLog;
-  BottomBox.Align := alBottom;
+  BottomBox.Align := alBottom; MmpPrepareAligned(BottomBox);
   BottomBox.Height := 165;
   BottomBox.BevelOuter := bvNone;
 
   LDtl := TLabel.Create(Self);
   LDtl.Parent := BottomBox;
-  LDtl.Align := alTop;
+  LDtl.Align := alTop; MmpPrepareAligned(LDtl);
   LDtl.Height := 24;
   LDtl.Layout := tlCenter;
   LDtl.Font.Style := [fsBold];
@@ -2016,18 +2016,18 @@ begin
 
   FLogMemo := TMemo.Create(Self);
   FLogMemo.Parent := BottomBox;
-  FLogMemo.Align := alClient;
+  FLogMemo.Align := alClient; MmpPrepareAligned(FLogMemo);
   FLogMemo.ReadOnly := True;
   FLogMemo.ScrollBars := ssBoth;
 
   Split := TSplitter.Create(Self);
   Split.Parent := FTabLog;
-  Split.Align := alBottom;
+  Split.Align := alBottom; MmpPrepareAligned(Split);
   Split.Height := 5;
 
   FCentralLogGrid := TStringGrid.Create(Self);
   FCentralLogGrid.Parent := FTabLog;
-  FCentralLogGrid.Align := alClient;
+  FCentralLogGrid.Align := alClient; MmpPrepareAligned(FCentralLogGrid);
   FCentralLogGrid.ColCount := 7;
   FCentralLogGrid.RowCount := 2;
   FCentralLogGrid.FixedRows := 1;
@@ -2059,7 +2059,7 @@ var
 begin
   SummaryBar := TPanel.Create(Self);
   SummaryBar.Parent := FTabHistory;
-  SummaryBar.Align := alTop;
+  SummaryBar.Align := alTop; MmpPrepareAligned(SummaryBar);
   SummaryBar.Height := 46;
   SummaryBar.BevelOuter := bvNone;
   SummaryBar.Color := CLR_BLUE_ICE;
@@ -2073,7 +2073,7 @@ begin
 
   FilterBar := TPanel.Create(Self);
   FilterBar.Parent := FTabHistory;
-  FilterBar.Align := alTop;
+  FilterBar.Align := alTop; MmpPrepareAligned(FilterBar);
   FilterBar.Height := 42;
   FilterBar.BevelOuter := bvNone;
 
@@ -2132,13 +2132,13 @@ begin
 
   BottomBox := TPanel.Create(Self);
   BottomBox.Parent := FTabHistory;
-  BottomBox.Align := alBottom;
+  BottomBox.Align := alBottom; MmpPrepareAligned(BottomBox);
   BottomBox.Height := 175;
   BottomBox.BevelOuter := bvNone;
 
   LDtlTitle := TLabel.Create(Self);
   LDtlTitle.Parent := BottomBox;
-  LDtlTitle.Align := alTop;
+  LDtlTitle.Align := alTop; MmpPrepareAligned(LDtlTitle);
   LDtlTitle.Caption := '  Detalhes da acao selecionada (o que foi feito, versao, sinopse e artefatos):';
   LDtlTitle.Font.Style := [fsBold];
   LDtlTitle.Layout := tlCenter;
@@ -2146,18 +2146,18 @@ begin
 
   FHistoryDetailMemo := TMemo.Create(Self);
   FHistoryDetailMemo.Parent := BottomBox;
-  FHistoryDetailMemo.Align := alClient;
+  FHistoryDetailMemo.Align := alClient; MmpPrepareAligned(FHistoryDetailMemo);
   FHistoryDetailMemo.ReadOnly := True;
   FHistoryDetailMemo.ScrollBars := ssBoth;
 
   Split := TSplitter.Create(Self);
   Split.Parent := FTabHistory;
-  Split.Align := alBottom;
+  Split.Align := alBottom; MmpPrepareAligned(Split);
   Split.Height := 5;
 
   FHistoryGrid := TStringGrid.Create(Self);
   FHistoryGrid.Parent := FTabHistory;
-  FHistoryGrid.Align := alClient;
+  FHistoryGrid.Align := alClient; MmpPrepareAligned(FHistoryGrid);
   FHistoryGrid.ColCount := 6;
   FHistoryGrid.RowCount := 2;
   FHistoryGrid.FixedRows := 1;
@@ -3361,7 +3361,7 @@ begin
     for I := 0 to FSyncJobsGrid.ColCount - 1 do
       FSyncJobsGrid.Cells[I, 1] := '';
     if FProd.Loaded then
-      FSyncSummaryLabel.Caption := 'Nenhum job de sincronizacao registrado em shared/sync/.'
+      FSyncSummaryLabel.Caption := 'Nenhum job de sincronizacao registrado (shared/transactions, shared/events).'
     else
       FSyncSummaryLabel.Caption := 'Abra uma producao para acompanhar sincronizacoes.';
   end

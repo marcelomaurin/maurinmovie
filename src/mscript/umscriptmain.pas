@@ -179,7 +179,7 @@ var
 begin
   Head := TPanel.Create(Self);
   Head.Parent := Self;
-  Head.Align := alTop;
+  Head.Align := alTop; MmpPrepareAligned(Head);
   Head.Height := 68;
   Head.BevelOuter := bvNone;
   Head.Color := $003A3028;
@@ -229,7 +229,7 @@ begin
 
   Bottom := TPanel.Create(Self);
   Bottom.Parent := Self;
-  Bottom.Align := alBottom;
+  Bottom.Align := alBottom; MmpPrepareAligned(Bottom);
   Bottom.Height := 34;
   Bottom.BevelOuter := bvLowered;
 
@@ -240,7 +240,7 @@ begin
 
   Sidebar := TPanel.Create(Self);
   Sidebar.Parent := Self;
-  Sidebar.Align := alLeft;
+  Sidebar.Align := alLeft; MmpPrepareAligned(Sidebar);
   Sidebar.Width := 250;
   Sidebar.BevelOuter := bvNone;
   Sidebar.Color := $00EFEFEF;
@@ -272,22 +272,22 @@ begin
 
   FPageControl := TPageControl.Create(Self);
   FPageControl.Parent := Self;
-  FPageControl.Align := alClient;
+  FPageControl.Align := alClient; MmpPrepareAligned(FPageControl);
 
   TabSinopse := TTabSheet.Create(FPageControl);
-  TabSinopse.PageControl := FPageControl;
-  TabSinopse.Caption := 'Sinopse & IA';
+  TabSinopse.PageControl := FPageControl; MmpPrepareTabSheet(TabSinopse);
+  TabSinopse.Caption := 'Sinopse && IA';
 
   TabScenes := TTabSheet.Create(FPageControl);
-  TabScenes.PageControl := FPageControl;
-  TabScenes.Caption := 'Cenas & Roteiro';
+  TabScenes.PageControl := FPageControl; MmpPrepareTabSheet(TabScenes);
+  TabScenes.Caption := 'Cenas && Roteiro';
 
   TabChars := TTabSheet.Create(FPageControl);
-  TabChars.PageControl := FPageControl;
+  TabChars.PageControl := FPageControl; MmpPrepareTabSheet(TabChars);
   TabChars.Caption := 'Mapa de Personagens';
 
   TabLog := TTabSheet.Create(FPageControl);
-  TabLog.PageControl := FPageControl;
+  TabLog.PageControl := FPageControl; MmpPrepareTabSheet(TabLog);
   TabLog.Caption := 'Log Operacional';
 
   // Tab Sinopse
@@ -366,7 +366,7 @@ begin
   // Tab Cenas
   FScenesGrid := TStringGrid.Create(Self);
   FScenesGrid.Parent := TabScenes;
-  FScenesGrid.Align := alTop;
+  FScenesGrid.Align := alTop; MmpPrepareAligned(FScenesGrid);
   FScenesGrid.Height := 230;
   FScenesGrid.FixedCols := 0;
   FScenesGrid.FixedRows := 1;
@@ -391,7 +391,7 @@ begin
 
   DetailPanel := TPanel.Create(Self);
   DetailPanel.Parent := TabScenes;
-  DetailPanel.Align := alClient;
+  DetailPanel.Align := alClient; MmpPrepareAligned(DetailPanel);
   DetailPanel.BevelOuter := bvNone;
 
   L := TLabel.Create(Self); L.Parent := DetailPanel; L.Caption := 'Cabecalho:'; L.SetBounds(12, 10, 80, 18);
@@ -462,7 +462,7 @@ begin
   // Tab Log
   FLogMemo := TMemo.Create(Self);
   FLogMemo.Parent := TabLog;
-  FLogMemo.Align := alClient;
+  FLogMemo.Align := alClient; MmpPrepareAligned(FLogMemo);
   FLogMemo.ReadOnly := True;
   FLogMemo.ScrollBars := ssBoth;
 end;

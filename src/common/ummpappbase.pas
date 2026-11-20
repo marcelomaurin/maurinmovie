@@ -5,7 +5,7 @@ unit ummpappbase;
 interface
 
 uses
-  Classes, SysUtils, Graphics, Forms, LCLType, fpjson, jsonparser, Process,
+  Classes, SysUtils, Graphics, Controls, Forms, LCLType, fpjson, jsonparser, Process,
   mmpcommon, mmpsettings, ummpsha256, ummpprotocol, ummpdb;
 
 type
@@ -111,6 +111,17 @@ function StripMarkdownJsonFence(const Raw: string): string;
 
 function SavePlaceholderBitmap(const FilePath, Title, Subtitle, Footer: string;
   BgColor: TColor; WidthPx: Integer = 640; HeightPx: Integer = 360): Boolean;
+
+{ Telas montadas em codigo: o LCL calcula a ancora akRight/akBottom de um
+  controle pelo tamanho que o pai tem no momento do SetBounds. Sem handle, um
+  painel alinhado ainda tem o tamanho padrao (ex.: 170x50) e, quando o
+  alinhamento acontece, os controles ancorados a direita/abaixo "fogem" para
+  fora da janela (no GTK2 os botoes do cabecalho e das abas sumiam).
+  MmpPrepareAligned da ao controle alinhado o tamanho que ele tera, simulando o
+  alinhamento entre os irmaos ja criados; chame logo apos definir Align.
+  MmpPrepareTabSheet faz o mesmo para uma aba de TPageControl. }
+procedure MmpPrepareAligned(C: TControl);
+procedure MmpPrepareTabSheet(Tab: TControl);
 
 implementation
 
@@ -1226,6 +1237,54 @@ begin
   finally
     Bmp.Free;
   end;
+end;
+
+procedure MmpPrepareAligned(C: TControl);
+var
+  P: TWinControl;
+  R: TRect;
+  I: Integer;
+  Sib: TControl;
+begin
+  if (C = nil) or (C.Parent = nil) or (C.Align = alNone) or (C.Align = alCustom) then Exit;
+  P := C.Parent;
+  R := Rect(0, 0, P.ClientWidth, P.ClientHeight);
+  for I := 0 to P.ControlCount - 1 do
+  begin
+    Sib := P.Controls[I];
+    if Sib = C then Break;
+    if not Sib.Visible then Continue;
+    case Sib.Align of
+      alTop: Inc(R.Top, Sib.Height);
+      alBottom: Dec(R.Bottom, Sib.Height);
+      alLeft: Inc(R.Left, Sib.Width);
+      alRight: Dec(R.Right, Sib.Width);
+    else
+    end;
+  end;
+  if R.Right < R.Left then R.Right := R.Left;
+  if R.Bottom < R.Top then R.Bottom := R.Top;
+  case C.Align of
+    alTop: C.SetBounds(R.Left, R.Top, R.Right - R.Left, C.Height);
+    alBottom: C.SetBounds(R.Left, R.Bottom - C.Height, R.Right - R.Left, C.Height);
+    alLeft: C.SetBounds(R.Left, R.Top, C.Width, R.Bottom - R.Top);
+    alRight: C.SetBounds(R.Right - C.Width, R.Top, C.Width, R.Bottom - R.Top);
+    alClient: C.SetBounds(R.Left, R.Top, R.Right - R.Left, R.Bottom - R.Top);
+  else
+  end;
+end;
+
+procedure MmpPrepareTabSheet(Tab: TControl);
+const
+  TAB_HEADER = 28;
+  TAB_BORDER = 4;
+var
+  P: TWinControl;
+begin
+  if (Tab = nil) or (Tab.Parent = nil) then Exit;
+  P := Tab.Parent;
+  Tab.SetBounds(TAB_BORDER, TAB_HEADER, P.Width - 2 * TAB_BORDER,
+    P.Height - TAB_HEADER - TAB_BORDER);
 end;
 
 {$IFDEF WINDOWS}

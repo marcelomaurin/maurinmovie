@@ -9,7 +9,7 @@ uses
   ComCtrls, Grids, fpjson, jsonparser,
   aillmmodelcatalog, aiimagemodelcatalog, aisoundmodelcatalog, aivideomodelcatalog,
   aisoundruntime,
-  mmpcommon, mmpsettings, ummpaibridge;
+  mmpcommon, mmpsettings, ummpappbase, ummpaibridge;
 
 type
   TMmenuSettingsForm = class(TForm)
@@ -236,7 +236,7 @@ var
   Node, RootIA, TargetNode: TTreeNode;
   TargetTabLower: string;
 begin
-  Head := TPanel.Create(Self); Head.Parent := Self; Head.Align := alTop; Head.Height := 56;
+  Head := TPanel.Create(Self); Head.Parent := Self; Head.Align := alTop; MmpPrepareAligned(Head); Head.Height := 56;
   Head.BevelOuter := bvNone; Head.Color := $006E3B16; Head.ParentBackground := False;
 
   L := TLabel.Create(Self); L.Parent := Head;
@@ -244,7 +244,7 @@ begin
   L.Font.Size := 13; L.Font.Style := [fsBold]; L.Font.Color := clWhite;
   L.SetBounds(16, 16, 650, 24);
 
-  Footer := TPanel.Create(Self); Footer.Parent := Self; Footer.Align := alBottom; Footer.Height := 52;
+  Footer := TPanel.Create(Self); Footer.Parent := Self; Footer.Align := alBottom; MmpPrepareAligned(Footer); Footer.Height := 52;
   Footer.BevelOuter := bvLowered; Footer.Color := $00FCF7F1; Footer.ParentBackground := False;
 
   BtnSave := TButton.Create(Self); BtnSave.Parent := Footer; BtnSave.Caption := 'Salvar';
@@ -255,28 +255,28 @@ begin
   BtnCancel.ModalResult := mrCancel; BtnCancel.Cancel := True;
   BtnCancel.Anchors := [akTop, akRight]; BtnCancel.SetBounds(830, 10, 96, 32);
 
-  LeftPanel := TPanel.Create(Self); LeftPanel.Parent := Self; LeftPanel.Align := alLeft; LeftPanel.Width := 215;
+  LeftPanel := TPanel.Create(Self); LeftPanel.Parent := Self; LeftPanel.Align := alLeft; MmpPrepareAligned(LeftPanel); LeftPanel.Width := 215;
   LeftPanel.BevelOuter := bvNone;
 
-  FNavTree := TTreeView.Create(Self); FNavTree.Parent := LeftPanel; FNavTree.Align := alClient;
+  FNavTree := TTreeView.Create(Self); FNavTree.Parent := LeftPanel; FNavTree.Align := alClient; MmpPrepareAligned(FNavTree);
   FNavTree.ReadOnly := True;
   FNavTree.HideSelection := False;
   FNavTree.OnChange := @OnTreeSelectionChanged;
 
-  FPageControl := TPageControl.Create(Self); FPageControl.Parent := Self; FPageControl.Align := alClient;
+  FPageControl := TPageControl.Create(Self); FPageControl.Parent := Self; FPageControl.Align := alClient; MmpPrepareAligned(FPageControl);
   FPageControl.ShowTabs := False;
 
-  TabGeral := TTabSheet.Create(FPageControl); TabGeral.PageControl := FPageControl; TabGeral.Caption := 'Geral';
-  TabProd := TTabSheet.Create(FPageControl); TabProd.PageControl := FPageControl; TabProd.Caption := 'Producao';
-  TabIA := TTabSheet.Create(FPageControl); TabIA.PageControl := FPageControl; TabIA.Caption := 'Provedores IA';
-  TabApps := TTabSheet.Create(FPageControl); TabApps.PageControl := FPageControl; TabApps.Caption := 'Programas';
-  TabPrompts := TTabSheet.Create(FPageControl); TabPrompts.PageControl := FPageControl; TabPrompts.Caption := 'Prompts';
-  TabMidia := TTabSheet.Create(FPageControl); TabMidia.PageControl := FPageControl; TabMidia.Caption := 'Midia e Render';
-  TabPresets := TTabSheet.Create(FPageControl); TabPresets.PageControl := FPageControl; TabPresets.Caption := 'Predefinicoes';
-  TabPol := TTabSheet.Create(FPageControl); TabPol.PageControl := FPageControl; TabPol.Caption := 'Politicas';
-  TabTools := TTabSheet.Create(FPageControl); TabTools.PageControl := FPageControl; TabTools.Caption := 'Ferramentas';
-  TabNet := TTabSheet.Create(FPageControl); TabNet.PageControl := FPageControl; TabNet.Caption := 'Rede e Interface';
-  TabAcesso := TTabSheet.Create(FPageControl); TabAcesso.PageControl := FPageControl; TabAcesso.Caption := 'Controle de Acesso';
+  TabGeral := TTabSheet.Create(FPageControl); TabGeral.PageControl := FPageControl; MmpPrepareTabSheet(TabGeral); TabGeral.Caption := 'Geral';
+  TabProd := TTabSheet.Create(FPageControl); TabProd.PageControl := FPageControl; MmpPrepareTabSheet(TabProd); TabProd.Caption := 'Producao';
+  TabIA := TTabSheet.Create(FPageControl); TabIA.PageControl := FPageControl; MmpPrepareTabSheet(TabIA); TabIA.Caption := 'Provedores IA';
+  TabApps := TTabSheet.Create(FPageControl); TabApps.PageControl := FPageControl; MmpPrepareTabSheet(TabApps); TabApps.Caption := 'Programas';
+  TabPrompts := TTabSheet.Create(FPageControl); TabPrompts.PageControl := FPageControl; MmpPrepareTabSheet(TabPrompts); TabPrompts.Caption := 'Prompts';
+  TabMidia := TTabSheet.Create(FPageControl); TabMidia.PageControl := FPageControl; MmpPrepareTabSheet(TabMidia); TabMidia.Caption := 'Midia e Render';
+  TabPresets := TTabSheet.Create(FPageControl); TabPresets.PageControl := FPageControl; MmpPrepareTabSheet(TabPresets); TabPresets.Caption := 'Predefinicoes';
+  TabPol := TTabSheet.Create(FPageControl); TabPol.PageControl := FPageControl; MmpPrepareTabSheet(TabPol); TabPol.Caption := 'Politicas';
+  TabTools := TTabSheet.Create(FPageControl); TabTools.PageControl := FPageControl; MmpPrepareTabSheet(TabTools); TabTools.Caption := 'Ferramentas';
+  TabNet := TTabSheet.Create(FPageControl); TabNet.PageControl := FPageControl; MmpPrepareTabSheet(TabNet); TabNet.Caption := 'Rede e Interface';
+  TabAcesso := TTabSheet.Create(FPageControl); TabAcesso.PageControl := FPageControl; MmpPrepareTabSheet(TabAcesso); TabAcesso.Caption := 'Controle de Acesso';
 
   // Tree nodes with Data = tab marker (PageIndex ou 10..16 para tipos IA, 20 para Controle de Acesso)
   TargetNode := FNavTree.Items.AddObject(nil, 'Geral e Ambiente', Pointer(0));
@@ -1961,7 +1961,7 @@ begin
 
     Head := TPanel.Create(Frm);
     Head.Parent := Frm;
-    Head.Align := alTop;
+    Head.Align := alTop; MmpPrepareAligned(Head);
     Head.Height := 58;
     Head.BevelOuter := bvNone;
     Head.Color := $006E3B16;

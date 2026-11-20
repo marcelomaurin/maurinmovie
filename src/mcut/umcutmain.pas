@@ -127,7 +127,7 @@ var
   BtnOpen, BtnAiCfg, BtnBuildTL, BtnApplyCut, BtnAddRate, BtnAnalyze, BtnCorr, BtnExport: TButton;
   L: TLabel;
 begin
-  Head := TPanel.Create(Self); Head.Parent := Self; Head.Align := alTop; Head.Height := 68;
+  Head := TPanel.Create(Self); Head.Parent := Self; Head.Align := alTop; MmpPrepareAligned(Head); Head.Height := 68;
   Head.BevelOuter := bvNone; Head.Color := $003A3028; Head.ParentBackground := False;
 
   L := TLabel.Create(Self); L.Parent := Head; L.Caption := 'MaurinMovie  |  6 - MCut';
@@ -149,12 +149,12 @@ begin
   BtnExport.Anchors := [akTop, akRight]; BtnExport.SetBounds(900, 17, 174, 34);
   BtnExport.OnClick := @OnSaveAndExportClick;
 
-  Bottom := TPanel.Create(Self); Bottom.Parent := Self; Bottom.Align := alBottom; Bottom.Height := 34;
+  Bottom := TPanel.Create(Self); Bottom.Parent := Self; Bottom.Align := alBottom; MmpPrepareAligned(Bottom); Bottom.Height := 34;
   Bottom.BevelOuter := bvLowered;
   FStatusLabel := TLabel.Create(Self); FStatusLabel.Parent := Bottom; FStatusLabel.SetBounds(12, 9, 1100, 18);
   FStatusLabel.Caption := 'Pronto.';
 
-  Sidebar := TPanel.Create(Self); Sidebar.Parent := Self; Sidebar.Align := alLeft; Sidebar.Width := 255;
+  Sidebar := TPanel.Create(Self); Sidebar.Parent := Self; Sidebar.Align := alLeft; MmpPrepareAligned(Sidebar); Sidebar.Width := 255;
   Sidebar.BevelOuter := bvNone; Sidebar.Color := $00EFEFEF; Sidebar.ParentBackground := False;
 
   BtnOpen := TButton.Create(Self); BtnOpen.Parent := Sidebar; BtnOpen.Caption := 'Abrir producao...';
@@ -181,13 +181,13 @@ begin
   BtnCorr := TButton.Create(Self); BtnCorr.Parent := Sidebar; BtnCorr.Caption := 'Etapa 4: Solicitar Correcao (MScene)';
   BtnCorr.SetBounds(12, 170, 231, 34); BtnCorr.OnClick := @OnRequestSceneCorrectionClick;
 
-  PC := TPageControl.Create(Self); PC.Parent := Self; PC.Align := alClient;
-  TabTimeline := TTabSheet.Create(PC); TabTimeline.PageControl := PC; TabTimeline.Caption := 'Etapa 1 & 2: Timeline & Transicoes';
-  TabFeedback := TTabSheet.Create(PC); TabFeedback.PageControl := PC; TabFeedback.Caption := 'Etapa 3: Sessoes de Publico';
-  TabAnalysis := TTabSheet.Create(PC); TabAnalysis.PageControl := PC; TabAnalysis.Caption := 'Etapa 4: Analise & Evidencias';
-  TabLog := TTabSheet.Create(PC); TabLog.PageControl := PC; TabLog.Caption := 'Log Operacional';
+  PC := TPageControl.Create(Self); PC.Parent := Self; PC.Align := alClient; MmpPrepareAligned(PC);
+  TabTimeline := TTabSheet.Create(PC); TabTimeline.PageControl := PC; MmpPrepareTabSheet(TabTimeline); TabTimeline.Caption := 'Etapa 1 && 2: Timeline && Transicoes';
+  TabFeedback := TTabSheet.Create(PC); TabFeedback.PageControl := PC; MmpPrepareTabSheet(TabFeedback); TabFeedback.Caption := 'Etapa 3: Sessoes de Publico';
+  TabAnalysis := TTabSheet.Create(PC); TabAnalysis.PageControl := PC; MmpPrepareTabSheet(TabAnalysis); TabAnalysis.Caption := 'Etapa 4: Analise && Evidencias';
+  TabLog := TTabSheet.Create(PC); TabLog.PageControl := PC; MmpPrepareTabSheet(TabLog); TabLog.Caption := 'Log Operacional';
 
-  ClipEditBar := TPanel.Create(Self); ClipEditBar.Parent := TabTimeline; ClipEditBar.Align := alBottom;
+  ClipEditBar := TPanel.Create(Self); ClipEditBar.Parent := TabTimeline; ClipEditBar.Align := alBottom; MmpPrepareAligned(ClipEditBar);
   ClipEditBar.Height := 58; ClipEditBar.BevelOuter := bvLowered;
 
   L := TLabel.Create(Self); L.Parent := ClipEditBar; L.Caption := 'In (s):'; L.SetBounds(12, 18, 45, 18);
@@ -202,7 +202,7 @@ begin
   BtnApplyCut := TButton.Create(Self); BtnApplyCut.Parent := ClipEditBar; BtnApplyCut.Caption := 'Aplicar Corte / Transicao';
   BtnApplyCut.SetBounds(458, 12, 195, 30); BtnApplyCut.OnClick := @OnApplyClipCutClick;
 
-  FTimelineGrid := TStringGrid.Create(Self); FTimelineGrid.Parent := TabTimeline; FTimelineGrid.Align := alClient;
+  FTimelineGrid := TStringGrid.Create(Self); FTimelineGrid.Parent := TabTimeline; FTimelineGrid.Align := alClient; MmpPrepareAligned(FTimelineGrid);
   FTimelineGrid.FixedCols := 0; FTimelineGrid.FixedRows := 1; FTimelineGrid.ColCount := 8; FTimelineGrid.RowCount := 2;
   FTimelineGrid.Options := FTimelineGrid.Options + [goRowSelect, goColSizing];
   FTimelineGrid.Cells[0, 0] := 'Ordem'; FTimelineGrid.Cells[1, 0] := 'Cena ID';
@@ -214,14 +214,14 @@ begin
   FTimelineGrid.ColWidths[6] := 90; FTimelineGrid.ColWidths[7] := 150;
   FTimelineGrid.OnSelection := @OnTimelineSelection;
 
-  FeedBar := TPanel.Create(Self); FeedBar.Parent := TabFeedback; FeedBar.Align := alTop;
+  FeedBar := TPanel.Create(Self); FeedBar.Parent := TabFeedback; FeedBar.Align := alTop; MmpPrepareAligned(FeedBar);
   FeedBar.Height := 46; FeedBar.BevelOuter := bvNone;
   BtnAddRate := TButton.Create(Self); BtnAddRate.Parent := FeedBar; BtnAddRate.Caption := '+ Registrar Avaliacao de Cena...';
   BtnAddRate.SetBounds(12, 8, 250, 30); BtnAddRate.OnClick := @OnAddFeedbackClick;
   BtnAnalyze := TButton.Create(Self); BtnAnalyze.Parent := FeedBar; BtnAnalyze.Caption := 'Consolidar Analise (Etapa 4)';
   BtnAnalyze.SetBounds(274, 8, 230, 30); BtnAnalyze.OnClick := @OnAnalyzeFeedbackClick;
 
-  FRatingsGrid := TStringGrid.Create(Self); FRatingsGrid.Parent := TabFeedback; FRatingsGrid.Align := alClient;
+  FRatingsGrid := TStringGrid.Create(Self); FRatingsGrid.Parent := TabFeedback; FRatingsGrid.Align := alClient; MmpPrepareAligned(FRatingsGrid);
   FRatingsGrid.FixedCols := 0; FRatingsGrid.FixedRows := 1; FRatingsGrid.ColCount := 6; FRatingsGrid.RowCount := 2;
   FRatingsGrid.Options := FRatingsGrid.Options + [goRowSelect, goColSizing];
   FRatingsGrid.Cells[0, 0] := 'Sessao'; FRatingsGrid.Cells[1, 0] := 'Revisao Filme';
@@ -230,10 +230,10 @@ begin
   FRatingsGrid.ColWidths[0] := 120; FRatingsGrid.ColWidths[1] := 95; FRatingsGrid.ColWidths[2] := 115;
   FRatingsGrid.ColWidths[3] := 120; FRatingsGrid.ColWidths[4] := 55; FRatingsGrid.ColWidths[5] := 350;
 
-  FAnalysisMemo := TMemo.Create(Self); FAnalysisMemo.Parent := TabAnalysis; FAnalysisMemo.Align := alClient;
+  FAnalysisMemo := TMemo.Create(Self); FAnalysisMemo.Parent := TabAnalysis; FAnalysisMemo.Align := alClient; MmpPrepareAligned(FAnalysisMemo);
   FAnalysisMemo.ReadOnly := True; FAnalysisMemo.ScrollBars := ssBoth;
 
-  FLogMemo := TMemo.Create(Self); FLogMemo.Parent := TabLog; FLogMemo.Align := alClient;
+  FLogMemo := TMemo.Create(Self); FLogMemo.Parent := TabLog; FLogMemo.Align := alClient; MmpPrepareAligned(FLogMemo);
   FLogMemo.ReadOnly := True; FLogMemo.ScrollBars := ssBoth;
 end;
 
@@ -584,8 +584,8 @@ end;
 
 procedure TMcutMainForm.OnRequestSceneCorrectionClick(Sender: TObject);
 var
-  Idx: Integer;
-  Reason, EvtId: string;
+  Idx, J: Integer;
+  Reason, EvtId, SceneProjId, SceneRev: string;
 begin
   if not FProd.Loaded or (Length(FClips) = 0) then Exit;
   Idx := FTimelineGrid.Row - 1;
@@ -593,11 +593,29 @@ begin
   Reason := 'Ajustar ritmo/transicao da cena ' + FClips[Idx].SceneId;
   if not InputQuery('Solicitar Correcao em Cascata', 'Motivo da revisao para MScene:', Reason) then Exit;
 
-  if EmitSyncEvent(FProd.RootDir, 'MCut', 'MScene', FClips[Idx].SceneId,
-    FCurrentRevId, Reason, 'MScene', 'queued', '', EvtId) then
+  { O destino e o projeto da cena no MScene (project_id e revisao exata), nao o scene_id. }
+  SceneProjId := '';
+  SceneRev := FClips[Idx].SceneRevision;
+  for J := 0 to High(FProd.Projects) do
+    if (FProd.Projects[J].SoftwareIndex = 5) and SameText(FProd.Projects[J].SceneId, FClips[Idx].SceneId) then
+    begin
+      SceneProjId := FProd.Projects[J].ProjectId;
+      SceneRev := FProd.Projects[J].ActiveRevision;
+      Break;
+    end;
+  if SceneProjId = '' then
+  begin
+    MessageDlg('A cena ' + FClips[Idx].SceneId + ' ainda nao tem projeto no MScene.', mtWarning, [mbOK], 0);
+    Exit;
+  end;
+
+  if EmitSyncEvent(FProd.RootDir, 'MCut', 'MScene', SceneProjId,
+    SceneRev, Reason, 'MScene', 'queued', '', EvtId, '', FClips[Idx].SceneId,
+    FProj.ProjectId, FCurrentRevId, FAi.Settings.UserName) then
   begin
     LogMsg('Solicitacao de correcao emitida (' + EvtId + ') para MScene.');
-    MessageDlg('Evento de correcao ' + EvtId + ' registrado em shared/sync/.', mtInformation, [mbOK], 0);
+    MessageDlg('Pedido de correcao ' + EvtId + ' registrado para o MScene (cena ' +
+      FClips[Idx].SceneId + ').' + LineEnding + 'Acompanhe em Sincronizacoes no MMenu.', mtInformation, [mbOK], 0);
   end;
 end;
 
