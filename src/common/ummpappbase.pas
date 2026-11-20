@@ -74,7 +74,7 @@ function SavePlaceholderBitmap(const FilePath, Title, Subtitle, Footer: string;
 implementation
 
 uses
-  {$IFDEF WINDOWS}Windows{$ELSE}BaseUnix{$ENDIF};
+  {$IFDEF WINDOWS}Windows{$ELSE}BaseUnix, Unix{$ENDIF};
 
 function HandleStandardCliEarlyExit(App: TMMApp): Boolean;
 var

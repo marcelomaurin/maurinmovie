@@ -219,34 +219,46 @@ end;
 function MmpInitSqliteLibrary: Boolean;
 var
   ExeDir, Candidate: string;
-  Candidates: array[0..4] of string;
+  Candidates: TStringList;
   I: Integer;
 begin
   if GSqliteInitialized then Exit(True);
-  ExeDir := ExtractFileDir(ExpandFileName(ParamStr(0)));
-  Candidates[0] := IncludeTrailingPathDelimiter(ExeDir) + 'sqlite3.dll';
-  Candidates[1] := ExpandFileName(IncludeTrailingPathDelimiter(ExeDir) + '..' + PathDelim + 'bin' + PathDelim + 'sqlite3.dll');
-  Candidates[2] := ExpandFileName(IncludeTrailingPathDelimiter(ExeDir) + '..' + PathDelim + '..' + PathDelim + 'bin' + PathDelim + 'sqlite3.dll');
-  Candidates[3] := 'sqlite3.dll';
-  Candidates[4] := 'C:\Windows\System32\winsqlite3.dll';
-
-  for I := 0 to High(Candidates) do
-  begin
-    Candidate := Candidates[I];
-    if (I <= 2) or (I = 4) then
+  ExeDir := IncludeTrailingPathDelimiter(ExtractFileDir(ExpandFileName(ParamStr(0))));
+  Candidates := TStringList.Create;
+  try
+    {$IFDEF WINDOWS}
+    Candidates.Add(ExeDir + 'sqlite3.dll');
+    Candidates.Add(ExpandFileName(ExeDir + '..' + PathDelim + 'bin' + PathDelim + 'sqlite3.dll'));
+    Candidates.Add(ExpandFileName(ExeDir + '..' + PathDelim + '..' + PathDelim + 'bin' + PathDelim + 'sqlite3.dll'));
+    Candidates.Add('sqlite3.dll');
+    Candidates.Add('winsqlite3.dll');
+    {$ELSE}
+      {$IFDEF DARWIN}
+      Candidates.Add(ExeDir + 'libsqlite3.dylib');
+      Candidates.Add('libsqlite3.dylib');
+      {$ELSE}
+      Candidates.Add(ExeDir + 'libsqlite3.so.0');
+      Candidates.Add('libsqlite3.so.0');
+      Candidates.Add('libsqlite3.so');
+      {$ENDIF}
+    {$ENDIF}
+    for I := 0 to Candidates.Count - 1 do
     begin
-      if not FileExists(Candidate) then Continue;
-    end;
-    SQLiteDefaultLibrary := Candidate;
-    try
-      if TryInitializeSqlite(UnicodeString(Candidate)) > 0 then
-      begin
-        GSqliteInitialized := True;
-        Exit(True);
+      Candidate := Candidates[I];
+      if (ExtractFilePath(Candidate) <> '') and not FileExists(Candidate) then Continue;
+      SQLiteDefaultLibrary := Candidate;
+      try
+        if TryInitializeSqlite(UnicodeString(Candidate)) > 0 then
+        begin
+          GSqliteInitialized := True;
+          Exit(True);
+        end;
+      except
+        // Tentar a próxima biblioteca.
       end;
-    except
-      // try next candidate
     end;
+  finally
+    Candidates.Free;
   end;
   Result := False;
 end;

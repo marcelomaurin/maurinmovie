@@ -7,7 +7,7 @@ interface
 uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
   ComCtrls, Grids, fpjson, jsonparser, aih264decoder,
-  ummpprotocol, ummpappbase, ummpaibridge;
+  ummpprotocol, ummpappbase, ummpaibridge, ummpvideo, LCLIntf, mmpcommon, FileUtil, ummpsha256;
 
 type
   TSceneSegmentWork = record
@@ -16,7 +16,7 @@ type
     DurationSec: Integer;
     PromptText: string;
     Status: string; // pending | generated | approved | rejected
-    VideoRelUri: string;
+    VideoRelUri, VideoPath, OpeningPath: string;
   end;
 
   TMsceneMainForm = class(TForm)
@@ -34,7 +34,9 @@ type
     FSegments: array of TSceneSegmentWork;
     FPrevSceneLinkStatus: string;
     FNextSceneLinkStatus: string;
-    FAssembledRelUri: string;
+    FAssembledRelUri, FAssembledPath: string;
+    FLoadedBoard: Boolean;
+    FPreferredSceneId, FPreferredSceneRevision: string;
 
     FHeaderProdLabel: TLabel;
     FHeaderSourceLabel: TLabel;
@@ -53,6 +55,7 @@ type
     procedure LoadSelectedSceneWork;
     procedure EnsureSceneProjectExists(const SceneId: string);
     procedure RefreshSegmentsGrid;
+    function TryOpenPublishedSceneAt(Index: Integer): Boolean;
     procedure OnDecoderFrame(Sender: TObject; ABitmap: TBitmap);
 
     procedure OnOpenProdClick(Sender: TObject);
@@ -222,6 +225,7 @@ end;
 procedure TMsceneMainForm.LoadProduction(const ProdRoot, ProjId, RevId: string);
 var
   ErrMsg, CurRev: string;
+  Args: TMMLaunchArgs;
 begin
   if not ResolveAppProject(ProdRoot, 5, ProjId, RevId, FProd, FProj,
     FProjectDir, CurRev, ErrMsg) then
@@ -229,6 +233,17 @@ begin
     MessageDlg(ErrMsg, mtError, [mbOK], 0);
     Exit;
   end;
+
+  Args := ParseLaunchArgs;
+  FPreferredSceneId := FProj.SceneId;
+  FPreferredSceneRevision := '';
+  if FPreferredSceneId <> '' then
+  begin
+    FPreferredSceneRevision := CurRev;
+    FProjectDir := ExtractFileDir(ExtractFileDir(FProjectDir));
+  end
+  else if ProdRoot = Args.Production then
+    FPreferredSceneId := Args.SceneId;
 
   FAi.LoadForProduction(FProd.RootDir);
   FindProjectByApp(FProd, 1, FScriptProj);
@@ -277,13 +292,20 @@ begin
   if FSceneCombo.Items.Count > 0 then
   begin
     FSceneCombo.ItemIndex := 0;
+    if FPreferredSceneId <> '' then
+      for I := 0 to FSceneCombo.Items.Count - 1 do
+        if Pos(FPreferredSceneId + ' | ', FSceneCombo.Items[I]) = 1 then
+        begin
+          FSceneCombo.ItemIndex := I;
+          Break;
+        end;
     LoadSelectedSceneWork;
   end;
 end;
 
 procedure TMsceneMainForm.EnsureSceneProjectExists(const SceneId: string);
 var
-  ProjJsonPath, RevDir, NowIso: string;
+  ProjJsonPath, RevDir, NowIso, SceneProjectId: string;
   ProjObj, ManObj: TJSONObject;
   Arr: TJSONArray;
 begin
@@ -292,6 +314,7 @@ begin
   if FileExists(ProjJsonPath) then Exit;
 
   NowIso := CurrentIsoUtc;
+  SceneProjectId := GenerateMmpId('pr_mscene_' + SceneId);
   RevDir := FSceneProjectDir + PathDelim + 'revisions' + PathDelim + 'r0001';
   ForceDirectories(RevDir + PathDelim + 'video' + PathDelim + 'segments');
   ForceDirectories(RevDir + PathDelim + 'video' + PathDelim + 'assembled');
@@ -301,7 +324,7 @@ begin
   try
     ProjObj.Add('schema', MMP_PROJECT_SCHEMA);
     ProjObj.Add('production_id', FProd.ProductionId);
-    ProjObj.Add('project_id', GenerateMmpId('pr_mscene_' + SceneId));
+    ProjObj.Add('project_id', SceneProjectId);
     ProjObj.Add('application', 'MScene');
     ProjObj.Add('scene_id', SceneId);
     ProjObj.Add('active_revision', 'r0001');
@@ -319,7 +342,7 @@ begin
   try
     ManObj.Add('schema', MMP_MANIFEST_SCHEMA);
     ManObj.Add('production_id', FProd.ProductionId);
-    ManObj.Add('project_id', '');
+    ManObj.Add('project_id', SceneProjectId);
     ManObj.Add('application', 'MScene');
     ManObj.Add('revision_id', 'r0001');
     ManObj.Add('state', 'draft');
@@ -334,12 +357,24 @@ end;
 
 procedure TMsceneMainForm.LoadSelectedSceneWork;
 var
-  S, BoardPath, Content, SceneProjPath: string;
+  S, BoardPath, BoardDir, Content, SceneProjPath: string;
   P: SizeInt;
   Data: TJSONData;
   Obj, BObj, SObj: TJSONObject;
   BArr, SArr: TJSONArray;
-  I, J: Integer;
+  I, J, K: Integer;
+  SceneProj: TMmpProjectRef;
+  Rev: TMmpRevisionInfo;
+  function HasExactSource(const Project: TMmpProjectRef): Boolean;
+  var
+    SourceIndex: Integer;
+  begin
+    for SourceIndex := 0 to High(Rev.Sources) do
+      if (Rev.Sources[SourceIndex].ProjectId = Project.ProjectId) and
+        (Rev.Sources[SourceIndex].RevisionId = Project.ActiveRevision) then Exit(True);
+    Result := False;
+  end;
+
 begin
   if FSceneCombo.ItemIndex < 0 then Exit;
   S := FSceneCombo.Text;
@@ -369,9 +404,17 @@ begin
     else Data.Free;
   end;
 
+  if (FPreferredSceneRevision <> '') and (FCurrentSceneId = FPreferredSceneId) then
+    FSceneRevId := FPreferredSceneRevision;
+  FPreferredSceneRevision := '';
   SetLength(FSegments, 0);
+  FAssembledRelUri := '';
+  FAssembledPath := '';
+  FLoadedBoard := False;
+  FPreviewImg.Picture.Clear;
   BoardPath := ExtractFileDir(FBoardProj.ProjectFilePath) + PathDelim + 'revisions' +
     PathDelim + FBoardProj.ActiveRevision + PathDelim + 'storyboard' + PathDelim + 'scenes.json';
+  BoardDir := ExtractFileDir(ExtractFileDir(BoardPath));
   if FileExists(BoardPath) and ReadTextFileUtf8(BoardPath, Content) then
   begin
     Data := GetJSON(Content);
@@ -387,6 +430,7 @@ begin
             BObj := TJSONObject(BArr.Items[I]);
             if SameText(BObj.Get('scene_id', ''), FCurrentSceneId) then
             begin
+              FLoadedBoard := True;
               if BObj.Find('segments') is TJSONArray then
               begin
                 SArr := TJSONArray(BObj.Find('segments'));
@@ -399,7 +443,18 @@ begin
                   FSegments[J].DurationSec := SObj.Get('duration_seconds', 15);
                   FSegments[J].PromptText := FCurrentSceneHeading + ' | ' + SObj.Get('direction_notes', '');
                   FSegments[J].Status := 'pending';
+                  ResolveSafePath(BoardDir, SObj.Get('opening_uri', ''), FSegments[J].OpeningPath);
                 end;
+              end;
+              if Length(FSegments) = 0 then
+              begin
+                SetLength(FSegments, 1);
+                FSegments[0].SegmentId := 'sg_' + FCurrentSceneId;
+                FSegments[0].OrderIdx := 1;
+                FSegments[0].DurationSec := BObj.Get('estimated_duration_seconds', 30);
+                FSegments[0].PromptText := FCurrentSceneHeading + ' | ' + BObj.Get('direction_notes', '');
+                FSegments[0].Status := 'pending';
+                ResolveSafePath(BoardDir, BObj.Get('opening_uri', ''), FSegments[0].OpeningPath);
               end;
               Break;
             end;
@@ -411,25 +466,56 @@ begin
     end;
   end;
 
-  if Length(FSegments) = 0 then
-  begin
-    SetLength(FSegments, 1);
-    FSegments[0].SegmentId := GenerateMmpId('sg');
-    FSegments[0].OrderIdx := 1;
-    FSegments[0].DurationSec := 30;
-    FSegments[0].PromptText := FCurrentSceneHeading;
-    FSegments[0].Status := 'pending';
-  end;
-
   if FSceneCombo.ItemIndex = 0 then
     FPrevSceneLinkStatus := 'primeira_cena'
   else
     FPrevSceneLinkStatus := 'pendente';
 
-  if FSceneCombo.ItemIndex >= FSceneCombo.Items.Count - 1 then
-    FNextSceneLinkStatus := 'ligacao_posterior_pendente'
-  else
-    FNextSceneLinkStatus := 'pendente';
+  FNextSceneLinkStatus := 'ligacao_posterior_pendente';
+
+  for I := 0 to High(FProd.Projects) do
+    if SameText(FProd.Projects[I].ProjectFilePath, SceneProjPath) then
+    begin
+      SceneProj := FProd.Projects[I];
+      if not FindRevisionInProject(SceneProj, FSceneRevId, Rev) then Break;
+      if not (HasExactSource(FBoardProj) and HasExactSource(FScriptProj) and
+        HasExactSource(FVisualProj) and HasExactSource(FSoundProj)) then Break;
+      for J := 0 to High(Rev.Artifacts) do
+        with Rev.Artifacts[J] do
+        begin
+          if (ResolvedPath = '') or (Sha256 = '') or not FileExists(ResolvedPath) then Continue;
+          if (Kind <> 'scene.details') and (Kind <> 'video.scene') and (Kind <> 'video.segment') then Continue;
+          if not SameText(SHA256File(ResolvedPath), Sha256) then Continue;
+          if (Kind = 'scene.details') and ReadTextFileUtf8(ResolvedPath, Content) then
+          begin
+            Data := GetJSON(Content);
+            try
+              if Data is TJSONObject then
+              begin
+                FPrevSceneLinkStatus := TJSONObject(Data).Get('prev_link', FPrevSceneLinkStatus);
+                FNextSceneLinkStatus := TJSONObject(Data).Get('next_link', FNextSceneLinkStatus);
+              end;
+            finally
+              Data.Free;
+            end;
+          end;
+          if (Kind = 'video.scene') and (MimeType = 'video/mp4') then
+          begin
+            FAssembledPath := ResolvedPath;
+            FAssembledRelUri := 'video/assembled/scene.mp4';
+          end;
+          if (Kind <> 'video.segment') or (MimeType <> 'video/mp4') then Continue;
+          for K := 0 to High(FSegments) do
+            if FSegments[K].SegmentId = SegmentId then
+            begin
+              FSegments[K].VideoPath := ResolvedPath;
+              FSegments[K].VideoRelUri := 'video/segments/' + SegmentId + '.mp4';
+              FSegments[K].Status := Status;
+              Break;
+            end;
+        end;
+      Break;
+    end;
 
   FPrevLinkLabel.Caption := 'Anterior: ' + FPrevSceneLinkStatus;
   FNextLinkLabel.Caption := 'Proxima: ' + FNextSceneLinkStatus;
@@ -461,161 +547,208 @@ end;
 
 procedure TMsceneMainForm.OnGenerateCurrentSceneClick(Sender: TObject);
 var
-  RevDir, PreviewBmp, RelJson, Resp, Err: string;
-  SegObj: TJSONObject;
+  WorkDir, OutputFile, Err, ProbeExe: string;
   I: Integer;
+  Duration: Double;
+  HasAudio: Boolean;
 begin
-  if FCurrentSceneId = '' then Exit;
-  RevDir := FSceneProjectDir + PathDelim + 'revisions' + PathDelim + FSceneRevId;
-  ForceDirectories(RevDir + PathDelim + 'video' + PathDelim + 'segments');
-
+  if not FLoadedBoard then
+  begin
+    MessageDlg('Publique o storyboard desta cena no MBoard primeiro.', mtWarning, [mbOK], 0);
+    Exit;
+  end;
+  FAi.ReloadIfChanged;
+  ProbeExe := FAi.Settings.ToolFfprobe;
+  if ProbeExe = '' then ProbeExe := FAi.Settings.DetectToolPath('ffprobe');
+  WorkDir := FSceneProjectDir + PathDelim + 'work' + PathDelim + 'segments';
+  if not ForceDirectories(WorkDir) then Exit;
   for I := 0 to High(FSegments) do
   begin
-    if FAi.IsConfigured and (I = 0) then
+    if FSegments[I].Status = 'approved' then Continue;
+    if (FSegments[I].Status = 'generated') and FileExists(FSegments[I].VideoPath) then Continue;
+    if not FileExists(FSegments[I].OpeningPath) then
     begin
-      if FAi.Ask('Gere instrucao de direcao visual para geracao de video deste segmento.',
-        FSegments[I].PromptText, Resp, Err) then
-        FSegments[I].PromptText := Resp;
+      LogMsg('Quadro inicial ausente no segmento ' + FSegments[I].SegmentId);
+      Break;
     end;
-
-    RelJson := 'video/segments/' + FCurrentSceneId + '_' + FSegments[I].SegmentId + '.json';
-    FSegments[I].VideoRelUri := RelJson;
+    OutputFile := WorkDir + PathDelim + GenerateMmpId('video') + '.mp4';
+    if not FAi.GenerateVideo(FSegments[I].PromptText, OutputFile, Err,
+      FSegments[I].OpeningPath, '', FSegments[I].DurationSec) or
+      not ProbeMmpVideo(ProbeExe, OutputFile, Duration, HasAudio, Err) then
+    begin
+      DeleteFile(OutputFile);
+      LogMsg('Falha no segmento ' + FSegments[I].SegmentId + ': ' + Err);
+      Break;
+    end;
+    FSegments[I].VideoPath := OutputFile;
+    FSegments[I].VideoRelUri := 'video/segments/' + FSegments[I].SegmentId + '.mp4';
     FSegments[I].Status := 'generated';
-
-    SegObj := TJSONObject.Create;
-    try
-      SegObj.Add('scene_id', FCurrentSceneId);
-      SegObj.Add('segment_id', FSegments[I].SegmentId);
-      SegObj.Add('duration_sec', FSegments[I].DurationSec);
-      SegObj.Add('prompt', FSegments[I].PromptText);
-      SegObj.Add('status', 'generated');
-      AtomicWriteTextFile(RevDir + PathDelim + StringReplace(RelJson, '/', PathDelim, [rfReplaceAll]),
-        SegObj.FormatJSON, False);
-    finally
-      SegObj.Free;
-    end;
+    FAssembledPath := '';
+    FAssembledRelUri := '';
+    LogMsg('Segmento gerado para revisão: ' + FSegments[I].SegmentId);
   end;
-
-  PreviewBmp := RevDir + PathDelim + 'video' + PathDelim + 'segments' + PathDelim +
-    FCurrentSceneId + '_preview.bmp';
-  SavePlaceholderBitmap(PreviewBmp, 'MScene: ' + FCurrentSceneId,
-    FCurrentSceneHeading, 'Sub-blocos gerados: ' + IntToStr(Length(FSegments)), $00283848);
-  if FileExists(PreviewBmp) then
-    FPreviewImg.Picture.LoadFromFile(PreviewBmp);
-
-  if FAi.GenerateVideo(FCurrentSceneHeading,
-    RevDir + PathDelim + 'video' + PathDelim + 'segments' + PathDelim + FCurrentSceneId + '_preview.mp4',
-    Err, PreviewBmp, '', 4) then
-    LogMsg('Video de previa gerado via TAIUnifiedVideo para cena ' + FCurrentSceneId);
-
   RefreshSegmentsGrid;
-  LogMsg('Etapa 1: Gerados ' + IntToStr(Length(FSegments)) + ' sub-blocos apenas para cena ' +
-    FCurrentSceneId + ' (sem lote automatico).');
 end;
 
 procedure TMsceneMainForm.OnApproveSegmentClick(Sender: TObject);
 var
   Idx: Integer;
+  Review: TModalResult;
 begin
   Idx := FSegmentsGrid.Row - 1;
   if (Idx < 0) or (Idx > High(FSegments)) then Exit;
-  FSegments[Idx].Status := 'approved';
+  if not FileExists(FSegments[Idx].VideoPath) then
+  begin
+    MessageDlg('Gere o vídeo deste segmento primeiro.', mtWarning, [mbOK], 0);
+    Exit;
+  end;
+  if not OpenDocument(FSegments[Idx].VideoPath) then
+  begin
+    MessageDlg('Não foi possível abrir o vídeo para revisão.', mtError, [mbOK], 0);
+    Exit;
+  end;
+  Review := MessageDlg('Depois de assistir, confirme a aprovação do segmento. ' +
+    'Escolha Não para reprovar e permitir gerar novamente.', mtConfirmation, [mbYes, mbNo, mbCancel], 0);
+  if Review = mrYes then FSegments[Idx].Status := 'approved';
+  if Review = mrNo then
+  begin
+    FSegments[Idx].Status := 'rejected';
+    FAssembledPath := '';
+    FAssembledRelUri := '';
+  end;
   RefreshSegmentsGrid;
 end;
 
 procedure TMsceneMainForm.OnAssembleSceneClick(Sender: TObject);
 var
   I: Integer;
-  RevDir, RelAssembled: string;
-  Obj: TJSONObject;
-  Arr: TJSONArray;
+  Clips: array of TMmpVideoClip;
+  OutputFile, Ffmpeg, Ffprobe, Err: string;
+  Duration: Double;
 begin
   if Length(FSegments) = 0 then Exit;
+  SetLength(Clips, Length(FSegments));
   for I := 0 to High(FSegments) do
   begin
-    if FSegments[I].Status = 'pending' then
+    if (FSegments[I].Status <> 'approved') or not FileExists(FSegments[I].VideoPath) then
     begin
-      MessageDlg('Gere e valide todos os sub-blocos antes de costurar a cena.', mtWarning, [mbOK], 0);
+      MessageDlg('Gere e valide todos os segmentos antes de costurar a cena.', mtWarning, [mbOK], 0);
       Exit;
     end;
+    Clips[I].FileName := FSegments[I].VideoPath;
   end;
 
-  RevDir := FSceneProjectDir + PathDelim + 'revisions' + PathDelim + FSceneRevId;
-  ForceDirectories(RevDir + PathDelim + 'video' + PathDelim + 'assembled');
-  RelAssembled := 'video/assembled/' + FCurrentSceneId + '_assembled.json';
-  FAssembledRelUri := RelAssembled;
-
-  Obj := TJSONObject.Create;
-  try
-    Obj.Add('schema', 'mmp.mscene.assembled/1');
-    Obj.Add('scene_id', FCurrentSceneId);
-    Obj.Add('heading', FCurrentSceneHeading);
-    Arr := TJSONArray.Create;
-    for I := 0 to High(FSegments) do
-      Arr.Add(FSegments[I].SegmentId);
-    Obj.Add('segment_order', Arr);
-    Obj.Add('prev_link', FPrevSceneLinkStatus);
-    Obj.Add('next_link', FNextSceneLinkStatus);
-    AtomicWriteTextFile(RevDir + PathDelim + StringReplace(RelAssembled, '/', PathDelim, [rfReplaceAll]),
-      Obj.FormatJSON, False);
-  finally
-    Obj.Free;
+  FAi.ReloadIfChanged;
+  Ffmpeg := FAi.Settings.ToolFfmpeg;
+  if Ffmpeg = '' then Ffmpeg := FAi.Settings.DetectToolPath('ffmpeg');
+  Ffprobe := FAi.Settings.ToolFfprobe;
+  if Ffprobe = '' then Ffprobe := FAi.Settings.DetectToolPath('ffprobe');
+  OutputFile := FSceneProjectDir + PathDelim + 'work' + PathDelim +
+    GenerateMmpId('scene') + '.mp4';
+  if not RenderMmpVideo(Ffmpeg, Ffprobe, OutputFile, Clips, FAi.Settings.ProdWidth,
+    FAi.Settings.ProdHeight, FAi.Settings.ProdFps, Duration, Err) then
+  begin
+    MessageDlg(Err, mtError, [mbOK], 0);
+    Exit;
   end;
-  LogMsg('Etapa 2: Cena ' + FCurrentSceneId + ' costurada em ' + RelAssembled);
+  FAssembledPath := OutputFile;
+  FAssembledRelUri := 'video/assembled/scene.mp4';
+  OpenDocument(FAssembledPath);
+  LogMsg('Cena costurada. Assista ao vídeo antes de salvar a revisão.');
+end;
+
+function TMsceneMainForm.TryOpenPublishedSceneAt(Index: Integer): Boolean;
+var
+  I, J, DelimiterPos: Integer;
+  Id: string;
+  Rev: TMmpRevisionInfo;
+begin
+  Result := False;
+  if (Index < 0) or (Index >= FSceneCombo.Items.Count) then Exit;
+  Id := FSceneCombo.Items[Index];
+  DelimiterPos := Pos(' | ', Id);
+  if DelimiterPos > 0 then SetLength(Id, DelimiterPos - 1);
+  for I := 0 to High(FProd.Projects) do
+    if (FProd.Projects[I].SceneId = Id) and
+      FindRevisionInProject(FProd.Projects[I], FProd.Projects[I].ActiveRevision, Rev) then
+      for J := 0 to High(Rev.Artifacts) do
+        with Rev.Artifacts[J] do
+          if (Kind = 'video.scene') and (MimeType = 'video/mp4') and
+            (Status = 'approved') and FileExists(ResolvedPath) then
+          begin
+            Exit(OpenDocument(ResolvedPath));
+          end;
 end;
 
 procedure TMsceneMainForm.OnApprovePrevLinkClick(Sender: TObject);
 begin
-  FPrevSceneLinkStatus := 'ligacao_anterior_aprovada';
-  FPrevLinkLabel.Caption := 'Anterior: ' + FPrevSceneLinkStatus;
+  if not FileExists(FAssembledPath) or not TryOpenPublishedSceneAt(FSceneCombo.ItemIndex - 1) then
+  begin
+    MessageDlg('A cena atual e o vídeo aprovado da cena anterior precisam estar disponíveis.',
+      mtInformation, [mbOK], 0);
+    Exit;
+  end;
+  OpenDocument(FAssembledPath);
+  if MessageDlg('Você assistiu à ligação e aprova a continuidade com a cena anterior?',
+    mtConfirmation, [mbYes, mbNo], 0) = mrYes then
+  begin
+    FPrevSceneLinkStatus := 'ligacao_anterior_aprovada';
+    FPrevLinkLabel.Caption := 'Anterior: ' + FPrevSceneLinkStatus;
+  end;
 end;
 
 procedure TMsceneMainForm.OnApproveNextLinkClick(Sender: TObject);
 begin
-  if FSceneCombo.ItemIndex >= FSceneCombo.Items.Count - 1 then
+  if not FileExists(FAssembledPath) or not TryOpenPublishedSceneAt(FSceneCombo.ItemIndex + 1) then
   begin
     FNextSceneLinkStatus := 'ligacao_posterior_pendente';
-    FNextLinkLabel.Caption := 'Proxima: ' + FNextSceneLinkStatus;
-    MessageDlg('Nao ha proxima cena disponivel; ligacao permanece como pendente (nao aprovada por suposicao).',
+    FNextLinkLabel.Caption := 'Próxima: ' + FNextSceneLinkStatus;
+    MessageDlg('A cena atual e o vídeo aprovado da próxima cena precisam estar disponíveis.',
       mtInformation, [mbOK], 0);
-  end
-  else
+    Exit;
+  end;
+  OpenDocument(FAssembledPath);
+  if MessageDlg('Você assistiu à ligação e aprova a continuidade com a próxima cena?',
+    mtConfirmation, [mbYes, mbNo], 0) = mrYes then
   begin
     FNextSceneLinkStatus := 'ligacao_posterior_aprovada';
-    FNextLinkLabel.Caption := 'Proxima: ' + FNextSceneLinkStatus;
+    FNextLinkLabel.Caption := 'Próxima: ' + FNextSceneLinkStatus;
   end;
 end;
 
 procedure TMsceneMainForm.OnSaveSceneProjectClick(Sender: TObject);
 var
-  SceneProjPath, PrepRev, RevDir, NewRev, ErrMsg, FinalState, OldRevDir, SrcF, DstF: string;
+  SceneProjPath, PrepRev, RevDir, NewRev, ErrMsg, FinalState, SrcF, DstF: string;
   Srcs: array of TMmpSourceRef;
   Arts: array of TMmpArtifactInput;
   RevInfo: TMmpRevisionInfo;
   I, ArtN: Integer;
-  FS1, FS2: TFileStream;
+  UpdatedProd: TMmpProduction;
+  Details: TJSONObject;
+  SegmentsJson: TJSONArray;
+  SegmentJson: TJSONObject;
 begin
   if not FProd.Loaded or (FCurrentSceneId = '') then Exit;
+  if not FileExists(FAssembledPath) then
+  begin
+    MessageDlg('Costure a cena antes de salvar a revisão.', mtWarning, [mbOK], 0);
+    Exit;
+  end;
+  if MessageDlg('Você revisou e aprova o vídeo da cena?', mtConfirmation,
+    [mbYes, mbNo], 0) <> mrYes then Exit;
   SceneProjPath := FSceneProjectDir + PathDelim + 'project.json';
   if not PrepareNextRevisionDir(SceneProjPath, PrepRev, RevDir) then Exit;
-  OldRevDir := FSceneProjectDir + PathDelim + 'revisions' + PathDelim + FSceneRevId;
 
   SetLength(Arts, 0);
   for I := 0 to High(FSegments) do
   begin
     if FSegments[I].VideoRelUri = '' then Continue;
-    SrcF := OldRevDir + PathDelim + StringReplace(FSegments[I].VideoRelUri, '/', PathDelim, [rfReplaceAll]);
+    SrcF := FSegments[I].VideoPath;
     DstF := RevDir + PathDelim + StringReplace(FSegments[I].VideoRelUri, '/', PathDelim, [rfReplaceAll]);
-    if FileExists(SrcF) and not SameText(SrcF, DstF) then
+    if not ForceDirectories(ExtractFileDir(DstF)) or not CopyFile(SrcF, DstF) then
     begin
-      ForceDirectories(ExtractFileDir(DstF));
-      FS1 := TFileStream.Create(SrcF, fmOpenRead or fmShareDenyNone);
-      try
-        FS2 := TFileStream.Create(DstF, fmCreate);
-        try FS2.CopyFrom(FS1, 0); finally FS2.Free; end;
-      finally
-        FS1.Free;
-      end;
+      MessageDlg('Não foi possível copiar o vídeo para a revisão: ' + SrcF, mtError, [mbOK], 0);
+      Exit;
     end;
     ArtN := Length(Arts);
     SetLength(Arts, ArtN + 1);
@@ -624,24 +757,18 @@ begin
     Arts[ArtN].SceneId := FCurrentSceneId;
     Arts[ArtN].SegmentId := FSegments[I].SegmentId;
     Arts[ArtN].RelUri := FSegments[I].VideoRelUri;
-    Arts[ArtN].MimeType := 'application/json';
+    Arts[ArtN].MimeType := 'video/mp4';
     Arts[ArtN].Status := FSegments[I].Status;
   end;
 
   if FAssembledRelUri <> '' then
   begin
-    SrcF := OldRevDir + PathDelim + StringReplace(FAssembledRelUri, '/', PathDelim, [rfReplaceAll]);
+    SrcF := FAssembledPath;
     DstF := RevDir + PathDelim + StringReplace(FAssembledRelUri, '/', PathDelim, [rfReplaceAll]);
-    if FileExists(SrcF) and not SameText(SrcF, DstF) then
+    if not ForceDirectories(ExtractFileDir(DstF)) or not CopyFile(SrcF, DstF) then
     begin
-      ForceDirectories(ExtractFileDir(DstF));
-      FS1 := TFileStream.Create(SrcF, fmOpenRead or fmShareDenyNone);
-      try
-        FS2 := TFileStream.Create(DstF, fmCreate);
-        try FS2.CopyFrom(FS1, 0); finally FS2.Free; end;
-      finally
-        FS1.Free;
-      end;
+      MessageDlg('Não foi possível copiar o vídeo para a revisão: ' + SrcF, mtError, [mbOK], 0);
+      Exit;
     end;
     ArtN := Length(Arts);
     SetLength(Arts, ArtN + 1);
@@ -649,9 +776,43 @@ begin
     Arts[ArtN].Kind := 'video.scene';
     Arts[ArtN].SceneId := FCurrentSceneId;
     Arts[ArtN].RelUri := FAssembledRelUri;
-    Arts[ArtN].MimeType := 'application/json';
+    Arts[ArtN].MimeType := 'video/mp4';
     Arts[ArtN].Status := 'approved';
   end;
+
+  Details := TJSONObject.Create;
+  try
+    Details.Add('schema', 'mmp.mscene.assembled/1');
+    Details.Add('scene_id', FCurrentSceneId);
+    Details.Add('prev_link', FPrevSceneLinkStatus);
+    Details.Add('next_link', FNextSceneLinkStatus);
+    SegmentsJson := TJSONArray.Create;
+    Details.Add('segments', SegmentsJson);
+    for I := 0 to High(FSegments) do
+    begin
+      SegmentJson := TJSONObject.Create;
+      SegmentJson.Add('segment_id', FSegments[I].SegmentId);
+      SegmentJson.Add('order', FSegments[I].OrderIdx);
+      SegmentJson.Add('duration_seconds', FSegments[I].DurationSec);
+      SegmentJson.Add('prompt', FSegments[I].PromptText);
+      SegmentsJson.Add(SegmentJson);
+    end;
+    if not AtomicWriteTextFile(RevDir + PathDelim + 'video' + PathDelim +
+      'scene_details.json', Details.FormatJSON, False) then
+    begin
+      MessageDlg('Não foi possível gravar os dados da cena.', mtError, [mbOK], 0);
+      Exit;
+    end;
+  finally
+    Details.Free;
+  end;
+  ArtN := Length(Arts);
+  SetLength(Arts, ArtN + 1);
+  Arts[ArtN].Kind := 'scene.details';
+  Arts[ArtN].SceneId := FCurrentSceneId;
+  Arts[ArtN].RelUri := 'video/scene_details.json';
+  Arts[ArtN].MimeType := 'application/json';
+  Arts[ArtN].Status := 'approved';
 
   SetLength(Srcs, 4);
   Srcs[0].ProjectId := FScriptProj.ProjectId; Srcs[0].RevisionId := FScriptProj.ActiveRevision;
@@ -663,7 +824,10 @@ begin
   Srcs[3].ProjectId := FSoundProj.ProjectId; Srcs[3].RevisionId := FSoundProj.ActiveRevision;
   if FindRevisionInProject(FSoundProj, FSoundProj.ActiveRevision, RevInfo) then Srcs[3].ManifestSha256 := RevInfo.ManifestSha256;
 
-  if FNextSceneLinkStatus = 'ligacao_posterior_pendente' then
+  if (FPrevSceneLinkStatus <> 'primeira_cena') and
+    (FPrevSceneLinkStatus <> 'ligacao_anterior_aprovada') then
+    FinalState := 'ligacao_anterior_pendente'
+  else if FNextSceneLinkStatus = 'ligacao_posterior_pendente' then
     FinalState := 'ligacao_posterior_pendente'
   else
     FinalState := 'finalizada';
@@ -672,6 +836,7 @@ begin
     FSceneRevId, FinalState, '', Srcs, Arts, NewRev, ErrMsg, PrepRev) then
   begin
     FSceneRevId := NewRev;
+    if ummpprotocol.LoadProduction(FProd.RootDir, False, UpdatedProd) then FProd := UpdatedProd;
     LogMsg('Projeto da cena ' + FCurrentSceneId + ' salvo na revisao ' + NewRev + ' [' + FinalState + ']');
   end
   else
