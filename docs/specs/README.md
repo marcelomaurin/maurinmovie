@@ -66,3 +66,5 @@ Cada marco termina com testes passando (`tests/<app>/`) usando o provedor de IA 
 ## Como usar estas especificações com uma IA
 
 Para implementar um programa, entregue à IA: `00-comum.md`, a especificação do programa, as imagens das telas dele, o documento-fonte em `docs/` e o código atual de `src/common/` e `src/<app>/`. Peça que implemente por etapas (barra de etapas da tela) e que escreva os testes dos critérios de aceite da seção 10 antes de declarar uma etapa pronta.
+
+Para conferir o que já está no código e as pendências por programa, veja o [estado da implementação](../13-estado-da-implementacao.md).

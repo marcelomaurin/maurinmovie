@@ -130,6 +130,8 @@ function RunMScriptHeadlessEvent(const Args: TMMLaunchArgs): Integer;
 
 implementation
 
+uses ummpeditorial;
+
 constructor TMscriptMainForm.Create(TheOwner: TComponent);
 var
   ProdRoot, ProjId, RevId, MMenuVer, ProdId: string;
@@ -1424,11 +1426,12 @@ var
   Proj: TMmpProjectRef;
   ProjDir, RevId, ErrMsg, EvtStr, ScriptStr, PrepRev, RevDir, NewRev, ArchivePath: string;
   EvtData, ScriptData: TJSONData;
-  EvtObj, ScriptObj, ReqObj, OpObj, SceneObj: TJSONObject;
-  OpsArr, ScenesArr: TJSONArray;
-  EvtId, SceneId, FieldName, FromTxt, ToTxt, ActionTxt: string;
-  I, J: Integer;
-  AppliedAny, FoundTarget: Boolean;
+  EvtObj, ScriptObj: TJSONObject;
+  OpsArr: TJSONArray;
+  RevInfo: TMmpRevisionInfo;
+  EvtId, TxId, TxPath, TxContent: string;
+  TxData: TJSONData;
+  I: Integer;
   Arts: array of TMmpArtifactInput;
   Srcs: array of TMmpSourceRef;
 begin
@@ -1452,6 +1455,22 @@ begin
   EvtObj := TJSONObject(EvtData);
   try
     EvtId := EvtObj.Get('event_id', '');
+    if (EvtId = '') or (EvtObj.Get('target_app', '') <> 'MScript') or
+      (EvtObj.Get('project_id', '') <> Proj.ProjectId) or
+      (EvtObj.Get('status', '') = 'cancelled') then Exit(EXIT_INVALID_ARGS);
+    TxId := EvtObj.Get('transaction_id', '');
+    if (TxId <> '') and (ExtractFileName(TxId) = TxId) and
+      ResolveSafePath(Prod.RootDir, 'shared/transactions/' + TxId + '.json', TxPath) and
+      ReadTextFileUtf8(TxPath, TxContent) then
+    begin
+      TxData := GetJSON(TxContent);
+      try
+        if (TxData is TJSONObject) and (TJSONObject(TxData).Get('status', '') = 'cancelled') then
+          Exit(EXIT_INVALID_ARGS);
+      finally
+        TxData.Free;
+      end;
+    end;
     // Idempotency check across published revisions
     for I := 0 to High(Proj.Revisions) do
     begin
@@ -1462,6 +1481,12 @@ begin
       end;
     end;
 
+    if (RevId <> Proj.ActiveRevision) or
+      (EvtObj.Get('source_revision', '') <> Proj.ActiveRevision) then
+    begin
+      WriteCliLine('O roteiro mudou desde a solicitação. Confira a revisão e emita outra correção.');
+      Exit(EXIT_EVENT_AMBIGUOUS);
+    end;
     if not ReadTextFileUtf8(IncludeTrailingPathDelimiter(ProjDir) + 'revisions' +
       PathDelim + RevId + PathDelim + 'scripts' + PathDelim + 'roteiro.json', ScriptStr) then
       Exit(EXIT_NOT_FOUND);
@@ -1470,59 +1495,36 @@ begin
     if not (ScriptData is TJSONObject) then begin ScriptData.Free; Exit(EXIT_INTEGRITY_ERROR); end;
     ScriptObj := TJSONObject(ScriptData);
     try
-      AppliedAny := False;
-      if (EvtObj.Find('requested_change') is TJSONObject) and
-         (ScriptObj.Find('scenes') is TJSONArray) then
+      OpsArr := nil;
+      if EvtObj.FindPath('requested_change.operations') is TJSONArray then
+        OpsArr := TJSONArray(EvtObj.FindPath('requested_change.operations'));
+      if not ApplyEditorialOperations(ScriptObj, OpsArr, ErrMsg) then
       begin
-        ReqObj := TJSONObject(EvtObj.Find('requested_change'));
-        ScenesArr := TJSONArray(ScriptObj.Find('scenes'));
-        if ReqObj.Find('operations') is TJSONArray then
-        begin
-          OpsArr := TJSONArray(ReqObj.Find('operations'));
-          for I := 0 to OpsArr.Count - 1 do
-          begin
-            OpObj := TJSONObject(OpsArr.Items[I]);
-            SceneId := OpObj.Get('scene_id', '');
-            FieldName := OpObj.Get('field', 'action');
-            FromTxt := OpObj.Get('from', '');
-            ToTxt := OpObj.Get('to', OpObj.Get('to_name', ''));
-            FoundTarget := False;
-            for J := 0 to ScenesArr.Count - 1 do
-            begin
-              SceneObj := TJSONObject(ScenesArr.Items[J]);
-              if (SceneId = '') or SameText(SceneObj.Get('scene_id', ''), SceneId) then
-              begin
-                ActionTxt := SceneObj.Get(FieldName, '');
-                if (FromTxt <> '') and (Pos(FromTxt, ActionTxt) > 0) then
-                begin
-                  SceneObj.Strings[FieldName] := StringReplace(ActionTxt, FromTxt, ToTxt, [rfReplaceAll]);
-                  FoundTarget := True;
-                  AppliedAny := True;
-                end;
-              end;
-            end;
-            if (FromTxt <> '') and not FoundTarget then
-            begin
-              WriteCliLine('Mudanca ambigua/nao encontrada: ' + FromTxt);
-              Exit(EXIT_EVENT_AMBIGUOUS);
-            end;
-          end;
-        end;
+        WriteCliLine(ErrMsg);
+        Exit(EXIT_EVENT_AMBIGUOUS);
       end;
 
       if not PrepareNextRevisionDir(Proj.ProjectFilePath, PrepRev, RevDir) then
         Exit(EXIT_UNEXPECTED_ERROR);
 
-      AtomicWriteTextFile(RevDir + PathDelim + 'scripts' + PathDelim + 'roteiro.json',
-        ScriptObj.FormatJSON, False);
+      ScriptObj.Strings['updated_at'] := CurrentIsoUtc;
+      if not AtomicWriteTextFile(RevDir + PathDelim + 'scripts' + PathDelim + 'roteiro.json',
+        ScriptObj.FormatJSON, False) then Exit(EXIT_UNEXPECTED_ERROR);
+      if not AtomicWriteTextFile(RevDir + PathDelim + 'scripts' + PathDelim + 'roteiro.md',
+        EditorialScriptMarkdown(ScriptObj), False) then Exit(EXIT_UNEXPECTED_ERROR);
 
-      SetLength(Srcs, 0);
-      SetLength(Arts, 1);
+      if FindRevisionInProject(Proj, RevId, RevInfo) then Srcs := Copy(RevInfo.Sources);
+      SetLength(Arts, 2);
       Arts[0].ArtifactId := GenerateMmpId('a');
       Arts[0].Kind := 'script.scene';
       Arts[0].RelUri := 'scripts/roteiro.json';
       Arts[0].MimeType := 'application/json';
       Arts[0].Status := 'approved';
+      Arts[1].ArtifactId := GenerateMmpId('a');
+      Arts[1].Kind := 'script.character';
+      Arts[1].RelUri := 'scripts/roteiro.md';
+      Arts[1].MimeType := 'text/markdown';
+      Arts[1].Status := 'approved';
 
       if not PublishProjectRevision(Prod.ProductionId, Proj.ProjectFilePath, 'MScript',
         RevId, 'approved', EvtId, Srcs, Arts, NewRev, ErrMsg, PrepRev) then
@@ -1534,10 +1536,9 @@ begin
       EvtObj.Strings['status'] := 'published';
       ArchivePath := IncludeTrailingPathDelimiter(Prod.RootDir) + 'shared' + PathDelim +
         'events' + PathDelim + 'archive' + PathDelim + ExtractFileName(Args.EventFile);
-      AtomicWriteTextFile(ArchivePath, EvtObj.FormatJSON, False);
-      DeleteFile(Args.EventFile);
+      if AtomicWriteTextFile(ArchivePath, EvtObj.FormatJSON, False) then DeleteFile(Args.EventFile);
       AppendJsonLogLine(Prod.RootDir, 'MScript', 'info',
-        'Headless patch ' + EvtId + ' aplicado -> ' + NewRev + ' (applied=' + BoolToStr(AppliedAny, True) + ')');
+        'Headless patch ' + EvtId + ' aplicado -> ' + NewRev);
       Result := EXIT_OK;
     finally
       ScriptObj.Free;

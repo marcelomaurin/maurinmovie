@@ -1075,7 +1075,7 @@ begin
 
   ReqData := Obj.Find('requested_change');
   if ReqData is TJSONObject then
-    Job.RequestedChange := TJSONObject(ReqData).Get('type', 'patch')
+    Job.RequestedChange := TJSONObject(ReqData).Get('summary', TJSONObject(ReqData).Get('type', 'patch'))
   else if ReqData <> nil then
     Job.RequestedChange := ReqData.AsString;
 
@@ -1183,7 +1183,7 @@ end;
 
 procedure ScanSyncJobs(var Prod: TMmpProduction);
 var
-  I: Integer;
+  I, J: Integer;
 begin
   LoadSyncJobsFromFile(Prod, Prod.RootDir + PathDelim + 'projects' + PathDelim +
     MmpAppFolders[0] + PathDelim + 'sync_jobs.json');
@@ -1198,6 +1198,16 @@ begin
       PathDelim + 'inbox' + PathDelim + MmpAppNames[I]);
   ScanJsonFilesInDir(Prod, Prod.RootDir + PathDelim + 'shared' + PathDelim + 'events' +
     PathDelim + 'archive');
+
+  for I := 0 to High(Prod.SyncJobs) do
+    if (Prod.SyncJobs[I].Status = 'cancelled') and
+      (ExtractFileName(ExtractFileDir(Prod.SyncJobs[I].SourceFile)) = 'transactions') then
+      for J := 0 to High(Prod.SyncJobs) do
+        if (Prod.SyncJobs[J].TransactionId = Prod.SyncJobs[I].TransactionId) and
+          (Prod.SyncJobs[J].Status <> 'published') and
+          (Prod.SyncJobs[J].Status <> 'approved') and
+          (Prod.SyncJobs[J].Status <> 'complete') then
+          Prod.SyncJobs[J].Status := 'cancelled';
 end;
 
 procedure AuditSourcesAndArtifacts(var Prod: TMmpProduction; CheckHashes: Boolean);
@@ -2172,12 +2182,29 @@ begin
       Exit(Proj.Revisions[R].ManifestSha256);
 end;
 
+function HasSceneVideo(const Prod: TMmpProduction): Boolean;
+var
+  P, R, A: Integer;
+begin
+  for P := 0 to High(Prod.Projects) do
+    with Prod.Projects[P] do
+      if (SoftwareIndex = 5) and (SceneId <> '') then
+        for R := 0 to High(Revisions) do
+          if Revisions[R].RevisionId = ActiveRevision then
+            for A := 0 to High(Revisions[R].Artifacts) do
+              with Revisions[R].Artifacts[A] do
+                if (Kind = 'video.scene') and (MimeType = 'video/mp4') and
+                  (Status = 'approved') and (Sha256 <> '') and FileExists(ResolvedPath) then
+                  Exit(True);
+  Result := False;
+end;
+
 function MmpEvaluateStageStatus(const Prod: TMmpProduction; AppIdx: Integer): TMmpStageStatus;
 var
   Proj, UpProj: TMmpProjectRef;
   K, R, S: Integer;
   ActiveRevInfo: TMmpRevisionInfo;
-  HasAppRev, FoundInSources: Boolean;
+  HasAppRev, FoundInSources, UpstreamReady: Boolean;
   UpSha: string;
 begin
   FillChar(Result, SizeOf(Result), 0);
@@ -2197,13 +2224,20 @@ begin
     Exit;
   end;
 
-  Result.HasActivity := MmpProjectHasActivity(Proj);
+  if AppIdx = 5 then
+    Result.HasActivity := HasSceneVideo(Prod)
+  else
+    Result.HasActivity := MmpProjectHasActivity(Proj);
   Result.ActiveRevision := Proj.ActiveRevision;
   Result.StatusText := Proj.Status;
 
   for K := 1 to AppIdx - 1 do
   begin
-    if not FindProjByAppIdx(Prod, K, UpProj) or (not MmpProjectHasActivity(UpProj)) then
+    if K = 5 then
+      UpstreamReady := HasSceneVideo(Prod)
+    else
+      UpstreamReady := FindProjByAppIdx(Prod, K, UpProj) and MmpProjectHasActivity(UpProj);
+    if not UpstreamReady then
     begin
       if Result.MissingPrereqs <> '' then
         Result.MissingPrereqs := Result.MissingPrereqs + ', ';

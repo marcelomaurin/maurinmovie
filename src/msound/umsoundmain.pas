@@ -8,7 +8,8 @@ uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
   ComCtrls, Grids, fpjson, jsonparser,
   aivoicesynthesizer, aiaudioplayback,
-  ummpprotocol, ummpappbase, ummpaibridge;
+  ummpprotocol, ummpappbase, ummpaibridge, ummpvideo, ummpdialogue,
+  mmpcommon, mmpsettings, FileUtil, Math;
 
 type
   TSoundProfileItem = record
@@ -25,11 +26,14 @@ type
   end;
 
   TSoundTimelineEvent = record
-    SceneId: string;
-    StartSec: Integer;
-    EndSec: Integer;
+    SceneId, SegmentId: string;
+    StartMs, EndMs, SceneDurationMs, SegmentStartMs, SegmentEndMs: Integer;
     AssetId: string;
     TextOrCue: string;
+  end;
+
+  TSoundPreview = record
+    SceneId, SegmentId, RelUri, FilePath: string;
   end;
 
   TMsoundMainForm = class(TForm)
@@ -42,6 +46,8 @@ type
     FScriptProj, FVisualProj, FBoardProj: TMmpProjectRef;
     FProjectDir: string;
     FCurrentRevId: string;
+    FScriptRev, FBoardRev, FVisualRev: string;
+    FPreviews: array of TSoundPreview;
     FProfiles: array of TSoundProfileItem;
     FEvents: array of TSoundTimelineEvent;
     FSelectedProfile: Integer;
@@ -66,6 +72,9 @@ type
     procedure RefreshEventsGrid;
     procedure LoadProfileToEditor(Idx: Integer);
     function ProfilesToJson: string;
+    function ProfilePath(const RelUri: string): string;
+    procedure AddPreview(const SceneId, SegmentId, FilePath: string);
+    procedure InvalidatePreviews(const SceneId: string = '');
     procedure WriteToneWav(const FilePath: string; FreqHz, DurationMs: Integer);
 
     procedure OnOpenProdClick(Sender: TObject);
@@ -76,6 +85,9 @@ type
     procedure OnSaveProfileClick(Sender: TObject);
     procedure OnApproveProfileClick(Sender: TObject);
     procedure OnRehearseSceneClick(Sender: TObject);
+    procedure OnPlayPreviewClick(Sender: TObject);
+    procedure OnEditTimingClick(Sender: TObject);
+    procedure OnAddEffectClick(Sender: TObject);
     procedure OnPublishClick(Sender: TObject);
     procedure OnProfilesGridSelection(Sender: TObject; aCol, aRow: Integer);
   public
@@ -124,10 +136,10 @@ end;
 
 procedure TMsoundMainForm.BuildUI;
 var
-  Head, Sidebar, Bottom, EditPanel: TPanel;
+  Head, Sidebar, Bottom, EditPanel, RehearsalActions: TPanel;
   PC: TPageControl;
   TabBank, TabRehearsal, TabLog: TTabSheet;
-  BtnOpen, BtnAiCfg, BtnBuild, BtnTest, BtnStop, BtnSaveProf, BtnApprove, BtnRehearse, BtnPublish: TButton;
+  BtnOpen, BtnAiCfg, BtnBuild, BtnTest, BtnStop, BtnSaveProf, BtnApprove, BtnRehearse, BtnPublish, BtnPlay, BtnTiming, BtnEffect: TButton;
   L: TLabel;
 begin
   Head := TPanel.Create(Self); Head.Parent := Self; Head.Align := alTop; Head.Height := 68;
@@ -169,7 +181,7 @@ begin
   BtnApprove := TButton.Create(Self); BtnApprove.Parent := Sidebar; BtnApprove.Caption := 'Etapa 2: Aprovar Item Isolado';
   BtnApprove.SetBounds(12, 100, 231, 34); BtnApprove.OnClick := @OnApproveProfileClick;
 
-  BtnRehearse := TButton.Create(Self); BtnRehearse.Parent := Sidebar; BtnRehearse.Caption := 'Etapa 3: Tocar Ensaio Sonoro';
+  BtnRehearse := TButton.Create(Self); BtnRehearse.Parent := Sidebar; BtnRehearse.Caption := 'Gerar Prévia WAV da Cena';
   BtnRehearse.SetBounds(12, 142, 231, 34); BtnRehearse.OnClick := @OnRehearseSceneClick;
 
   BtnStop := TButton.Create(Self); BtnStop.Parent := Sidebar; BtnStop.Caption := 'Parar Audio';
@@ -216,14 +228,29 @@ begin
   BtnTest := TButton.Create(Self); BtnTest.Parent := EditPanel; BtnTest.Caption := 'Escutar Item Isolado (Etapa 2)';
   BtnTest.SetBounds(174, 116, 230, 32); BtnTest.OnClick := @OnTestIsolatedClick;
 
+  RehearsalActions := TPanel.Create(Self);
+  RehearsalActions.Parent := TabRehearsal;
+  RehearsalActions.Align := alTop;
+  RehearsalActions.Height := 44;
+  BtnPlay := TButton.Create(Self); BtnPlay.Parent := RehearsalActions;
+  BtnPlay.Caption := 'Tocar prévia da cena'; BtnPlay.SetBounds(8, 6, 154, 32);
+  BtnPlay.OnClick := @OnPlayPreviewClick;
+  BtnTiming := TButton.Create(Self); BtnTiming.Parent := RehearsalActions;
+  BtnTiming.Caption := 'Editar tempos'; BtnTiming.SetBounds(170, 6, 122, 32);
+  BtnTiming.OnClick := @OnEditTimingClick;
+  BtnEffect := TButton.Create(Self); BtnEffect.Parent := RehearsalActions;
+  BtnEffect.Caption := 'Adicionar efeito'; BtnEffect.SetBounds(300, 6, 130, 32);
+  BtnEffect.OnClick := @OnAddEffectClick;
+
   FEventsGrid := TStringGrid.Create(Self); FEventsGrid.Parent := TabRehearsal; FEventsGrid.Align := alClient;
-  FEventsGrid.FixedCols := 0; FEventsGrid.FixedRows := 1; FEventsGrid.ColCount := 5; FEventsGrid.RowCount := 2;
+  FEventsGrid.FixedCols := 0; FEventsGrid.FixedRows := 1; FEventsGrid.ColCount := 6; FEventsGrid.RowCount := 2;
   FEventsGrid.Options := FEventsGrid.Options + [goRowSelect, goColSizing];
-  FEventsGrid.Cells[0, 0] := 'Cena ID'; FEventsGrid.Cells[1, 0] := 'Inicio (s)';
-  FEventsGrid.Cells[2, 0] := 'Fim (s)'; FEventsGrid.Cells[3, 0] := 'Asset ID';
-  FEventsGrid.Cells[4, 0] := 'Fala / Evento';
+  FEventsGrid.Cells[0, 0] := 'Cena ID'; FEventsGrid.Cells[1, 0] := 'Início (ms)';
+  FEventsGrid.Cells[2, 0] := 'Fim (ms)'; FEventsGrid.Cells[3, 0] := 'Asset ID';
+  FEventsGrid.Cells[4, 0] := 'Fala / Evento'; FEventsGrid.Cells[5, 0] := 'Segmento';
   FEventsGrid.ColWidths[0] := 130; FEventsGrid.ColWidths[1] := 80; FEventsGrid.ColWidths[2] := 80;
-  FEventsGrid.ColWidths[3] := 140; FEventsGrid.ColWidths[4] := 420;
+  FEventsGrid.ColWidths[3] := 140; FEventsGrid.ColWidths[4] := 300;
+  FEventsGrid.ColWidths[5] := 130;
 
   FLogMemo := TMemo.Create(Self); FLogMemo.Parent := TabLog; FLogMemo.Align := alClient;
   FLogMemo.ReadOnly := True; FLogMemo.ScrollBars := ssBoth;
@@ -254,7 +281,7 @@ begin
   BitsPerSample := 16;
   BlockAlign := NumChannels * (BitsPerSample div 8);
   ByteRate := SampleRate * BlockAlign;
-  SampleCount := (SampleRate * DurationMs) div 1000;
+  SampleCount := (Int64(SampleRate) * DurationMs) div 1000;
   DataSize := DWord(SampleCount * BlockAlign);
   SubChunk1Size := 16;
   ChunkSize := 36 + DataSize;
@@ -299,6 +326,9 @@ begin
   FindProjectByApp(FProd, 1, FScriptProj);
   FindProjectByApp(FProd, 2, FVisualProj);
   FindProjectByApp(FProd, 3, FBoardProj);
+  FScriptRev := FScriptProj.ActiveRevision;
+  FBoardRev := FBoardProj.ActiveRevision;
+  FVisualRev := FVisualProj.ActiveRevision;
 
   FHeaderProdLabel.Caption := FProd.Title + '  (' + FProd.ProductionId + ')';
   FHeaderSourceLabel.Caption := Format('Fontes: MScript (%s) | MVisual (%s) | MBoard (%s) | MSound: %s',
@@ -320,6 +350,7 @@ var
 begin
   SetLength(FProfiles, 0);
   SetLength(FEvents, 0);
+  SetLength(FPreviews, 0);
   Path := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim +
     RevId + PathDelim + 'voices' + PathDelim + 'profiles.json';
   if not FileExists(Path) then Exit;
@@ -328,6 +359,9 @@ begin
   if not (Data is TJSONObject) then begin Data.Free; Exit; end;
   Obj := TJSONObject(Data);
   try
+    FScriptRev := Obj.Get('script_revision', FScriptRev);
+    FBoardRev := Obj.Get('board_revision', FBoardRev);
+    FVisualRev := Obj.Get('visual_revision', FVisualRev);
     if Obj.Find('profiles') is TJSONArray then
     begin
       Arr := TJSONArray(Obj.Find('profiles'));
@@ -355,10 +389,25 @@ begin
       begin
         Item := TJSONObject(Arr.Items[I]);
         FEvents[I].SceneId := Item.Get('scene_id', '');
-        FEvents[I].StartSec := Item.Get('start_sec', 0);
-        FEvents[I].EndSec := Item.Get('end_sec', 10);
+        FEvents[I].SegmentId := Item.Get('segment_id', '');
+        FEvents[I].StartMs := Item.Get('start_ms', Item.Get('start_sec', 0) * 1000);
+        FEvents[I].EndMs := Item.Get('end_ms', Item.Get('end_sec', 0) * 1000);
+        FEvents[I].SceneDurationMs := Item.Get('scene_duration_ms', 0);
+        FEvents[I].SegmentStartMs := Item.Get('segment_start_ms', 0);
+        FEvents[I].SegmentEndMs := Item.Get('segment_end_ms', FEvents[I].SceneDurationMs);
         FEvents[I].AssetId := Item.Get('asset_id', '');
         FEvents[I].TextOrCue := Item.Get('cue', '');
+      end;
+    end;
+    if Obj.Find('previews') is TJSONArray then
+    begin
+      Arr := TJSONArray(Obj.Find('previews'));
+      for I := 0 to Arr.Count - 1 do
+      begin
+        Item := Arr.Objects[I];
+        if ResolveSafePath(FProjectDir + PathDelim + 'revisions' + PathDelim + RevId,
+          Item.Get('uri', ''), Path) and FileExists(Path) then
+          AddPreview(Item.Get('scene_id', ''), Item.Get('segment_id', ''), Path);
       end;
     end;
   finally
@@ -366,100 +415,209 @@ begin
   end;
 end;
 
+function TMsoundMainForm.ProfilePath(const RelUri: string): string;
+begin
+  if ResolveSafePath(FProjectDir + PathDelim + 'work', RelUri, Result) and FileExists(Result) then Exit;
+  if ResolveSafePath(FProjectDir + PathDelim + 'revisions' + PathDelim + FCurrentRevId,
+    RelUri, Result) and FileExists(Result) then Exit;
+  Result := '';
+end;
+
+procedure TMsoundMainForm.AddPreview(const SceneId, SegmentId, FilePath: string);
+var
+  I: Integer;
+begin
+  I := Length(FPreviews);
+  SetLength(FPreviews, I + 1);
+  FPreviews[I].SceneId := SceneId;
+  FPreviews[I].SegmentId := SegmentId;
+  FPreviews[I].FilePath := FilePath;
+  FPreviews[I].RelUri := 'audio/previews/' + SceneId;
+  if SegmentId <> '' then FPreviews[I].RelUri := FPreviews[I].RelUri + '_' + SegmentId;
+  FPreviews[I].RelUri := FPreviews[I].RelUri + '.wav';
+end;
+
+procedure TMsoundMainForm.InvalidatePreviews(const SceneId: string);
+var
+  I, J: Integer;
+begin
+  J := 0;
+  for I := 0 to High(FPreviews) do
+    if (SceneId <> '') and (FPreviews[I].SceneId <> SceneId) then
+    begin
+      FPreviews[J] := FPreviews[I];
+      Inc(J);
+    end;
+  SetLength(FPreviews, J);
+end;
+
 procedure TMsoundMainForm.OnBuildBankClick(Sender: TObject);
 var
-  ScriptPath, Content, RevDir, RelWav: string;
-  Data: TJSONData;
-  Obj, Item: TJSONObject;
-  Arr: TJSONArray;
-  I, N, EvN, CurT: Integer;
-begin
-  if not FProd.Loaded then
-  begin
-    MessageDlg('Abra uma producao primeiro.', mtWarning, [mbOK], 0);
-    Exit;
-  end;
-  ScriptPath := ExtractFileDir(FScriptProj.ProjectFilePath) + PathDelim + 'revisions' +
-    PathDelim + FScriptProj.ActiveRevision + PathDelim + 'scripts' + PathDelim + 'roteiro.json';
-  if not FileExists(ScriptPath) then
-  begin
-    MessageDlg('Roteiro nao encontrado em MScript.', mtWarning, [mbOK], 0);
-    Exit;
-  end;
-  if not ReadTextFileUtf8(ScriptPath, Content) then Exit;
-  Data := GetJSON(Content);
-  if not (Data is TJSONObject) then begin Data.Free; Exit; end;
-  Obj := TJSONObject(Data);
-  try
-    SetLength(FProfiles, 0);
-    SetLength(FEvents, 0);
-    RevDir := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim + FCurrentRevId;
+  Content, BoardPath, SceneId, Dialogue: string;
+  ScriptData, BoardData: TJSONData;
+  Characters, Scenes, Boards, Segments: TJSONArray;
+  Item, Board, Segment: TJSONObject;
+  Lines: TMmpDialogueLines;
+  OldProfiles: array of TSoundProfileItem;
+  I, J, K, N, Offset, Seconds, SceneMs: Integer;
+  HasSegmentDialogue: Boolean;
 
-    if Obj.Find('characters') is TJSONArray then
-    begin
-      Arr := TJSONArray(Obj.Find('characters'));
-      for I := 0 to Arr.Count - 1 do
+  function VoiceFor(const Name, Id: string): Integer;
+  var
+    P: Integer;
+    Speaker: string;
+  begin
+    Speaker := Trim(Name);
+    if Speaker = '' then Speaker := 'Narrador';
+    for P := 0 to High(FProfiles) do
+      if (FProfiles[P].Kind = 'voice') and (((Id <> '') and (FProfiles[P].EntityId = Id)) or
+        ((Id = '') and SameText(FProfiles[P].EntityName, Speaker))) then Exit(P);
+    Result := Length(FProfiles);
+    SetLength(FProfiles, Result + 1);
+    for P := 0 to High(OldProfiles) do
+      if (OldProfiles[P].Kind = 'voice') and (((Id <> '') and (OldProfiles[P].EntityId = Id)) or
+        ((Id = '') and SameText(OldProfiles[P].EntityName, Speaker))) then
       begin
-        Item := TJSONObject(Arr.Items[I]);
-        N := Length(FProfiles);
-        SetLength(FProfiles, N + 1);
-        FProfiles[N].AssetId := GenerateMmpId('a_vox');
-        FProfiles[N].Kind := 'voice';
-        FProfiles[N].EntityId := Item.Get('character_id', '');
-        FProfiles[N].EntityName := Item.Get('name', 'Personagem');
-        FProfiles[N].Timbre := 'Natural / Expressivo';
-        FProfiles[N].RateVal := 0;
-        FProfiles[N].VolumeVal := 100;
-        FProfiles[N].Permission := 'sintetica_autorizada';
-        FProfiles[N].Status := 'pending';
-        RelWav := 'audio/voices/' + FProfiles[N].AssetId + '.wav';
-        FProfiles[N].PreviewUri := RelWav;
-        WriteToneWav(RevDir + PathDelim + StringReplace(RelWav, '/', PathDelim, [rfReplaceAll]),
-          330 + (I * 60), 400);
+        FProfiles[Result] := OldProfiles[P];
+        FProfiles[Result].EntityName := Speaker;
+        Exit;
+      end;
+    with FProfiles[Result] do
+    begin
+      EntityId := Id;
+      EntityName := Speaker;
+      Kind := 'voice';
+      AssetId := GenerateMmpId('a_vox');
+      VolumeVal := 100;
+      Status := 'pending';
+      Permission := 'sintetica_autorizada';
+    end;
+  end;
+
+  procedure AddSegmentEvents(const PartId, TextValue: string; OffsetMs, DurationMs: Integer);
+  var
+    Dialogues: TMmpDialogueLines;
+    P, Idx, Count: Integer;
+  begin
+    Dialogues := ParseMmpDialogue(TextValue);
+    Count := Max(1, Length(Dialogues));
+    for P := 0 to Count - 1 do
+    begin
+      Idx := Length(FEvents);
+      SetLength(FEvents, Idx + 1);
+      with FEvents[Idx] do
+      begin
+        SceneId := Board.Get('scene_id', '');
+        SegmentId := PartId;
+        SceneDurationMs := SceneMs;
+        SegmentStartMs := OffsetMs;
+        SegmentEndMs := OffsetMs + DurationMs;
+        StartMs := OffsetMs + Int64(P) * DurationMs div Count;
+        EndMs := OffsetMs + Int64(P + 1) * DurationMs div Count;
+        if Length(Dialogues) > 0 then
+        begin
+          AssetId := FProfiles[VoiceFor(Dialogues[P].Speaker, '')].AssetId;
+          TextOrCue := Dialogues[P].Text;
+        end;
       end;
     end;
+  end;
 
-    // Effect item + timeline events per scene
-    N := Length(FProfiles);
-    SetLength(FProfiles, N + 1);
-    FProfiles[N].AssetId := GenerateMmpId('a_sfx');
-    FProfiles[N].Kind := 'effect';
-    FProfiles[N].EntityId := 'env_ambiente';
-    FProfiles[N].EntityName := 'Ambiencia / Passos';
-    FProfiles[N].Timbre := 'Foley / Sala';
-    FProfiles[N].RateVal := 0;
-    FProfiles[N].VolumeVal := 85;
-    FProfiles[N].Permission := 'cc0_interno';
-    FProfiles[N].Status := 'pending';
-    RelWav := 'audio/effects/' + FProfiles[N].AssetId + '.wav';
-    FProfiles[N].PreviewUri := RelWav;
-    WriteToneWav(RevDir + PathDelim + StringReplace(RelWav, '/', PathDelim, [rfReplaceAll]), 220, 500);
-
-    if Obj.Find('scenes') is TJSONArray then
+begin
+  if not FProd.Loaded then Exit;
+  if (Length(FEvents) > 0) and (MessageDlg(
+    'Reindexar as fontes substitui os eventos, os efeitos marcados e as prévias da timeline. Continuar?',
+    mtConfirmation, [mbYes, mbNo], 0) <> mrYes) then Exit;
+  BoardPath := ExtractFileDir(FBoardProj.ProjectFilePath) + PathDelim + 'revisions' +
+    PathDelim + FBoardProj.ActiveRevision + PathDelim + 'storyboard' + PathDelim + 'scenes.json';
+  if not ReadTextFileUtf8(BoardPath, Content) then
+  begin
+    MessageDlg('Publique o storyboard no MBoard antes de montar a timeline sonora.', mtWarning, [mbOK], 0);
+    Exit;
+  end;
+  BoardData := GetJSON(Content);
+  ScriptData := nil;
+  try
+    if not (BoardData.FindPath('scene_boards') is TJSONArray) then Exit;
+    Boards := TJSONArray(BoardData.FindPath('scene_boards'));
+    FBoardRev := FBoardProj.ActiveRevision;
+    FScriptRev := TJSONObject(BoardData).Get('script_revision', FScriptProj.ActiveRevision);
+    FVisualRev := TJSONObject(BoardData).Get('visual_revision', FVisualProj.ActiveRevision);
+    if not ReadTextFileUtf8(ExtractFileDir(FScriptProj.ProjectFilePath) + PathDelim + 'revisions' +
+      PathDelim + FScriptRev + PathDelim + 'scripts' + PathDelim + 'roteiro.json', Content) then
     begin
-      Arr := TJSONArray(Obj.Find('scenes'));
-      CurT := 0;
-      for I := 0 to Arr.Count - 1 do
+      MessageDlg('Não encontrei a revisão do roteiro usada no storyboard.', mtError, [mbOK], 0);
+      Exit;
+    end;
+    ScriptData := GetJSON(Content);
+    OldProfiles := FProfiles;
+    FProfiles := nil;
+    FEvents := nil;
+    InvalidatePreviews;
+    if ScriptData.FindPath('characters') is TJSONArray then
+    begin
+      Characters := TJSONArray(ScriptData.FindPath('characters'));
+      for I := 0 to Characters.Count - 1 do
       begin
-        Item := TJSONObject(Arr.Items[I]);
-        EvN := Length(FEvents);
-        SetLength(FEvents, EvN + 1);
-        FEvents[EvN].SceneId := Item.Get('scene_id', '');
-        FEvents[EvN].StartSec := CurT;
-        FEvents[EvN].EndSec := CurT + Item.Get('estimated_duration', 30);
-        if Length(FProfiles) > 0 then
-          FEvents[EvN].AssetId := FProfiles[0].AssetId;
-        FEvents[EvN].TextOrCue := Item.Get('dialogue_text', Item.Get('heading', ''));
-        CurT := FEvents[EvN].EndSec;
+        Item := Characters.Objects[I];
+        VoiceFor(Item.Get('name', ''), Item.Get('character_id', ''));
+      end;
+    end;
+    for I := 0 to High(OldProfiles) do
+      if OldProfiles[I].Kind = 'effect' then
+      begin
+        N := Length(FProfiles);
+        SetLength(FProfiles, N + 1);
+        FProfiles[N] := OldProfiles[I];
+      end;
+
+    for I := 0 to Boards.Count - 1 do
+    begin
+      Board := Boards.Objects[I];
+      SceneId := Board.Get('scene_id', '');
+      SceneMs := 1000 * Board.Get('estimated_duration_seconds', 0);
+      if (SceneId = '') or (SceneMs <= 0) then Continue;
+      Dialogue := Board.Get('dialogue', '');
+      if (Dialogue = '') and (ScriptData.FindPath('scenes') is TJSONArray) then
+      begin
+        Scenes := TJSONArray(ScriptData.FindPath('scenes'));
+        for K := 0 to Scenes.Count - 1 do
+          if Scenes.Objects[K].Get('scene_id', '') = SceneId then
+          begin
+            Dialogue := Scenes.Objects[K].Get('dialogue_text', '');
+            Break;
+          end;
+      end;
+      Segments := nil;
+      if Board.Find('segments') is TJSONArray then Segments := TJSONArray(Board.Find('segments'));
+      if (Segments = nil) or (Segments.Count = 0) then
+      begin
+        AddSegmentEvents('sg_' + SceneId, Dialogue, 0, SceneMs);
+        Continue;
+      end;
+      Lines := ParseMmpDialogue(Dialogue);
+      HasSegmentDialogue := False;
+      for J := 0 to Segments.Count - 1 do
+        if Trim(Segments.Objects[J].Get('dialogue', '')) <> '' then HasSegmentDialogue := True;
+      Offset := 0;
+      for J := 0 to Segments.Count - 1 do
+      begin
+        Segment := Segments.Objects[J];
+        Seconds := Segment.Get('duration_seconds', 0);
+        if (Seconds <= 0) or (Offset + Int64(Seconds) * 1000 > SceneMs) then Break;
+        if HasSegmentDialogue then Dialogue := Segment.Get('dialogue', '')
+        else Dialogue := MmpDialoguePortion(Lines, J, Segments.Count);
+        AddSegmentEvents(Segment.Get('segment_id', ''), Dialogue, Offset, Seconds * 1000);
+        Inc(Offset, Seconds * 1000);
       end;
     end;
   finally
-    Obj.Free;
+    ScriptData.Free;
+    BoardData.Free;
   end;
-
   RefreshProfilesGrid;
   RefreshEventsGrid;
-  LogMsg('Etapa 1: Banco de vozes e efeitos criado (' + IntToStr(Length(FProfiles)) + ' itens).');
+  LogMsg(Format('Banco sonoro indexado: %d perfis, %d eventos.', [Length(FProfiles), Length(FEvents)]));
 end;
 
 procedure TMsoundMainForm.RefreshProfilesGrid;
@@ -505,10 +663,11 @@ begin
   begin
     Row := I + 1;
     FEventsGrid.Cells[0, Row] := FEvents[I].SceneId;
-    FEventsGrid.Cells[1, Row] := IntToStr(FEvents[I].StartSec);
-    FEventsGrid.Cells[2, Row] := IntToStr(FEvents[I].EndSec);
+    FEventsGrid.Cells[1, Row] := IntToStr(FEvents[I].StartMs);
+    FEventsGrid.Cells[2, Row] := IntToStr(FEvents[I].EndMs);
     FEventsGrid.Cells[3, Row] := FEvents[I].AssetId;
     FEventsGrid.Cells[4, Row] := FEvents[I].TextOrCue;
+    FEventsGrid.Cells[5, Row] := FEvents[I].SegmentId;
   end;
 end;
 
@@ -528,8 +687,9 @@ begin
   if (FSelectedProfile < 0) or (FSelectedProfile > High(FProfiles)) then Exit;
   if SameText(FProfiles[FSelectedProfile].Kind, 'voice') then
   begin
-    WavPath := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim +
-      FCurrentRevId + PathDelim + 'audio' + PathDelim + FProfiles[FSelectedProfile].AssetId + '_test.wav';
+    WavPath := IncludeTrailingPathDelimiter(FProjectDir) + 'work' + PathDelim +
+      'audio' + PathDelim + GenerateMmpId('voice_test') + '.wav';
+    ForceDirectories(ExtractFileDir(WavPath));
     if FAi.SynthesizeSpeech(FTestPhraseEdit.Text, WavPath, Err,
       FProfiles[FSelectedProfile].Timbre) and FPlayer.Play(WavPath) then
     begin
@@ -546,8 +706,12 @@ begin
   end
   else
   begin
-    WavPath := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim +
-      FCurrentRevId + PathDelim + StringReplace(FProfiles[FSelectedProfile].PreviewUri, '/', PathDelim, [rfReplaceAll]);
+    WavPath := ProfilePath(FProfiles[FSelectedProfile].PreviewUri);
+    if WavPath = '' then
+    begin
+      MessageDlg('Arquivo do efeito não encontrado.', mtError, [mbOK], 0);
+      Exit;
+    end;
     if (not FileExists(WavPath)) and FAi.GenerateSFX(FProfiles[FSelectedProfile].EntityName, WavPath, Err, 3.0) then
       LogMsg('Efeito sonoro IA gerado: ' + WavPath);
     if FPlayer.Play(WavPath) then
@@ -559,18 +723,206 @@ end;
 
 procedure TMsoundMainForm.OnRehearseSceneClick(Sender: TObject);
 var
-  Idx: Integer;
+  Idx, I, P, N, DurationMs: Integer;
+  SceneId, WorkDir, Mixed, WavPath, Ffmpeg, Err, PartPath: string;
+  Clips: array of TMmpAudioClip;
+  Slice: array[0..0] of TMmpAudioClip;
+  Parts: TStringList;
+  Provider: TMmpAiProviderCfg;
+  PreviewsBefore: array of TSoundPreview;
+  Success: Boolean;
 begin
-  if Length(FEvents) = 0 then
+  Idx := FEventsGrid.Row - 1;
+  if (Idx < 0) or (Idx > High(FEvents)) then
   begin
-    MessageDlg('Nenhum evento de cena indexado.', mtInformation, [mbOK], 0);
+    MessageDlg('Selecione um evento da cena na aba Ensaio Sincronizado.', mtInformation, [mbOK], 0);
     Exit;
   end;
+  SceneId := FEvents[Idx].SceneId;
+  DurationMs := FEvents[Idx].SceneDurationMs;
+  if DurationMs <= 0 then
+  begin
+    MessageDlg('Reindexe o banco para converter a timeline antiga em eventos do storyboard.',
+      mtWarning, [mbOK], 0);
+    Exit;
+  end;
+  FAi.ReloadIfChanged;
+  Ffmpeg := FAi.Settings.ToolFfmpeg;
+  if Ffmpeg = '' then Ffmpeg := FAi.Settings.DetectToolPath('ffmpeg');
+  if Ffmpeg = '' then
+  begin
+    MessageDlg('Configure FFmpeg no MMenu.', mtWarning, [mbOK], 0);
+    Exit;
+  end;
+  FAi.Settings.ResolveProvider('voice', maMSound, Provider);
+  WorkDir := FProjectDir + PathDelim + 'work' + PathDelim + 'previews' + PathDelim + GenerateMmpId('mix');
+  if not ForceDirectories(WorkDir) then Exit;
+  FPlayer.Stop;
+  FSynth.Stop;
+  Parts := TStringList.Create;
+  PreviewsBefore := Copy(FPreviews);
+  Success := False;
+  try
+    try
+      for I := 0 to High(FEvents) do
+      begin
+        if FEvents[I].SceneId <> SceneId then Continue;
+        if (FEvents[I].SegmentId <> '') and (Parts.IndexOf(FEvents[I].SegmentId) < 0) then
+          Parts.AddObject(FEvents[I].SegmentId, TObject(PtrInt(I + 1)));
+        if FEvents[I].AssetId = '' then Continue;
+        P := 0;
+        while (P <= High(FProfiles)) and (FProfiles[P].AssetId <> FEvents[I].AssetId) do Inc(P);
+        if P > High(FProfiles) then raise Exception.Create('Perfil sonoro não encontrado: ' + FEvents[I].AssetId);
+        if FProfiles[P].Status = 'rejected' then raise Exception.Create('Perfil sonoro reprovado: ' + FProfiles[P].EntityName);
+        if FProfiles[P].Kind = 'voice' then
+        begin
+          WavPath := WorkDir + PathDelim + 'fala_' + IntToStr(I) + '.wav';
+          if Provider.Enabled and SameText(Provider.Adapter, 'mock') then
+          begin
+            WriteToneWav(WavPath, 330 + (P mod 12) * 40,
+              Min(FEvents[I].EndMs - FEvents[I].StartMs, 1200));
+            LogMsg('Voz simulada para ' + FProfiles[P].EntityName);
+          end
+          else if not FAi.SynthesizeSpeech(FEvents[I].TextOrCue, WavPath, Err, FProfiles[P].Timbre) then
+            raise Exception.Create('Falha na síntese de ' + FProfiles[P].EntityName + ': ' + Err);
+        end
+        else
+          WavPath := ProfilePath(FProfiles[P].PreviewUri);
+        N := Length(Clips);
+        SetLength(Clips, N + 1);
+        Clips[N].FileName := WavPath;
+        Clips[N].StartMs := FEvents[I].StartMs;
+        Clips[N].EndMs := FEvents[I].EndMs;
+        Clips[N].VolumePercent := FProfiles[P].VolumeVal;
+      end;
+      Mixed := WorkDir + PathDelim + 'cena.wav';
+      if not RenderMmpAudio(Ffmpeg, Mixed, Clips, DurationMs, FAi.Settings.ProdAudioRate,
+        FAi.Settings.ProdAudioChannels, Err) then raise Exception.Create(Err);
+      InvalidatePreviews(SceneId);
+      AddPreview(SceneId, '', Mixed);
+      for I := 0 to Parts.Count - 1 do
+      begin
+        P := PtrInt(Parts.Objects[I]) - 1;
+        Slice[0].FileName := Mixed;
+        Slice[0].SourceStartMs := FEvents[P].SegmentStartMs;
+        Slice[0].StartMs := 0;
+        Slice[0].EndMs := FEvents[P].SegmentEndMs - FEvents[P].SegmentStartMs;
+        Slice[0].VolumePercent := 100;
+        PartPath := WorkDir + PathDelim + 'segmento_' + IntToStr(I + 1) + '.wav';
+        if not RenderMmpAudio(Ffmpeg, PartPath, Slice, Slice[0].EndMs,
+          FAi.Settings.ProdAudioRate, FAi.Settings.ProdAudioChannels, Err) then
+          raise Exception.Create(Err);
+        AddPreview(SceneId, Parts[I], PartPath);
+      end;
+      Success := True;
+    except
+      on E: Exception do
+      begin
+        FPreviews := PreviewsBefore;
+        LogMsg('Falha na prévia: ' + E.Message);
+        MessageDlg(E.Message, mtError, [mbOK], 0);
+      end;
+    end;
+  finally
+    Parts.Free;
+  end;
+  if Success then
+  begin
+    LogMsg('Prévia WAV gerada para a cena e seus segmentos. Publique para disponibilizar ao MScene.');
+    OnPlayPreviewClick(Sender);
+  end;
+end;
+
+procedure TMsoundMainForm.OnPlayPreviewClick(Sender: TObject);
+var
+  Idx, I: Integer;
+begin
   Idx := FEventsGrid.Row - 1;
-  if (Idx < 0) or (Idx > High(FEvents)) then Idx := 0;
-  FSynth.Engine := seSystemDefault;
-  FSynth.Say(FEvents[Idx].TextOrCue);
-  LogMsg('Ensaio apenas sonoro da cena ' + FEvents[Idx].SceneId + ' reproduzido.');
+  if (Idx < 0) or (Idx > High(FEvents)) then Exit;
+  for I := 0 to High(FPreviews) do
+    if (FPreviews[I].SceneId = FEvents[Idx].SceneId) and (FPreviews[I].SegmentId = '') then
+    begin
+      FPlayer.Stop;
+      if not FPlayer.Play(FPreviews[I].FilePath) then
+        MessageDlg('Não foi possível reproduzir o WAV: ' + FPlayer.LastError, mtWarning, [mbOK], 0);
+      Exit;
+    end;
+  MessageDlg('Gere a prévia WAV desta cena primeiro.', mtInformation, [mbOK], 0);
+end;
+
+procedure TMsoundMainForm.OnEditTimingClick(Sender: TObject);
+var
+  I, StartMs, EndMs: Integer;
+  StartText, EndText: string;
+begin
+  I := FEventsGrid.Row - 1;
+  if (I < 0) or (I > High(FEvents)) or (FEvents[I].AssetId = '') then Exit;
+  StartText := IntToStr(FEvents[I].StartMs);
+  EndText := IntToStr(FEvents[I].EndMs);
+  if not InputQuery('Tempo do evento', 'Início na cena (ms):', StartText) or
+    not InputQuery('Tempo do evento', 'Fim na cena (ms):', EndText) then Exit;
+  if not TryStrToInt(StartText, StartMs) or not TryStrToInt(EndText, EndMs) or
+    (StartMs < FEvents[I].SegmentStartMs) or (EndMs > FEvents[I].SegmentEndMs) or
+    (EndMs <= StartMs) then
+  begin
+    MessageDlg('Informe um intervalo válido dentro do segmento selecionado.',
+      mtWarning, [mbOK], 0);
+    Exit;
+  end;
+  FEvents[I].StartMs := StartMs;
+  FEvents[I].EndMs := EndMs;
+  InvalidatePreviews(FEvents[I].SceneId);
+  RefreshEventsGrid;
+end;
+
+procedure TMsoundMainForm.OnAddEffectClick(Sender: TObject);
+var
+  I, P, E: Integer;
+  Source, LabelText, License, RelUri, OutputFile, Id: string;
+  Dialog: TOpenDialog;
+begin
+  I := FEventsGrid.Row - 1;
+  if (I < 0) or (I > High(FEvents)) or (FEvents[I].SceneDurationMs <= 0) then Exit;
+  Dialog := TOpenDialog.Create(Self);
+  try
+    Dialog.Filter := 'Áudio WAV|*.wav';
+    Dialog.Options := [ofFileMustExist];
+    if not Dialog.Execute then Exit;
+    Source := Dialog.FileName;
+  finally
+    Dialog.Free;
+  end;
+  LabelText := ChangeFileExt(ExtractFileName(Source), '');
+  License := '';
+  if not InputQuery('Adicionar efeito', 'Nome do efeito:', LabelText) or
+    not InputQuery('Adicionar efeito', 'Licença ou autorização de uso:', License) or
+    (Trim(LabelText) = '') or (Trim(License) = '') then Exit;
+  Id := GenerateMmpId('a_sfx');
+  RelUri := 'audio/effects/' + Id + '.wav';
+  if not ResolveSafePath(FProjectDir + PathDelim + 'work', RelUri, OutputFile) or
+    not ForceDirectories(ExtractFileDir(OutputFile)) or not CopyFile(Source, OutputFile) then
+  begin
+    MessageDlg('Não foi possível copiar o efeito.', mtError, [mbOK], 0);
+    Exit;
+  end;
+  P := Length(FProfiles);
+  SetLength(FProfiles, P + 1);
+  FProfiles[P].AssetId := Id;
+  FProfiles[P].Kind := 'effect';
+  FProfiles[P].EntityName := LabelText;
+  FProfiles[P].Permission := License;
+  FProfiles[P].PreviewUri := RelUri;
+  FProfiles[P].VolumeVal := 85;
+  FProfiles[P].Status := 'pending';
+  E := Length(FEvents);
+  SetLength(FEvents, E + 1);
+  FEvents[E] := FEvents[I];
+  FEvents[E].AssetId := Id;
+  FEvents[E].TextOrCue := LabelText;
+  InvalidatePreviews(FEvents[I].SceneId);
+  RefreshProfilesGrid;
+  RefreshEventsGrid;
+  FEventsGrid.Row := E + 1;
 end;
 
 procedure TMsoundMainForm.OnStopAudioClick(Sender: TObject);
@@ -585,8 +937,10 @@ begin
   if (FSelectedProfile < 0) or (FSelectedProfile > High(FProfiles)) then Exit;
   FProfiles[FSelectedProfile].Timbre := FTimbreEdit.Text;
   FProfiles[FSelectedProfile].RateVal := StrToIntDef(FRateEdit.Text, 0);
-  FProfiles[FSelectedProfile].VolumeVal := StrToIntDef(FVolEdit.Text, 100);
+  FProfiles[FSelectedProfile].VolumeVal := EnsureRange(StrToIntDef(FVolEdit.Text, 100), 0, 200);
   FProfiles[FSelectedProfile].Permission := FPermEdit.Text;
+  FProfiles[FSelectedProfile].Status := 'pending';
+  InvalidatePreviews;
   RefreshProfilesGrid;
 end;
 
@@ -606,6 +960,9 @@ begin
   Root := TJSONObject.Create;
   try
     Root.Add('schema', 'mmp.msound.profiles/1');
+    Root.Add('script_revision', FScriptRev);
+    Root.Add('board_revision', FBoardRev);
+    Root.Add('visual_revision', FVisualRev);
     PArr := TJSONArray.Create;
     for I := 0 to High(FProfiles) do
     begin
@@ -629,13 +986,27 @@ begin
     begin
       EObj := TJSONObject.Create;
       EObj.Add('scene_id', FEvents[I].SceneId);
-      EObj.Add('start_sec', FEvents[I].StartSec);
-      EObj.Add('end_sec', FEvents[I].EndSec);
+      EObj.Add('segment_id', FEvents[I].SegmentId);
+      EObj.Add('start_ms', FEvents[I].StartMs);
+      EObj.Add('end_ms', FEvents[I].EndMs);
+      EObj.Add('scene_duration_ms', FEvents[I].SceneDurationMs);
+      EObj.Add('segment_start_ms', FEvents[I].SegmentStartMs);
+      EObj.Add('segment_end_ms', FEvents[I].SegmentEndMs);
       EObj.Add('asset_id', FEvents[I].AssetId);
       EObj.Add('cue', FEvents[I].TextOrCue);
       EArr.Add(EObj);
     end;
     Root.Add('timeline_events', EArr);
+    EArr := TJSONArray.Create;
+    Root.Add('previews', EArr);
+    for I := 0 to High(FPreviews) do
+    begin
+      EObj := TJSONObject.Create;
+      EObj.Add('scene_id', FPreviews[I].SceneId);
+      EObj.Add('segment_id', FPreviews[I].SegmentId);
+      EObj.Add('uri', FPreviews[I].RelUri);
+      EArr.Add(EObj);
+    end;
     Result := Root.FormatJSON;
   finally
     Root.Free;
@@ -644,74 +1015,88 @@ end;
 
 procedure TMsoundMainForm.OnPublishClick(Sender: TObject);
 var
-  PrepRev, RevDir, OldRevDir, NewRev, ErrMsg, SrcF, DstF: string;
+  PrepRev, RevDir, NewRev, ErrMsg, SrcF, NewState: string;
   Srcs: array of TMmpSourceRef;
   Arts: array of TMmpArtifactInput;
   RevInfo: TMmpRevisionInfo;
-  I: Integer;
-  FS1, FS2: TFileStream;
+  I, N: Integer;
+
+  function CopyToRevision(const Source, RelUri: string): Boolean;
+  var
+    Destination: string;
+  begin
+    Result := FileExists(Source) and ResolveSafePath(RevDir, RelUri, Destination) and
+      ForceDirectories(ExtractFileDir(Destination)) and CopyFile(Source, Destination);
+    if not Result then MessageDlg('Não foi possível publicar ' + RelUri, mtError, [mbOK], 0);
+  end;
+
 begin
-  if not FProd.Loaded then Exit;
+  if not FProd.Loaded or (Length(FEvents) = 0) then Exit;
   if not PrepareNextRevisionDir(FProj.ProjectFilePath, PrepRev, RevDir) then Exit;
-  OldRevDir := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim + FCurrentRevId;
+  if not AtomicWriteTextFile(RevDir + PathDelim + 'voices' + PathDelim + 'profiles.json',
+    ProfilesToJson, False) then
+  begin
+    MessageDlg('Não foi possível gravar a timeline sonora.', mtError, [mbOK], 0);
+    Exit;
+  end;
 
-  AtomicWriteTextFile(RevDir + PathDelim + 'voices' + PathDelim + 'profiles.json',
-    ProfilesToJson, False);
-
-  SetLength(Arts, 1 + Length(FProfiles));
+  NewState := 'approved';
+  SetLength(Arts, 1);
   Arts[0].ArtifactId := GenerateMmpId('a');
   Arts[0].Kind := 'audio.voice.profile';
   Arts[0].RelUri := 'voices/profiles.json';
   Arts[0].MimeType := 'application/json';
-  Arts[0].Status := 'approved';
 
   for I := 0 to High(FProfiles) do
   begin
-    SrcF := OldRevDir + PathDelim + StringReplace(FProfiles[I].PreviewUri, '/', PathDelim, [rfReplaceAll]);
-    DstF := RevDir + PathDelim + StringReplace(FProfiles[I].PreviewUri, '/', PathDelim, [rfReplaceAll]);
-    if FileExists(SrcF) and not SameText(SrcF, DstF) then
-    begin
-      ForceDirectories(ExtractFileDir(DstF));
-      FS1 := TFileStream.Create(SrcF, fmOpenRead or fmShareDenyNone);
-      try
-        FS2 := TFileStream.Create(DstF, fmCreate);
-        try
-          FS2.CopyFrom(FS1, 0);
-        finally
-          FS2.Free;
-        end;
-      finally
-        FS1.Free;
-      end;
-    end;
-    Arts[I + 1].ArtifactId := FProfiles[I].AssetId;
+    if FProfiles[I].Status <> 'approved' then NewState := 'published';
+    if FProfiles[I].PreviewUri = '' then Continue;
+    SrcF := ProfilePath(FProfiles[I].PreviewUri);
+    if not CopyToRevision(SrcF, FProfiles[I].PreviewUri) then Exit;
+    N := Length(Arts);
+    SetLength(Arts, N + 1);
+    Arts[N].ArtifactId := FProfiles[I].AssetId;
     if SameText(FProfiles[I].Kind, 'voice') then
-      Arts[I + 1].Kind := 'audio.voice.profile'
+      Arts[N].Kind := 'audio.voice.profile'
     else
-      Arts[I + 1].Kind := 'audio.effect';
-    Arts[I + 1].RelUri := FProfiles[I].PreviewUri;
-    Arts[I + 1].MimeType := 'audio/wav';
-    Arts[I + 1].Status := FProfiles[I].Status;
+      Arts[N].Kind := 'audio.effect';
+    Arts[N].RelUri := FProfiles[I].PreviewUri;
+    Arts[N].MimeType := 'audio/wav';
+    Arts[N].Status := FProfiles[I].Status;
+  end;
+  Arts[0].Status := NewState;
+  for I := 0 to High(FPreviews) do
+  begin
+    if not CopyToRevision(FPreviews[I].FilePath, FPreviews[I].RelUri) then Exit;
+    N := Length(Arts);
+    SetLength(Arts, N + 1);
+    Arts[N].ArtifactId := GenerateMmpId('a_audio');
+    Arts[N].Kind := 'audio.preview';
+    Arts[N].SceneId := FPreviews[I].SceneId;
+    Arts[N].SegmentId := FPreviews[I].SegmentId;
+    Arts[N].RelUri := FPreviews[I].RelUri;
+    Arts[N].MimeType := 'audio/wav';
+    Arts[N].Status := NewState;
   end;
 
   SetLength(Srcs, 3);
   Srcs[0].ProjectId := FScriptProj.ProjectId;
-  Srcs[0].RevisionId := FScriptProj.ActiveRevision;
-  if FindRevisionInProject(FScriptProj, FScriptProj.ActiveRevision, RevInfo) then
+  Srcs[0].RevisionId := FScriptRev;
+  if FindRevisionInProject(FScriptProj, FScriptRev, RevInfo) then
     Srcs[0].ManifestSha256 := RevInfo.ManifestSha256;
 
   Srcs[1].ProjectId := FVisualProj.ProjectId;
-  Srcs[1].RevisionId := FVisualProj.ActiveRevision;
-  if FindRevisionInProject(FVisualProj, FVisualProj.ActiveRevision, RevInfo) then
+  Srcs[1].RevisionId := FVisualRev;
+  if FindRevisionInProject(FVisualProj, FVisualRev, RevInfo) then
     Srcs[1].ManifestSha256 := RevInfo.ManifestSha256;
 
   Srcs[2].ProjectId := FBoardProj.ProjectId;
-  Srcs[2].RevisionId := FBoardProj.ActiveRevision;
-  if FindRevisionInProject(FBoardProj, FBoardProj.ActiveRevision, RevInfo) then
+  Srcs[2].RevisionId := FBoardRev;
+  if FindRevisionInProject(FBoardProj, FBoardRev, RevInfo) then
     Srcs[2].ManifestSha256 := RevInfo.ManifestSha256;
 
   if PublishProjectRevision(FProd.ProductionId, FProj.ProjectFilePath, 'MSound',
-    FCurrentRevId, 'approved', '', Srcs, Arts, NewRev, ErrMsg, PrepRev) then
+    FCurrentRevId, NewState, '', Srcs, Arts, NewRev, ErrMsg, PrepRev) then
   begin
     LogMsg('Revisao MSound publicada: ' + NewRev);
     LoadProductionAndRevision(FProd.RootDir, FProj.ProjectId, NewRev);

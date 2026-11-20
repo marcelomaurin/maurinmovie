@@ -60,7 +60,7 @@ function PublishProjectRevision(
 function EmitSyncEvent(
   const ProdRoot, OriginApp, TargetApp, TargetProjectId,
   SourceRevision, RequestedChange, Stage, Status, ErrText: string;
-  out EventId: string): Boolean;
+  out EventId: string; const Operations: TJSONArray = nil): Boolean;
 
 procedure MmpLogAppOperation(const ProdRoot, ProdId, AppName, Msg: string;
   const RevId: string = ''; const ActionName: string = 'operation';
@@ -74,7 +74,7 @@ function SavePlaceholderBitmap(const FilePath, Title, Subtitle, Footer: string;
 implementation
 
 uses
-  {$IFDEF WINDOWS}Windows{$ELSE}BaseUnix{$ENDIF};
+  {$IFDEF WINDOWS}Windows{$ELSE}BaseUnix, Unix{$ENDIF};
 
 function HandleStandardCliEarlyExit(App: TMMApp): Boolean;
 var
@@ -663,7 +663,7 @@ end;
 function EmitSyncEvent(
   const ProdRoot, OriginApp, TargetApp, TargetProjectId,
   SourceRevision, RequestedChange, Stage, Status, ErrText: string;
-  out EventId: string): Boolean;
+  out EventId: string; const Operations: TJSONArray): Boolean;
 var
   InboxDir, TxDir, EvtPath, TxPath, TxId, NowIso, DbErr: string;
   Obj, ReqObj, TxObj, OrigObj, StageObj: TJSONObject;
@@ -694,6 +694,7 @@ begin
     ReqObj := TJSONObject.Create;
     ReqObj.Add('type', 'editorial_patch');
     ReqObj.Add('summary', RequestedChange);
+    if Operations <> nil then ReqObj.Add('operations', Operations.Clone);
     Obj.Add('requested_change', ReqObj);
     Obj.Add('stage', Stage);
     Obj.Add('idempotency_key', EventId + ':' + TargetApp);
@@ -715,6 +716,11 @@ begin
     TxObj.Add('schema', MMP_SCHEMA_TX);
     TxObj.Add('transaction_id', TxId);
     TxObj.Add('root_event_id', EventId);
+    if Operations <> nil then
+    begin
+      TxObj.Add('workflow', 'board.editorial_patch');
+      TxObj.Add('requested_change', RequestedChange);
+    end;
     OrigObj := TJSONObject.Create;
     OrigObj.Add('application', OriginApp);
     OrigObj.Add('project_id', TargetProjectId);
@@ -731,6 +737,19 @@ begin
     else
       StageObj.Add('status', 'pending');
     StagesArr.Add(StageObj);
+    if Operations <> nil then
+    begin
+      StageObj := TJSONObject.Create;
+      StageObj.Add('order', 2);
+      StageObj.Add('application', 'MVisual');
+      StageObj.Add('status', 'pending');
+      StagesArr.Add(StageObj);
+      StageObj := TJSONObject.Create;
+      StageObj.Add('order', 3);
+      StageObj.Add('application', 'MBoard');
+      StageObj.Add('status', 'pending');
+      StagesArr.Add(StageObj);
+    end;
     TxObj.Add('stages', StagesArr);
 
     if SameText(Status, 'failed') then
@@ -743,11 +762,13 @@ begin
     TxObj.Add('errors', ErrArr);
     TxObj.Add('created_at', NowIso);
     TxObj.Add('updated_at', NowIso);
-    AtomicWriteTextFile(TxPath, TxObj.FormatJSON, False);
+    Result := AtomicWriteTextFile(TxPath, TxObj.FormatJSON, False);
+    if not Result then DeleteFile(EvtPath);
   finally
     TxObj.Free;
   end;
 
+  if not Result then Exit;
   AppIdx := AppNameToIndex(OriginApp);
   if AppIdx >= 0 then
     AppendJsonLogLine(ProdRoot, OriginApp, 'info',

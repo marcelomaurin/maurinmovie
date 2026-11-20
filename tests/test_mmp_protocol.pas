@@ -566,6 +566,59 @@ begin
   end;
 end;
 
+procedure TestSceneVideoUnlocksCut;
+var
+  Prod: TMmpProduction;
+  SceneFile: string;
+  I: Integer;
+begin
+  WriteLn('== TestSceneVideoUnlocksCut ==');
+  SceneFile := IncludeTrailingPathDelimiter(GetTempDir) + GenerateMmpId('mmp_stage_video');
+  AssertTrue(AtomicWriteTextFile(SceneFile, 'fixture for file existence', False),
+    'Create on-disk artifact fixture');
+  try
+    Prod.Loaded := True;
+    SetLength(Prod.Projects, 7);
+    for I := 0 to 5 do
+    begin
+      Prod.Projects[I].SoftwareIndex := I + 1;
+      Prod.Projects[I].Status := 'approved';
+    end;
+    Prod.Projects[4].Status := 'initialized';
+    Prod.Projects[6].SoftwareIndex := 5;
+    Prod.Projects[6].SceneId := 'sc_demo';
+    Prod.Projects[6].ActiveRevision := 'r0002';
+    SetLength(Prod.Projects[6].Revisions, 1);
+    with Prod.Projects[6].Revisions[0] do
+    begin
+      RevisionId := 'r0002';
+      SetLength(Artifacts, 1);
+      with Artifacts[0] do
+      begin
+        Kind := 'video.scene';
+        Status := 'approved';
+        MimeType := 'application/json';
+        Sha256 := SHA256File(SceneFile);
+        ResolvedPath := SceneFile;
+      end;
+      AssertTrue(not MmpEvaluateStageStatus(Prod, 6).CanOpen,
+        'Legacy JSON scene cannot unlock MCut');
+      Artifacts[0].MimeType := 'video/mp4';
+      Artifacts[0].Status := 'generated';
+      AssertTrue(not MmpEvaluateStageStatus(Prod, 6).CanOpen,
+        'Unapproved scene video cannot unlock MCut');
+      Artifacts[0].Status := 'approved';
+      AssertTrue(MmpEvaluateStageStatus(Prod, 6).CanOpen,
+        'An approved video in a per-scene project unlocks MCut');
+      DeleteFile(SceneFile);
+      AssertTrue(not MmpEvaluateStageStatus(Prod, 6).CanOpen,
+        'Missing approved video cannot unlock MCut');
+    end;
+  finally
+    if FileExists(SceneFile) then DeleteFile(SceneFile);
+  end;
+end;
+
 procedure TestProductionHistory;
 var
   TestRoot, ProdRoot, ErrMsg, ScriptProjPath, ScriptProjStr, Rev2Dir, RotPath: string;
@@ -824,6 +877,7 @@ begin
   TestSharedSettingsDir;
   TestIntegrityValidationOnOpen;
   TestStageDependenciesAndStaleness;
+  TestSceneVideoUnlocksCut;
   TestProductionHistory;
   TestAccessControl;
   TestMachineAiSettingsPersistence;

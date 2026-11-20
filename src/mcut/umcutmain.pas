@@ -7,7 +7,7 @@ interface
 uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
   ComCtrls, Grids, fpjson, jsonparser, aih264decoder,
-  ummpprotocol, ummpappbase, ummpaibridge;
+  ummpprotocol, ummpappbase, ummpaibridge, ummpvideo, ummpsha256, LCLIntf;
 
 type
   TTimelineClip = record
@@ -40,7 +40,7 @@ type
     FProd: TMmpProduction;
     FProj, FScriptProj: TMmpProjectRef;
     FProjectDir: string;
-    FCurrentRevId: string;
+    FCurrentRevId, FTimelineScriptRev: string;
     FClips: array of TTimelineClip;
     FRatings: array of TAudienceRating;
     FCurrentSessionId: string;
@@ -63,8 +63,10 @@ type
     procedure LoadCutFromRevision(const RevId: string);
     procedure RefreshTimelineGrid;
     procedure RefreshRatingsGrid;
-    procedure RunAudienceAnalysis;
+    procedure RunAudienceAnalysis(IncludeAi: Boolean = True);
     function TimelineToJson: string;
+    function ResolveSceneVideo(const Clip: TTimelineClip; VerifyHash: Boolean;
+      out VideoFile: string; out Source: TMmpSourceRef): Boolean;
     function RatingsToJson: string;
     function AnalysisToJson: string;
 
@@ -278,6 +280,7 @@ var
 begin
   SetLength(FClips, 0);
   SetLength(FRatings, 0);
+  FTimelineScriptRev := FScriptProj.ActiveRevision;
 
   TLPath := IncludeTrailingPathDelimiter(FProjectDir) + 'revisions' + PathDelim +
     RevId + PathDelim + 'timeline' + PathDelim + 'timeline.json';
@@ -288,6 +291,7 @@ begin
     begin
       Obj := TJSONObject(Data);
       try
+        FTimelineScriptRev := Obj.Get('script_revision', FScriptProj.ActiveRevision);
         if Obj.Find('timeline_items') is TJSONArray then
         begin
           Arr := TJSONArray(Obj.Find('timeline_items'));
@@ -349,7 +353,8 @@ end;
 
 procedure TMcutMainForm.OnBuildTimelineClick(Sender: TObject);
 var
-  ScriptPath, Content, SId: string;
+  ScriptPath, Content, SId, VideoFile: string;
+  Source: TMmpSourceRef;
   Data: TJSONData;
   Obj, SItem: TJSONObject;
   Arr: TJSONArray;
@@ -375,6 +380,7 @@ begin
   try
     if not (Obj.Find('scenes') is TJSONArray) then Exit;
     Arr := TJSONArray(Obj.Find('scenes'));
+    FTimelineScriptRev := FScriptProj.ActiveRevision;
     SetLength(FClips, Arr.Count);
     for I := 0 to Arr.Count - 1 do
     begin
@@ -384,7 +390,7 @@ begin
       FClips[I].SceneId := SId;
       FClips[I].Heading := SItem.Get('heading', '');
       FClips[I].InPointSec := 0;
-      FClips[I].OutPointSec := SItem.Get('estimated_duration', 30);
+      FClips[I].OutPointSec := 0;
       FClips[I].TransitionOut := 'cut';
       FClips[I].TransitionSec := 1;
 
@@ -397,9 +403,7 @@ begin
         begin
           FoundSceneProj := True;
           FClips[I].SceneRevision := FProd.Projects[J].ActiveRevision;
-          if (FProd.Projects[J].Status = 'finalizada') or
-             (FProd.Projects[J].Status = 'ligacao_posterior_pendente') or
-             (FProd.Projects[J].Status = 'approved') then
+          if ResolveSceneVideo(FClips[I], False, VideoFile, Source) then
             FClips[I].SceneStatus := 'ok'
           else
             FClips[I].SceneStatus := 'pending_approval';
@@ -415,6 +419,36 @@ begin
 
   RefreshTimelineGrid;
   LogMsg('Timeline montada na ordem narrativa do roteiro (' + IntToStr(Length(FClips)) + ' cenas).');
+end;
+
+function TMcutMainForm.ResolveSceneVideo(const Clip: TTimelineClip;
+  VerifyHash: Boolean; out VideoFile: string; out Source: TMmpSourceRef): Boolean;
+var
+  I, J: Integer;
+  Rev: TMmpRevisionInfo;
+begin
+  Result := False;
+  VideoFile := '';
+  Source := Default(TMmpSourceRef);
+  for I := 0 to High(FProd.Projects) do
+    if (FProd.Projects[I].SoftwareIndex = 5) and
+      (FProd.Projects[I].SceneId = Clip.SceneId) then
+    begin
+      if not FindRevisionInProject(FProd.Projects[I], Clip.SceneRevision, Rev) then Continue;
+      for J := 0 to High(Rev.Artifacts) do
+        with Rev.Artifacts[J] do
+          if (Kind = 'video.scene') and (MimeType = 'video/mp4') and
+            (SceneId = Clip.SceneId) and (Status = 'approved') and
+            (Sha256 <> '') and FileExists(ResolvedPath) then
+          begin
+            if VerifyHash and not SameText(SHA256File(ResolvedPath), Sha256) then Exit;
+            VideoFile := ResolvedPath;
+            Source.ProjectId := FProd.Projects[I].ProjectId;
+            Source.RevisionId := Rev.RevisionId;
+            Source.ManifestSha256 := Rev.ManifestSha256;
+            Exit(True);
+          end;
+    end;
 end;
 
 procedure TMcutMainForm.RefreshTimelineGrid;
@@ -479,15 +513,22 @@ end;
 
 procedure TMcutMainForm.OnApplyClipCutClick(Sender: TObject);
 var
-  Idx: Integer;
+  Idx, InSec, OutSec: Integer;
 begin
   Idx := FTimelineGrid.Row - 1;
   if (Idx < 0) or (Idx > High(FClips)) then Exit;
-  FClips[Idx].InPointSec := StrToIntDef(FInEdit.Text, 0);
-  FClips[Idx].OutPointSec := StrToIntDef(FOutEdit.Text, 30);
+  if not TryStrToInt(FInEdit.Text, InSec) or not TryStrToInt(FOutEdit.Text, OutSec) or
+    (InSec < 0) or ((OutSec <> 0) and (OutSec <= InSec)) then
+  begin
+    MessageDlg('Informe tempos em segundos. Use 0 na saída para manter o fim do vídeo.',
+      mtWarning, [mbOK], 0);
+    Exit;
+  end;
+  FClips[Idx].InPointSec := InSec;
+  FClips[Idx].OutPointSec := OutSec;
   FClips[Idx].TransitionOut := FTransCombo.Text;
   RefreshTimelineGrid;
-  LogMsg('Corte nao destrutivo e transicao aplicados na cena ' + FClips[Idx].SceneId);
+  LogMsg('Corte não destrutivo e transição aplicados na cena ' + FClips[Idx].SceneId);
 end;
 
 procedure TMcutMainForm.OnAddFeedbackClick(Sender: TObject);
@@ -529,14 +570,17 @@ begin
   LogMsg('Avaliacao registrada para cena ' + SceneId + ' @ ' + FCurrentRevId);
 end;
 
-procedure TMcutMainForm.RunAudienceAnalysis;
+procedure TMcutMainForm.RunAudienceAnalysis(IncludeAi: Boolean);
 var
-  I, J, Cnt, SumScore: Integer;
+  I, J, Cnt, SumScore, RevisionRatingCount: Integer;
   CommentsAll, AiAdvice, Err: string;
 begin
   FAnalysisMemo.Lines.Clear;
   FAnalysisMemo.Lines.Add('=== RELATORIO DE ANALISE DE PUBLICO (' + FCurrentRevId + ') ===');
-  FAnalysisMemo.Lines.Add('Total de avaliacoes: ' + IntToStr(Length(FRatings)));
+  RevisionRatingCount := 0;
+  for J := 0 to High(FRatings) do
+    if FRatings[J].FilmRevision = FCurrentRevId then Inc(RevisionRatingCount);
+  FAnalysisMemo.Lines.Add('Total de avaliacoes: ' + IntToStr(RevisionRatingCount));
   FAnalysisMemo.Lines.Add('');
 
   for I := 0 to High(FClips) do
@@ -546,7 +590,8 @@ begin
     CommentsAll := '';
     for J := 0 to High(FRatings) do
     begin
-      if SameText(FRatings[J].SceneId, FClips[I].SceneId) then
+      if (FRatings[J].FilmRevision = FCurrentRevId) and
+        SameText(FRatings[J].SceneId, FClips[I].SceneId) then
       begin
         Inc(Cnt);
         Inc(SumScore, FRatings[J].Score);
@@ -565,7 +610,7 @@ begin
     end;
   end;
 
-  if FAi.IsConfigured and (Length(FRatings) > 0) then
+  if IncludeAi and (RevisionRatingCount > 0) and FAi.IsConfigured then
   begin
     if FAi.Ask('Voce e um editor de cinema. Analise objetivamente as avaliacoes abaixo sem alterar nada automaticamente.',
       FAnalysisMemo.Text, AiAdvice, Err) then
@@ -610,7 +655,7 @@ begin
   Root := TJSONObject.Create;
   try
     Root.Add('schema', 'mmp.mcut.timeline/1');
-    Root.Add('script_revision', FScriptProj.ActiveRevision);
+    Root.Add('script_revision', FTimelineScriptRev);
     Arr := TJSONArray.Create;
     for I := 0 to High(FClips) do
     begin
@@ -680,34 +725,125 @@ begin
 end;
 
 procedure TMcutMainForm.OnSaveAndExportClick(Sender: TObject);
+const
+  Mp4Widths: array[0..5] of Integer = (854, 1280, 1920, 2560, 3840, 7680);
+  Mp4Heights: array[0..5] of Integer = (480, 720, 1080, 1440, 2160, 4320);
 var
-  PrepRev, RevDir, NewRev, ErrMsg, ExportStatus: string;
+  PrepRev, RevDir, NewRev, ErrMsg, ExportStatus, VideoFile, ExportRel, ExportPath,
+    Ffmpeg, Ffprobe, MimeType: string;
   Srcs: array of TMmpSourceRef;
   Arts: array of TMmpArtifactInput;
+  Videos: array of TMmpVideoClip;
+  SceneSource: TMmpSourceRef;
   RevInfo: TMmpRevisionInfo;
-  I, MissingCnt: Integer;
+  I, MissingCnt, ExportWidth, ExportHeight, Fps, FormatIndex: Integer;
+  Duration: Double;
   ExportObj: TJSONObject;
+
+  procedure AddArtifact(const Kind, RelUri, Mime, Status: string);
+  var
+    N: Integer;
+  begin
+    N := Length(Arts);
+    SetLength(Arts, N + 1);
+    Arts[N].ArtifactId := GenerateMmpId('a');
+    Arts[N].Kind := Kind;
+    Arts[N].RelUri := RelUri;
+    Arts[N].MimeType := Mime;
+    Arts[N].Status := Status;
+  end;
+
+  function WriteRevisionJson(const RelUri, Content: string): Boolean;
+  begin
+    Result := AtomicWriteTextFile(IncludeTrailingPathDelimiter(RevDir) +
+      StringReplace(RelUri, '/', PathDelim, [rfReplaceAll]), Content, False);
+    if not Result then MessageDlg('Não foi possível gravar ' + RelUri, mtError, [mbOK], 0);
+  end;
+
 begin
   if not FProd.Loaded then Exit;
+  if Length(FClips) = 0 then
+  begin
+    MessageDlg('Monte a timeline antes de exportar.', mtWarning, [mbOK], 0);
+    Exit;
+  end;
+  if not FindRevisionInProject(FScriptProj, FTimelineScriptRev, RevInfo) then
+  begin
+    MessageDlg('A revisão do roteiro vinculada à timeline está indisponível.', mtError, [mbOK], 0);
+    Exit;
+  end;
+  SetLength(Srcs, 1);
+  Srcs[0].ProjectId := FScriptProj.ProjectId;
+  Srcs[0].RevisionId := FTimelineScriptRev;
+  Srcs[0].ManifestSha256 := RevInfo.ManifestSha256;
 
   MissingCnt := 0;
+  SetLength(Videos, Length(FClips));
   for I := 0 to High(FClips) do
-    if FClips[I].SceneStatus <> 'ok' then
+    if ResolveSceneVideo(FClips[I], True, VideoFile, SceneSource) then
+    begin
+      Videos[I].FileName := VideoFile;
+      Videos[I].InSec := FClips[I].InPointSec;
+      Videos[I].OutSec := FClips[I].OutPointSec;
+      Videos[I].Transition := FClips[I].TransitionOut;
+      Videos[I].TransitionSec := FClips[I].TransitionSec;
+      SetLength(Srcs, Length(Srcs) + 1);
+      Srcs[High(Srcs)] := SceneSource;
+      FClips[I].SceneStatus := 'ok';
+    end
+    else
+    begin
       Inc(MissingCnt);
-
-  if MissingCnt > 0 then
-    ExportStatus := 'pending_scenes_missing'
-  else
-    ExportStatus := 'exported_manifest';
-
+      FClips[I].SceneStatus := 'missing_or_invalid_video';
+    end;
+  RefreshTimelineGrid;
   if not PrepareNextRevisionDir(FProj.ProjectFilePath, PrepRev, RevDir) then Exit;
 
-  RunAudienceAnalysis;
-  AtomicWriteTextFile(RevDir + PathDelim + 'timeline' + PathDelim + 'timeline.json', TimelineToJson, False);
-  AtomicWriteTextFile(RevDir + PathDelim + 'feedback' + PathDelim + 'ratings.json', RatingsToJson, False);
-  AtomicWriteTextFile(RevDir + PathDelim + 'analysis' + PathDelim + 'report.json', AnalysisToJson, False);
+  Duration := 0;
+  ExportWidth := 0; ExportHeight := 0; Fps := 0;
+  ExportRel := '';
+  ExportPath := '';
+  ExportStatus := 'pending_scenes_missing';
+  if MissingCnt = 0 then
+  begin
+    FAi.ReloadIfChanged;
+    Ffmpeg := FAi.Settings.ToolFfmpeg;
+    if Ffmpeg = '' then Ffmpeg := FAi.Settings.DetectToolPath('ffmpeg');
+    Ffprobe := FAi.Settings.ToolFfprobe;
+    if Ffprobe = '' then Ffprobe := FAi.Settings.DetectToolPath('ffprobe');
+    Fps := FAi.Settings.ProdFps;
+    FormatIndex := FExportFormatCombo.ItemIndex;
+    if (FormatIndex >= Low(Mp4Widths)) and (FormatIndex <= High(Mp4Widths)) then
+    begin
+      ExportWidth := Mp4Widths[FormatIndex];
+      ExportHeight := Mp4Heights[FormatIndex];
+      ExportRel := 'video/exports/filme.mp4';
+      MimeType := 'video/mp4';
+    end
+    else
+    begin
+      ExportWidth := FAi.Settings.ProdWidth;
+      ExportHeight := FAi.Settings.ProdHeight;
+      ExportRel := 'video/exports/filme.mkv';
+      MimeType := 'video/x-matroska';
+    end;
+    ExportPath := IncludeTrailingPathDelimiter(RevDir) +
+      StringReplace(ExportRel, '/', PathDelim, [rfReplaceAll]);
+    if not RenderMmpVideo(Ffmpeg, Ffprobe, ExportPath, Videos, ExportWidth,
+      ExportHeight, Fps, Duration, ErrMsg) then
+    begin
+      LogMsg('Falha na exportação: ' + ErrMsg);
+      MessageDlg(ErrMsg, mtError, [mbOK], 0);
+      Exit;
+    end;
+    ExportStatus := 'exported';
+  end;
 
-  ForceDirectories(RevDir + PathDelim + 'video' + PathDelim + 'exports');
+  RunAudienceAnalysis(False);
+  if not WriteRevisionJson('timeline/timeline.json', TimelineToJson) or
+    not WriteRevisionJson('feedback/ratings.json', RatingsToJson) or
+    not WriteRevisionJson('analysis/report.json', AnalysisToJson) then Exit;
+
   ExportObj := TJSONObject.Create;
   try
     ExportObj.Add('export_id', GenerateMmpId('exp'));
@@ -716,39 +852,41 @@ begin
     ExportObj.Add('missing_scenes', MissingCnt);
     ExportObj.Add('status', ExportStatus);
     ExportObj.Add('created_at', CurrentIsoUtc);
-    AtomicWriteTextFile(RevDir + PathDelim + 'video' + PathDelim + 'exports' + PathDelim + 'export_report.json',
-      ExportObj.FormatJSON, False);
+    if ExportPath <> '' then
+    begin
+      ExportObj.Add('file_uri', ExportRel);
+      ExportObj.Add('width', ExportWidth);
+      ExportObj.Add('height', ExportHeight);
+      ExportObj.Add('fps', Fps);
+      ExportObj.Add('sha256', SHA256File(ExportPath));
+      ExportObj.Add('duration_ms', Round(Duration * 1000));
+    end;
+    if not WriteRevisionJson('video/exports/export_report.json', ExportObj.FormatJSON) then Exit;
   finally
     ExportObj.Free;
   end;
 
-  SetLength(Arts, 4);
-  Arts[0].ArtifactId := GenerateMmpId('a'); Arts[0].Kind := 'film.timeline'; Arts[0].RelUri := 'timeline/timeline.json'; Arts[0].MimeType := 'application/json'; Arts[0].Status := 'approved';
-  Arts[1].ArtifactId := GenerateMmpId('a'); Arts[1].Kind := 'feedback.rating'; Arts[1].RelUri := 'feedback/ratings.json'; Arts[1].MimeType := 'application/json'; Arts[1].Status := 'approved';
-  Arts[2].ArtifactId := GenerateMmpId('a'); Arts[2].Kind := 'analysis.report'; Arts[2].RelUri := 'analysis/report.json'; Arts[2].MimeType := 'application/json'; Arts[2].Status := 'approved';
-  Arts[3].ArtifactId := GenerateMmpId('a'); Arts[3].Kind := 'video.film.export'; Arts[3].RelUri := 'video/exports/export_report.json'; Arts[3].MimeType := 'application/json'; Arts[3].Status := ExportStatus;
+  AddArtifact('film.timeline', 'timeline/timeline.json', 'application/json', 'published');
+  AddArtifact('feedback.rating', 'feedback/ratings.json', 'application/json', 'published');
+  AddArtifact('analysis.report', 'analysis/report.json', 'application/json', 'published');
+  AddArtifact('export.report', 'video/exports/export_report.json', 'application/json', ExportStatus);
+  if ExportPath <> '' then
+    AddArtifact('video.film.export', ExportRel, MimeType, 'published');
 
-  SetLength(Srcs, 1);
-  Srcs[0].ProjectId := FScriptProj.ProjectId;
-  Srcs[0].RevisionId := FScriptProj.ActiveRevision;
-  if FindRevisionInProject(FScriptProj, FScriptProj.ActiveRevision, RevInfo) then
-    Srcs[0].ManifestSha256 := RevInfo.ManifestSha256;
-
-  if PublishProjectRevision(FProd.ProductionId, FProj.ProjectFilePath, 'MCut',
+  if not PublishProjectRevision(FProd.ProductionId, FProj.ProjectFilePath, 'MCut',
     FCurrentRevId, ExportStatus, '', Srcs, Arts, NewRev, ErrMsg, PrepRev) then
   begin
-    LogMsg('Revisao MCut salva (' + NewRev + '): ' + ExportStatus);
-    if MissingCnt > 0 then
-      MessageDlg('Revisao ' + NewRev + ' salva, mas ' + IntToStr(MissingCnt) +
-        ' cena(s) ainda estao pendentes no MScene. Exportacao nao declarada como concluida.',
-        mtWarning, [mbOK], 0)
-    else
-      MessageDlg('Revisao ' + NewRev + ' e pacote de exportacao salvos com sucesso.',
-        mtInformation, [mbOK], 0);
-    LoadProductionAndRevision(FProd.RootDir, FProj.ProjectId, NewRev);
-  end
-  else
     MessageDlg(ErrMsg, mtError, [mbOK], 0);
+    Exit;
+  end;
+  LogMsg('Revisão MCut salva (' + NewRev + '): ' + ExportStatus);
+  if MissingCnt > 0 then
+    MessageDlg(Format('Revisão %s salva. %d cena(s) sem vídeo aprovado e íntegro. Filme não exportado.',
+      [NewRev, MissingCnt]), mtWarning, [mbOK], 0)
+  else if MessageDlg('Filme exportado em ' + ExportPath + LineEnding + 'Abrir agora?',
+    mtConfirmation, [mbYes, mbNo], 0) = mrYes then
+    OpenDocument(ExportPath);
+  LoadProductionAndRevision(FProd.RootDir, FProj.ProjectId, NewRev);
 end;
 
 procedure TMcutMainForm.OnOpenProdClick(Sender: TObject);

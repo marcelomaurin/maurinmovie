@@ -484,40 +484,42 @@ var
   A: TMMApp;
   PDir: string;
 begin
-  if not FileExists(FMachineIniPath) then Exit;
-  Ini := TIniFile.Create(FMachineIniPath);
-  try
-    FUserName := Ini.ReadString('User', 'Name', FUserName);
-    FUserRole := Ini.ReadString('User', 'Role', FUserRole);
-    FUserEmail := Ini.ReadString('User', 'Email', '');
+  if FileExists(FMachineIniPath) then
+  begin
+    Ini := TIniFile.Create(FMachineIniPath);
+    try
+      FUserName := Ini.ReadString('User', 'Name', FUserName);
+      FUserRole := Ini.ReadString('User', 'Role', FUserRole);
+      FUserEmail := Ini.ReadString('User', 'Email', '');
 
-    for A := maMScript to maMCut do
-      FAppExes[A] := Ini.ReadString('Applications', MMAppNames[A], '');
+      for A := maMScript to maMCut do
+        FAppExes[A] := Ini.ReadString('Applications', MMAppNames[A], '');
 
-    FToolFfmpeg := Ini.ReadString('Tools', 'ffmpeg', '');
-    FToolFfprobe := Ini.ReadString('Tools', 'ffprobe', '');
-    FToolMpv := Ini.ReadString('Tools', 'mpv', '');
+      FToolFfmpeg := Ini.ReadString('Tools', 'ffmpeg', '');
+      FToolFfprobe := Ini.ReadString('Tools', 'ffprobe', '');
+      FToolMpv := Ini.ReadString('Tools', 'mpv', '');
 
-    PDir := Ini.ReadString('Paths', 'ProductionsDir', '');
-    if PDir <> '' then FProductionsDir := PDir;
-    FGlobalCacheDir := Ini.ReadString('Paths', 'GlobalCacheDir', FGlobalCacheDir);
-    FSoundLibraryDir := Ini.ReadString('Paths', 'SoundLibraryDir', '');
-    FMusicLibraryDir := Ini.ReadString('Paths', 'MusicLibraryDir', '');
+      PDir := Ini.ReadString('Paths', 'ProductionsDir', '');
+      if PDir <> '' then FProductionsDir := PDir;
+      FGlobalCacheDir := Ini.ReadString('Paths', 'GlobalCacheDir', FGlobalCacheDir);
+      FSoundLibraryDir := Ini.ReadString('Paths', 'SoundLibraryDir', '');
+      FMusicLibraryDir := Ini.ReadString('Paths', 'MusicLibraryDir', '');
 
-    FProxyUrl := Ini.ReadString('Network', 'Proxy', '');
-    FProxyUser := Ini.ReadString('Network', 'ProxyUser', '');
-    FCABundle := Ini.ReadString('Network', 'CABundle', '');
-    FOfflineMode := Ini.ReadBool('Network', 'Offline', False);
+      FProxyUrl := Ini.ReadString('Network', 'Proxy', '');
+      FProxyUser := Ini.ReadString('Network', 'ProxyUser', '');
+      FCABundle := Ini.ReadString('Network', 'CABundle', '');
+      FOfflineMode := Ini.ReadBool('Network', 'Offline', False);
 
-    FUiLanguage := Ini.ReadString('Interface', 'Language', FUiLanguage);
-    FFontScale := Ini.ReadInteger('Interface', 'FontScale', 100);
-    FUiTheme := Ini.ReadString('Interface', 'Theme', FUiTheme);
-    FConfirmDestructive := Ini.ReadBool('Interface', 'ConfirmDestructive', True);
+      FUiLanguage := Ini.ReadString('Interface', 'Language', FUiLanguage);
+      FFontScale := Ini.ReadInteger('Interface', 'FontScale', 100);
+      FUiTheme := Ini.ReadString('Interface', 'Theme', FUiTheme);
+      FConfirmDestructive := Ini.ReadBool('Interface', 'ConfirmDestructive', True);
 
-    FLogLevel := Ini.ReadString('Logging', 'Level', FLogLevel);
-    FLogRetentionDays := Ini.ReadInteger('Logging', 'RetentionDays', 30);
-  finally
-    Ini.Free;
+      FLogLevel := Ini.ReadString('Logging', 'Level', FLogLevel);
+      FLogRetentionDays := Ini.ReadInteger('Logging', 'RetentionDays', 30);
+    finally
+      Ini.Free;
+    end;
   end;
   LoadAiAndAppsFromDir(IncludeTrailingPathDelimiter(ExtractFileDir(FMachineIniPath)), True);
   EnsureDefaultProvidersInMemory;
