@@ -43,7 +43,9 @@ O MMenu libera cada programa só quando as etapas anteriores têm atividade (no 
 
 **Configuração centralizada.** Provedores de IA (texto, imagem, voz, efeitos, vídeo), padrões de cada programa, executáveis e ferramentas são configurados **somente no MMenu**. Os demais programas apenas leem; o botão **Alterar no MMenu...** de cada um abre a configuração. As chaves de API ficam no cofre local (`secrets.ini`), nunca na pasta da produção.
 
-**Cascata.** Um ajuste editorial aprovado no MBoard vira um evento `script.patch` que o MScript aplica sem abrir a janela, criando nova revisão do roteiro. O MMenu acompanha a transação e nunca a mostra como concluída antes de todos os estágios publicarem.
+**Cascata.** Um ajuste editorial aprovado no MBoard vira um evento `script.patch` que o MScript aplica sem abrir a janela, criando nova revisão do roteiro; em seguida o MVisual (também sem janela) reindexa as entidades e o MBoard publica com as novas fontes. O MMenu acompanha a transação, nunca a mostra como concluída antes de todos os estágios publicarem e oferece **Retomar transação** quando um estágio parou. Pedidos de correção do MCut chegam ao MScene e são atendidos ao salvar a cena.
+
+**Vídeo e filme.** O MScene gera o vídeo de cada segmento (IA de vídeo, quando configurada, ou animática feita com os quadros do MBoard, as falas e a ambiência do MSound) e costura a cena; o MCut grava o filme com cortes e transições. Os dois usam o **ffmpeg**, que precisa estar instalado (MMenu → Configurações → Ferramentas ou PATH).
 
 ## Tela comum
 

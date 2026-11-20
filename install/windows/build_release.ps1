@@ -110,6 +110,13 @@ if ($LASTEXITCODE -ne 0) { throw 'Falha ao compilar tests\test_mmp_protocol.pas.
 & "$root\build\tests\test_mmp_protocol.exe"
 if ($LASTEXITCODE -ne 0) { throw 'Testes MMP v1 falharam.' }
 
+# Testes de video/audio (ffmpeg). Sem ffmpeg no PATH o teste informa [SKIP] e sai com 0.
+Write-Host "Compilando e executando testes de midia (ffmpeg)..."
+& $env:FPC '-MObjFPC' '-Scghi' '-O1' "-Fu$root\src\common" "-FU$root\build\tests" "-FE$root\build\tests" "$root\tests\common\test_mmp_media.pas"
+if ($LASTEXITCODE -ne 0) { throw 'Falha ao compilar tests\common\test_mmp_media.pas.' }
+& "$root\build\tests\test_mmp_media.exe"
+if ($LASTEXITCODE -ne 0) { throw 'Testes de midia falharam.' }
+
 $ssl11Dir = Join-Path $chatgpt 'runtime\OpenSSL\1.1.1.10\x64'
 $ssl3Dir = Join-Path $chatgpt 'runtime\OpenSSL\3.1.3\x64'
 $sslFiles = @(

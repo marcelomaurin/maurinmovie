@@ -6,7 +6,7 @@ Especificação funcional: [docs/07-geracao-e-montagem-de-cenas.md](../../docs/0
 
 ## Arquivos
 - `mscene.lpi` — projeto Lazarus do executável (não é o projeto do filme).
-- `mscene.lpr` — programa principal (valida o contexto do MMenu, instância única e, no MScript, o modo headless).
+- `mscene.lpr` — programa principal (valida o contexto do MMenu, instância única e, no MScript, MVisual e MBoard, o modo headless).
 - `umscenemain.pas` — formulário principal montado em código.
 - `mscene_icon.rc` / `mscene_icon.res` / `mscene.ico` — ícone do executável.
 
@@ -22,7 +22,9 @@ Só pode ser iniciado pelo MMenu, que passa `--launcher mmenu --mmenu-version <v
 ## Situação
 Primeira versão funcional:
 - Uma cena por vez: cria o projeto da cena em `projects/05-mscene/scenes/<scene_id>/` e lista os segmentos do storyboard.
-- Gera as descrições dos sub-blocos e uma prévia (vídeo pela IA de vídeo/FFmpeg quando disponível), aprovação por sub-bloco, costura (registro da ordem) e marcação das ligações anterior/próxima (próxima inexistente fica pendente).
+- Gera o vídeo de cada sub-bloco (`video/segments/*.mp4`): IA de vídeo real quando configurada; senão animática com os quadros do MBoard, falas (voz sintetizada ou amostra do MSound) e ambiência do local (`ummpmedia`).
+- Aprovação por sub-bloco, costura com ffmpeg em `video/assembled/<cena>.mp4`, prévia da ligação com a cena anterior/próxima e botões Assistir (mpv ou programa padrão).
+- Lista os pedidos de correção do MCut (`shared/events/inbox/MScene`); salvar a cena atende o pedido (evento arquivado, transação concluída).
 - Arquivos novos ficam no rascunho do projeto da cena (`work/draft/`).
 
-Pendente: geração real de vídeo por segmento, costura com ffmpeg, reprodução anterior/atual/próxima e retomada por segmento.
+Pendente: reprodução embutida, regeneração de um único segmento e regras de sequência entre cenas.

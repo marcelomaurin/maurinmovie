@@ -25,12 +25,23 @@ Transforma as cenas do roteiro e as referências visuais em storyboards com quad
 ## Cabeçalho
 
 - **Publicar Revisão:** `approved` se todas as cenas estiverem aprovadas, senão `published`.
-- **Aprovar e Cascata:** compara os storyboards `edited` com o roteiro de origem e monta as operações (`replace_text` de ação e falas, `set_duration`). Depois registra o evento e a transação e executa o MScript sem janela, que publica a nova revisão do roteiro. Os estágios MVisual e MBoard ficam pendentes na transação, acompanhada no MMenu (aba Sincronizações). Se o MScript estiver aberto, a alteração for ambígua ou a fonte estiver desatualizada, a transação fica `failed` com o motivo.
+- **Aprovar e Cascata:** compara os storyboards `edited` com o roteiro de origem e monta as operações (`replace_text` de ação e falas, `set_duration`). Depois registra o evento e a transação e executa os três estágios em ordem, sem abrir outras janelas:
+  1. **MScript** aplica o patch e publica a nova revisão do roteiro;
+  2. **MVisual** recebe um evento `source.update`, reindexa as entidades a partir do roteiro novo e publica;
+  3. **MBoard** publica o storyboard apontando para as novas revisões do roteiro e da biblioteca visual.
+
+  A transação é acompanhada no MMenu (aba Sincronizações).
+
+![Cascata concluída](imagens/mboard-cascata.png)
+
+Se um estágio falhar (programa aberto, alteração ambígua, fonte desatualizada, rascunho não publicado no MVisual), a cascata para ali, a transação fica `failed` com o motivo e nada além do que já foi publicado muda. Os ajustes ficam guardados no rascunho; depois de corrigir a causa, use **Retomar transação** no MMenu, que continua do estágio que parou.
+
+![Cascata interrompida](imagens/mboard-cascata-falha.png)
 
 ## Arquivos
 
-Rascunho em `projects/03-mboard/work/draft/images/quadros/`; revisão em `revisions/rNNNN/storyboard/scenes.json` (`storyboard.segment`) e `images/quadros/*` (`storyboard.frame`), com as revisões do MScript e do MVisual como fontes.
+Rascunho em `projects/03-mboard/work/draft/` (`storyboard/scenes.json` com os ajustes ainda não publicados e `images/quadros/`); ao abrir, o MBoard retoma esse rascunho; revisão em `revisions/rNNNN/storyboard/scenes.json` (`storyboard.segment`) e `images/quadros/*` (`storyboard.frame`), com as revisões do MScript e do MVisual como fontes.
 
 ## Ainda não implementado
 
-Atualização automática dos estágios MVisual e MBoard da cascata, retomada de transação, "Atualizar fontes" ao abrir, substituição de quadro por arquivo e critérios de subdivisão por falas.
+Regenerar quadros das cenas afetadas pela cascata, "Atualizar fontes" ao abrir, substituição de quadro por arquivo e critérios de subdivisão por falas.

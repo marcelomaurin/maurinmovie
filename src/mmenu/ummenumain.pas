@@ -289,6 +289,9 @@ var
 
 implementation
 
+uses
+  fpjson, jsonparser;
+
 const
   SETTINGS_TAB_COUNT = 17;
   SettingsTabLabels: array[0..SETTINGS_TAB_COUNT - 1] of string = (
@@ -1729,28 +1732,28 @@ begin
   FSyncSummaryLabel := TLabel.Create(Self);
   FSyncSummaryLabel.Parent := TopBar;
   FSyncSummaryLabel.Font.Style := [fsBold];
-  FSyncSummaryLabel.SetBounds(14, 14, 460, 20);
+  FSyncSummaryLabel.SetBounds(14, 14, 410, 20);
   FSyncSummaryLabel.Caption := 'Jobs de sincronizacao em cascata:';
 
   FBtnGoToFailedApp := TButton.Create(Self);
   FBtnGoToFailedApp.Parent := TopBar;
   FBtnGoToFailedApp.Caption := 'Ir para aplicativo responsavel';
   FBtnGoToFailedApp.Anchors := [akTop, akRight];
-  FBtnGoToFailedApp.SetBounds(504, 8, 224, 30);
+  FBtnGoToFailedApp.SetBounds(430, 8, 214, 30);
   FBtnGoToFailedApp.OnClick := @OnGoToResponsibleAppClick;
 
   FBtnCancelTx := TButton.Create(Self);
   FBtnCancelTx.Parent := TopBar;
   FBtnCancelTx.Caption := 'Cancelar transacao';
   FBtnCancelTx.Anchors := [akTop, akRight];
-  FBtnCancelTx.SetBounds(736, 8, 158, 30);
+  FBtnCancelTx.SetBounds(650, 8, 150, 30);
   FBtnCancelTx.OnClick := @OnCancelSyncClick;
 
   FBtnResumeTx := TButton.Create(Self);
   FBtnResumeTx.Parent := TopBar;
   FBtnResumeTx.Caption := 'Retomar transacao';
   FBtnResumeTx.Anchors := [akTop, akRight];
-  FBtnResumeTx.SetBounds(902, 8, 158, 30);
+  FBtnResumeTx.SetBounds(806, 8, 150, 30);
   FBtnResumeTx.OnClick := @OnResumeSyncClick;
 
   FSyncJobsGrid := TStringGrid.Create(Self);
@@ -4116,6 +4119,30 @@ begin
     MessageDlg(ErrMsg, mtError, [mbOK], 0);
 end;
 
+function LastTransactionError(const TxPath: string): string;
+var
+  Content: string;
+  Data: TJSONData;
+  Arr: TJSONArray;
+begin
+  Result := '';
+  if not ReadTextFileUtf8(TxPath, Content) then Exit;
+  try
+    Data := GetJSON(Content);
+  except
+    Exit;
+  end;
+  try
+    if (Data is TJSONObject) and (TJSONObject(Data).Find('errors') is TJSONArray) then
+    begin
+      Arr := TJSONArray(TJSONObject(Data).Find('errors'));
+      if Arr.Count > 0 then Result := Arr.Items[Arr.Count - 1].AsString;
+    end;
+  finally
+    Data.Free;
+  end;
+end;
+
 { docs/specs/00-comum 7.3: "Retomar" executa <origem> --headless
   --resume-transaction <tx>. Hoje so o MBoard orquestra cascatas. }
 procedure TMmenuMainForm.OnResumeSyncClick(Sender: TObject);
@@ -4123,6 +4150,7 @@ var
   RowIdx, Code: Integer;
   Job: TMmpSyncJob;
   TxPath, Origin, ErrMsg, TxStatus: string;
+  Reloaded: TMmpProduction;
 begin
   if (not FProd.Loaded) or (Length(FProd.SyncJobs) = 0) then Exit;
   RowIdx := FSyncJobsGrid.Row - 1;
@@ -4155,7 +4183,12 @@ begin
   finally
     Screen.Cursor := crDefault;
   end;
-  OpenProductionPath(FProd.RootDir, False);
+  { atualiza as telas sem repetir o alerta de integridade da abertura }
+  if LoadProduction(FProd.RootDir, False, Reloaded) then
+  begin
+    FProd := Reloaded;
+    RefreshAllViews;
+  end;
   TxStatus := MmpJsonFileGet(TxPath, 'status');
   if Code = EXIT_OK then
   begin
@@ -4167,7 +4200,11 @@ begin
     if Code = EXIT_LOCKED then
       ErrMsg := 'O MBoard esta aberto; feche-o e tente de novo.'
     else if ErrMsg = '' then
-      ErrMsg := 'O MBoard terminou com codigo ' + IntToStr(Code) + '. Veja os erros da transacao.';
+    begin
+      ErrMsg := LastTransactionError(TxPath);
+      if ErrMsg = '' then
+        ErrMsg := 'O MBoard terminou com codigo ' + IntToStr(Code) + '.';
+    end;
     LogMsg('Retomada da transacao ' + Job.TransactionId + ' falhou: ' + ErrMsg);
     MessageDlg('A transacao ' + Job.TransactionId + ' nao foi concluida (' + TxStatus + '):' +
       LineEnding + ErrMsg, mtWarning, [mbOK], 0);

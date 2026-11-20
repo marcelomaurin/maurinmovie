@@ -41,8 +41,8 @@ Lista os projetos dos sete programas (e os projetos por cena do MScene) com revi
 
 ![Sincronizações](imagens/mmenu-sincronizacoes.png)
 
-- **Transações e eventos de cascata** (`shared/transactions`, `shared/events`): origem, destino, etapa atual, estado e erro. No exemplo, `tx_demo_0001` já passou pelo MScript e espera o MVisual; `tx_demo_0002` falhou no MScript por alteração ambígua (código 7).
-- **Ir para aplicativo responsável** abre o programa da etapa; **Cancelar transação** marca como `cancelled` (com confirmação) sem apagar revisões publicadas.
+- **Transações e eventos de cascata** (`shared/transactions`, `shared/events`): origem, destino, etapa atual, estado e erro. No exemplo, `tx_demo_0001` esperava o MVisual e foi concluída com **Retomar transação**; `tx_demo_0002` falhou no MScript por alteração ambígua (código 7) e, como o evento dela não está mais na caixa do MScript, a retomada mostra esse motivo.
+- **Ir para aplicativo responsável** abre o programa da etapa; **Cancelar transação** marca como `cancelled` (com confirmação) sem apagar revisões publicadas; **Retomar transação** continua uma cascata do MBoard parada ou interrompida (executa `mboard --headless --resume-transaction <tx>`) a partir do estágio pendente e mostra o resultado ou o último erro registrado. Pedidos do MCut para o MScene são atendidos ao salvar a cena no MScene.
 - **Links ausentes e divergências:** arquivos não encontrados, movidos (localizados por ID ou hash) e com SHA-256 divergente. **Auditar SHA-256 agora** refaz a verificação completa; **Revincular item...** aceita o novo arquivo somente se o hash for igual ao registrado e grava em `catalog.json` (`relinks[]`), sem tocar no manifesto.
 
 ## Artefatos & Catálogo
@@ -90,4 +90,4 @@ mmenu [--production <pasta>] [--settings [--tab <aba>]] [--check-integrity --pro
 
 ## Ainda não implementado
 
-Retomada automática de transação (`--resume-transaction`), monitoramento por varredura a cada 5 s e exportação do relatório de integridade em arquivo.
+Retomada de cascatas iniciadas por outros programas além do MBoard, monitoramento por varredura a cada 5 s e exportação do relatório de integridade em arquivo.

@@ -6,7 +6,7 @@ Especificação funcional: [docs/05-storyboard.md](../../docs/05-storyboard.md) 
 
 ## Arquivos
 - `mboard.lpi` — projeto Lazarus do executável (não é o projeto do filme).
-- `mboard.lpr` — programa principal (valida o contexto do MMenu, instância única e, no MScript, o modo headless).
+- `mboard.lpr` — programa principal (valida o contexto do MMenu, instância única e, no MScript, MVisual e MBoard, o modo headless).
 - `umboardmain.pas` — formulário principal montado em código.
 - `mboard_icon.rc` / `mboard_icon.res` / `mboard.ico` — ícone do executável.
 
@@ -24,7 +24,8 @@ Primeira versão funcional:
 - Etapa 1: gera quadro inicial e final por cena a partir das revisões ativas do MScript e do MVisual (imagem pela IA quando configurada, senão quadro provisório).
 - Etapa 2: subdivide uma cena em N segmentos com continuidade exata (o quadro final do segmento *i* é o mesmo `asset_id` do inicial do segmento *i+1*) e soma de durações igual à da cena.
 - Ajustes editoriais em rascunho e aprovação por cena; a revisão só é `approved` com todas as cenas aprovadas.
-- "Aprovar e Cascata": monta operações `script.patch` comparando os quadros editados com o roteiro, registra evento e transação e executa o MScript em modo headless (estágio 1). Os estágios MVisual e MBoard ficam registrados como pendentes e a transação só fica `complete` quando todos publicarem.
+- "Aprovar e Cascata": monta operações `script.patch` comparando os quadros editados com o roteiro, registra evento e transação e executa os estágios em ordem: MScript headless (patch), MVisual headless (`source.update`, reindexação) e o próprio MBoard (publica com as novas fontes e `change_event_id` = evento raiz). Para no primeiro estágio que falhar.
+- Ajustes ficam em `work/draft/storyboard/scenes.json`; `mboard --headless --resume-transaction <tx>` (botão Retomar no MMenu) continua do estágio pendente.
 - Quadros novos ficam no rascunho `work/draft/` até a publicação.
 
-Pendente: atualização automática dos estágios MVisual/MBoard da cascata, retomada (`--resume-transaction`) e "Atualizar fontes".
+Pendente: regenerar quadros das cenas afetadas e "Atualizar fontes" ao abrir.

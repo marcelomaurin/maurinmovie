@@ -9,7 +9,8 @@ Unidades usadas por todos os programas (todos os `.lpi` incluem `../common` no c
 | `mmpsettings.pas` (sem LCL) | configuração centralizada (gravada só pelo MMenu): máquina (`mmenu.ini`, `secrets.ini`, provedores de IA da máquina) e produção (`settings/*.json`), controle de acesso |
 | `ummpdb.pas` (sem LCL) | banco SQLite da produção (`maurinmovie.db`, criado a partir de `maurinmovie_empty.db`), pastas `media/`, log centralizado |
 | `ummpprotocol.pas` (sem LCL) | criação e leitura de produções, auditoria de integridade (hashes, fontes, arquivos movidos, revinculações de `catalog.json`), catálogo, locks, log JSON Lines, estado das etapas e histórico |
-| `ummpappbase.pas` | publicação de revisões, eventos e transações de cascata, execução headless de outro aplicativo, rascunho `work/draft/`, validação do lançamento pelo MMenu e instância única |
+| `ummpappbase.pas` | publicação de revisões, eventos e transações de cascata (`EmitSyncEventEx`, `MmpEmitStageEvent`, `MmpFinishEventFile`, `MmpListOpenInboxEvents`), execução headless de outro aplicativo (`MmpRunHeadlessEvent`, `MmpRunHeadlessResume`), rascunho `work/draft/`, abrir mídia no reprodutor, validação do lançamento pelo MMenu e instância única |
+| `ummpmedia.pas` (sem LCL) | vídeo e áudio com ffmpeg/ffprobe externos: áudio do segmento (falas + ambiência), animática com quadros, costura de cena, filme com cortes e transições, quadro de prévia |
 | `ummpaibridge.pas` | ponte com os provedores de IA (biblioteca CHATGPT) usando a configuração do MMenu |
 
 ## Regras importantes
@@ -17,4 +18,4 @@ Unidades usadas por todos os programas (todos os `.lpi` incluem `../common` no c
 - `PublishProjectRevision` grava o manifesto e atualiza `project.json` e o SQLite com os mesmos `artifact_id`.
 - `EmitSyncEventEx` grava o evento completo (envelope de docs/11 §4) e a transação; `MmpUpdateTransactionStage` só marca a transação como `complete` quando todos os estágios completam.
 
-Testes: [tests/test_mmp_protocol.pas](../../tests/test_mmp_protocol.pas).
+Testes: [tests/test_mmp_protocol.pas](../../tests/test_mmp_protocol.pas) e [tests/common/test_mmp_media.pas](../../tests/common/test_mmp_media.pas) (precisa do ffmpeg no PATH; sem ele, é pulado).

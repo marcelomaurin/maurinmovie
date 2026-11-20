@@ -6,7 +6,7 @@ Especificação funcional: [docs/02-biblioteca-visual.md](../../docs/02-bibliote
 
 ## Arquivos
 - `mvisual.lpi` — projeto Lazarus do executável (não é o projeto do filme).
-- `mvisual.lpr` — programa principal (valida o contexto do MMenu, instância única e, no MScript, o modo headless).
+- `mvisual.lpr` — programa principal (valida o contexto do MMenu, instância única e, no MScript, MVisual e MBoard, o modo headless).
 - `umvisualmain.pas` — formulário principal montado em código.
 - `mvisual_icon.rc` / `mvisual_icon.res` / `mvisual.ico` — ícone do executável.
 
@@ -26,4 +26,6 @@ Primeira versão funcional:
 - Etapa 3: aprovar/rejeitar item (gravado no SQLite da produção), filtro de nitidez, publicação. A revisão só recebe `approved` quando todos os itens foram aprovados; caso contrário é publicada como `published`.
 - Imagens e o índice em edição ficam no rascunho `work/draft/`; a revisão publicada nunca é reescrita.
 
-Pendente: ambiguidades/correferências, variantes, comparação de versões, atualização incremental e modo headless `visual.update_from_script`.
+Modo headless: `mvisual --headless --event <arquivo>` (evento `source.update` da cascata) reindexa a partir da revisão ativa do roteiro e publica com `change_event_id`; recusa (código 7) se houver rascunho aberto.
+
+Pendente: ambiguidades/correferências, variantes, comparação de versões e geração automática das vistas de entidades novas.

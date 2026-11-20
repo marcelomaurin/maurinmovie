@@ -34,6 +34,10 @@ Origem (projeto e revisão do MScript) e revisão do MVisual. **Publicar Revisã
 
 Imagens e o índice em edição ficam em `projects/02-mvisual/work/draft/`. Ao publicar, são copiados para `revisions/rNNNN/` (`indexes/entities.json` e `images/personagens|cenarios|objetos/<id>_<vista>.png`) e o rascunho é limpo. A revisão publicada nunca é reescrita.
 
+## Cascata (sem janela)
+
+Na cascata iniciada pelo MBoard, o MVisual roda sem janela (`mvisual --headless --event <arquivo>`): relê a revisão ativa do roteiro, recalcula a lista de cenas de cada entidade, inclui entidades novas como pendentes (sem imagens) e publica uma revisão `published` com o `change_event_id` do evento. Se o mesmo evento chegar de novo, nada é republicado. Se houver rascunho não publicado no MVisual, o evento é recusado (código 7) para não sobrescrever o trabalho aberto.
+
 ## Ainda não implementado
 
-Ambiguidades e correferências ("o velho", "ele"), mesclar/separar entidades, variantes (pose, expressão, estado), comparação de versões, atualização incremental quando o roteiro muda e o modo sem janela para a cascata.
+Ambiguidades e correferências ("o velho", "ele"), mesclar/separar entidades, variantes (pose, expressão, estado), comparação de versões e geração automática das vistas das entidades novas que a cascata cria.
